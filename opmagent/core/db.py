@@ -12,7 +12,7 @@ def schema_sql() -> str:
 
 
 def connect(path: str | Path) -> sqlite3.Connection:
-    con = sqlite3.connect(str(path), isolation_level=None)  # autocommit; explicit transactions below
+    con = sqlite3.connect(str(path), isolation_level=None, check_same_thread=False)  # autocommit; callers serialize access
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA foreign_keys = ON")
     con.execute("PRAGMA busy_timeout = 5000")

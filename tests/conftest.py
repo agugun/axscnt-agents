@@ -1,0 +1,39 @@
+import pytest
+
+from opmagent.core import db
+from opmagent.core.config import Config
+
+
+@pytest.fixture
+def cfg(tmp_path):
+    c = Config(database=tmp_path / "opm.db", file_store=tmp_path / "files")
+    db.init_db(c.database)
+    for sub in ("inbox", "qc"):
+        (c.file_store / sub).mkdir(parents=True, exist_ok=True)
+    return c
+
+
+@pytest.fixture
+def qc_file(cfg):
+    p = cfg.file_store / "qc" / "report.html"
+    p.write_text("<html>qc</html>")
+    return p
+
+
+# A small, physically consistent black-oil fluid (METRIC)
+PVTO = [
+    # rs, p, bo, mu, sat
+    (20, 50, 1.10, 1.20, 1), (20, 150, 1.09, 1.30, 0),
+    (60, 120, 1.20, 0.90, 1), (60, 250, 1.18, 1.00, 0),
+    (100, 200, 1.30, 0.70, 1), (100, 300, 1.28, 0.75, 0), (100, 400, 1.26, 0.80, 0),
+]
+PVDG = [(50, 0.025, 0.013), (150, 0.008, 0.016), (300, 0.0045, 0.022), (400, 0.0038, 0.025)]
+
+
+def fluid_rows():
+    return {
+        "pvto": [dict(rs=r, pressure=p, bo=b, mu_o=m, is_saturated=s) for r, p, b, m, s in PVTO],
+        "pvdg": [dict(pressure=p, bg=b, mu_g=m) for p, b, m in PVDG],
+        "pvtw": [dict(p_ref=200, bw=1.02, cw=4.5e-5, mu_w=0.4)],
+        "density": [dict(oil=850, water=1020, gas=0.9)],
+    }

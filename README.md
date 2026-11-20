@@ -10,8 +10,8 @@ Design: see the architecture and user-guide docs (links in `docs/README.md`).
 | --- | --- |
 | SQLite schema with human approval gate | done, tested |
 | Config, `opmagent init-db`, `opmagent doctor` | done |
-| Data MCP server (profiles, validators) | next |
-| PVT engine MCP server (NeqSim) | planned |
+| Data MCP server (profiles, validators, reviewer tools) | done, tested |
+| PVT engine MCP server (NeqSim) | next |
 | Fluid modeler skill + QC report | planned |
 | Deck builder + `hello` | planned |
 | Well modeler, geo modeler | planned |
@@ -35,6 +35,25 @@ opmagent init-db
 opmagent doctor
 pytest -q
 ```
+
+## Registering the data server
+
+Each agent starts the data server with its own profile. Example MCP client config (Claude Code `.mcp.json` or Claude desktop):
+
+```json
+{
+  "mcpServers": {
+    "opm-data-fluid": {
+      "command": "/path/to/axscnt-agents/.venv/bin/opmagent-data",
+      "args": ["--profile", "fluid", "--config", "/path/to/opmagent.toml"]
+    }
+  }
+}
+```
+
+Profiles: `fluid`, `geo`, `well`, `import` (writers), `deck`, `run` (read approved models only), `reviewer` (approve/reject).
+Put the `reviewer` profile **only** in your own client, never in an agent's config. Approvals are recorded under
+`$OPMAGENT_REVIEWER` (or your OS user name).
 
 ## Layout
 
