@@ -114,7 +114,11 @@ def cmd_review(args):
         q = rv.get_qc_report(kind=kind, version_id=m["version_id"])
         print(f"{args.rcmd.replace('-hello', '')}: {kind} {q['model_name']} v{q['version']} "
               f"(QC report {q['qc_ready_at']}, {(q['qc_report'] or {}).get('path')})")
-    if not args.yes and input("Proceed? [y/N] ").strip().lower() != "y":
+    import sys
+    if not sys.stdin.isatty():
+        raise SystemExit("Approvals need an interactive terminal (a person typing). Agents can't approve.")
+    word = "reject" if args.rcmd == "reject" else "approve"
+    if input(f"Type '{word}' to confirm: ").strip().lower() != word:
         print("Cancelled.")
         return
     for kind, m in targets:
@@ -173,6 +177,75 @@ def cmd_hello(args):
     raise SystemExit(0 if r.get("ok") else 2)
 
 
+def cmd_import(args):
+    import json
+    from .core.errors import ToolError
+    from .deck.import_pipeline import import_to_drafts, verify
+    cfg = cfgmod.load(args.config)
+    try:
+        r = import_to_drafts(cfg, args.input, args.name) if args.icmd == "deck" else verify(cfg, args.name)
+    except ToolError as e:
+        r = e.to_dict()
+    print(r.get("spoken_summary", ""))
+    print(json.dumps({k: v for k, v in r.items() if k not in ("deck",)}, indent=2, default=str)[:6000])
+    raise SystemExit(0 if r.get("ok") else 2)
+
+
+def cmd_well_build(args):
+    import json
+    from .core.errors import ToolError
+    from .well.pipeline import build_well_model
+    cfg = cfgmod.load(args.config)
+    files = {"wells": args.wells, "surveys": args.surveys, "perforations": args.perforations, "history": args.history,
+             "controls": args.controls, "groups": args.groups, "history_format": args.history_format}
+    try:
+        r = build_well_model(cfg, {k: v for k, v in files.items() if v}, args.name, start_date=args.start_date,
+                             geo_version_id=args.geo_version, unit_system=args.unit_system, description=args.description,
+                             allow_gaps=args.allow_gaps)
+    except (ToolError, ValueError) as e:
+        r = e.to_dict() if isinstance(e, ToolError) else {"ok": False, "code": "INVALID_INPUT", "message": str(e)}
+    print(json.dumps(r, indent=2, default=str))
+    raise SystemExit(0 if r.get("ok") else 2)
+
+
+def cmd_geo_build(args):
+    import json
+    from .core.errors import ToolError
+    from .geo.pipeline import build_geo_model
+    cfg = cfgmod.load(args.config)
+    spec = json.loads(open(args.spec).read())
+    try:
+        r = build_geo_model(cfg, tops=args.tops, logs=args.logs or [], spec=spec, name=args.name, surveys=args.surveys,
+                            description=args.description)
+    except ToolError as e:
+        r = e.to_dict()
+    print(json.dumps({k: v for k, v in r.items()}, indent=2, default=str)[:6000])
+    raise SystemExit(0 if r.get("ok") else 2)
+
+
+def cmd_setup(args):
+    from pathlib import Path
+    from .core import db as dbmod
+    from .setup import write_workspace
+    repo_skills = Path(__file__).resolve().parent.parent / "skills"
+    r = write_workspace(Path(args.workspace), repo_skills=repo_skills, config=args.config, force=args.force)
+    cfg = cfgmod.load(r["config"])
+    if not cfg.database.exists():
+        dbmod.init_db(cfg.database)
+    for sub_ in ("inbox", "models", "decks", "qc", "debug", "runs", "imports"):
+        (cfg.file_store / sub_).mkdir(parents=True, exist_ok=True)
+    print(f"Workspace ready: {r['workspace']}")
+    print(f"  config      {r['config']}")
+    print(f"  database    {cfg.database}")
+    print(f"  inbox       {cfg.inbox}")
+    print(f"  MCP servers {', '.join(r['servers'])}  (.mcp.json)")
+    print("  agents      .claude/agents/  skills .claude/skills/  rules CLAUDE.md")
+    print(f"\nReviewer (YOUR client only): add the server in {r['reviewer']}")
+    print("  Claude desktop: merge it into claude_desktop_config.json; Claude Code: `claude mcp add-json opm-reviewer '<json>'`")
+    print("  in a session you use yourself, never in the agents workspace.")
+    print(f"\nNext: cd {r['workspace']} && opmagent --config {r['config']} doctor && opmagent --config {r['config']} hello")
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="opmagent")
     p.add_argument("--version", action="version", version=__version__)
@@ -180,6 +253,10 @@ def main(argv=None):
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("init-db", help="create the SQLite database and file store").set_defaults(fn=cmd_init_db)
     sub.add_parser("doctor", help="check prerequisites").set_defaults(fn=cmd_doctor)
+    x = sub.add_parser("setup", help="create a local agents workspace for Claude Code (MCP servers, agents, skills)")
+    x.add_argument("workspace", nargs="?", default="~/opm-agents")
+    x.add_argument("--force", action="store_true", help="overwrite .mcp.json instead of merging")
+    x.set_defaults(fn=cmd_setup)
     fl = sub.add_parser("fluid", help="fluid modeler").add_subparsers(dest="fcmd", required=True)
     t = fl.add_parser("template", help="write the Excel lab report template")
     t.add_argument("out")
@@ -204,10 +281,8 @@ def main(argv=None):
         x.add_argument("kind", choices=["fluid", "geo", "well"])
         x.add_argument("version_id", type=int)
         x.add_argument("--comment", required=name == "reject")
-        x.add_argument("--yes", action="store_true")
         x.set_defaults(fn=cmd_review)
     x = rv.add_parser("approve-hello", help="approve the three hello demo models")
-    x.add_argument("--yes", action="store_true")
     x.set_defaults(fn=cmd_review, comment=None)
     dk = sub.add_parser("deck", help="deck builder").add_subparsers(dest="dcmd", required=True)
     x = dk.add_parser("build", help="build a deck from a JSON spec")
@@ -216,6 +291,35 @@ def main(argv=None):
     x = sub.add_parser("run", help="run a validated deck")
     x.add_argument("--deck", required=True)
     x.set_defaults(fn=cmd_run)
+    wl = sub.add_parser("well", help="well modeler").add_subparsers(dest="wcmd", required=True)
+    x = wl.add_parser("build", help="build a well model from CSV/Excel inputs and submit it for review")
+    for a_ in ("wells", "surveys", "perforations", "history", "controls", "groups"):
+        x.add_argument(f"--{a_}")
+    x.add_argument("--history-format", dest="history_format", choices=["standard", "volve"], default="standard")
+    x.add_argument("--name", required=True)
+    x.add_argument("--start-date", dest="start_date")
+    x.add_argument("--geo-version", dest="geo_version", type=int)
+    x.add_argument("--unit-system", dest="unit_system", choices=["METRIC", "FIELD"], default="METRIC")
+    x.add_argument("--description")
+    x.add_argument("--allow-gaps", action="store_true")
+    x.set_defaults(fn=cmd_well_build)
+    gm = sub.add_parser("geo", help="geo modeler").add_subparsers(dest="gcmd", required=True)
+    x = gm.add_parser("build", help="build a corner-point geo model from tops, logs and a spec")
+    x.add_argument("--tops", required=True)
+    x.add_argument("--logs", nargs="*", help="LAS or CSV log files")
+    x.add_argument("--surveys", help="deviation surveys (to convert LAS MD to TVD)")
+    x.add_argument("--spec", required=True, help="geo spec JSON (surfaces, layers, areal, contacts, petro, scal)")
+    x.add_argument("--name", required=True)
+    x.add_argument("--description")
+    x.set_defaults(fn=cmd_geo_build)
+    im = sub.add_parser("import", help="deck importer (reverse deck)").add_subparsers(dest="icmd", required=True)
+    x = im.add_parser("deck", help="import a deck into fluid/geo/well drafts for review")
+    x.add_argument("--input", required=True)
+    x.add_argument("--name", required=True)
+    x.set_defaults(fn=cmd_import)
+    x = im.add_parser("verify", help="after approval: rebuild, run both, compare")
+    x.add_argument("--name", required=True)
+    x.set_defaults(fn=cmd_import)
     x = sub.add_parser("hello", help="end-to-end demo: models, approval, deck, run")
     x.add_argument("--clean", action="store_true")
     x.add_argument("--json", action="store_true")

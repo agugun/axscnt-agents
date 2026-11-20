@@ -181,14 +181,18 @@ def run_validator(con, kind: str, version_id: int) -> dict:
     return {"passed": not errors, "errors": errors, "warnings": warnings}
 
 
-def submit_for_review(con, kind: str, version_id: int, qc_report_file_id: int, metrics: dict | None = None) -> dict:
-    """Re-run the validator server-side; only a clean result moves the version to qc_ready."""
+def submit_for_review(con, kind: str, version_id: int, qc_report_file_id: int, metrics: dict | None = None,
+                      accept_validator_errors: bool = False) -> dict:
+    """Re-run the validator server-side; only a clean result moves the version to qc_ready.
+    accept_validator_errors is for imported models only: the data is stored as it ran in OPM and the
+    validator findings go to the reviewer in qc_json instead of blocking."""
     k = _k(kind)
-    _require_status(con, kind, version_id, {"draft"})
+    h = _require_status(con, kind, version_id, {"draft"})
     result = run_validator(con, kind, version_id)
-    if not result["passed"]:
+    if not result["passed"] and not (accept_validator_errors and h["origin"] == "imported"):
         raise ToolError(VALIDATION_FAILED, f"{len(result['errors'])} validator error(s); fix and resubmit", result)
-    qc = {"validator": {"errors": 0, "warnings": result["warnings"]}, "metrics": metrics or {}}
+    qc = {"validator": {"errors": len(result["errors"]), "error_list": result["errors"], "warnings": result["warnings"],
+                        "accepted_as_imported": bool(result["errors"])}, "metrics": metrics or {}}
     with transaction(con):
         _db(con.execute, f"UPDATE {k['versions']} SET qc_json = ?, qc_report_file_id = ? WHERE id = ?",
             (json.dumps(qc), qc_report_file_id, version_id))

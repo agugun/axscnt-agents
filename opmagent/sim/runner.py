@@ -30,10 +30,20 @@ def command(deck_path: Path, out_dir: Path, flow_bin: str = "flow") -> tuple[lis
 
 
 def prepare(deck_path: str | Path, out_dir: str | Path) -> Path:
-    src, out_dir = Path(deck_path), Path(out_dir)
+    """Copy the deck into out_dir and symlink its sibling files/folders, so relative INCLUDEs still resolve."""
+    src, out_dir = Path(deck_path).resolve(), Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     dst = out_dir / src.name
     shutil.copy2(src, dst)
+    for sib in src.parent.iterdir():
+        link = out_dir / sib.name
+        if sib == src or link.exists() or link.is_symlink() or sib.suffix.upper() in (
+                ".SMSPEC", ".UNSMRY", ".UNRST", ".INIT", ".EGRID", ".PRT", ".DBG", ".ESMRY", ".RFT"):
+            continue
+        try:
+            link.symlink_to(sib)
+        except OSError:
+            pass
     return dst
 
 

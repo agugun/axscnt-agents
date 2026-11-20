@@ -122,10 +122,14 @@ class DataService:
                f"Validator found {len(r['errors'])} error(s). First: {r['errors'][0]['message']}.")
         return {"ok": True, **r, "spoken_summary": say}
 
-    def submit_for_review(self, kind: str, version_id: int, qc_report_file_id: int, metrics: dict | None = None) -> dict:
-        """Re-run validation and, if clean, freeze the version as qc_ready for human review."""
+    def submit_for_review(self, kind: str, version_id: int, qc_report_file_id: int, metrics: dict | None = None,
+                          accept_validator_errors: bool = False) -> dict:
+        """Re-run validation and, if clean, freeze the version as qc_ready for human review.
+        accept_validator_errors: import profile only (data kept as it ran in OPM; findings go to the reviewer)."""
         self._kind_allowed(kind)
-        h = models.submit_for_review(self.con, kind, version_id, qc_report_file_id, metrics)
+        if accept_validator_errors and self.profile != "import":
+            raise ToolError(FORBIDDEN, "only the import profile may submit with validator findings")
+        h = models.submit_for_review(self.con, kind, version_id, qc_report_file_id, metrics, accept_validator_errors)
         return {"ok": True, "header": h,
                 "spoken_summary": f"{kind} {h['model_name']} version {h['version']} is waiting for your review."}
 

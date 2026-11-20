@@ -49,7 +49,7 @@ def geo_report(path, *, model, metrics: dict, assumptions, warnings, swof, sgof,
     return Path(path)
 
 
-def well_report(path, *, model, wells, completions, events, assumptions, warnings, inline_js=True) -> Path:
+def well_report(path, *, model, wells, completions, events, assumptions, warnings, inline_js=True, extra_figs=None) -> Path:
     fig = go.Figure()
     for w in wells:
         ev = sorted((e for e in events if e["well_name"] == w["well_name"]), key=lambda e: e["event_date"])
@@ -69,9 +69,10 @@ def well_report(path, *, model, wells, completions, events, assumptions, warning
                                           c["skin"]] for c in completions])),
                  ("Controls", _table(["Well", "Date", "Mode", "Control", "Oil", "Water inj/prod", "BHP"],
                                      [[e["well_name"], e["event_date"], e["mode"], e["control"], e["oil_rate"],
-                                       e["inj_rate"] or e["water_rate"], e["bhp"]] for e in events])),
+                                       e["inj_rate"] or e["water_rate"], e["bhp"]] for e in events[:200]])
+                  + (f"<p>{len(events) - 200} more rows not shown.</p>" if len(events) > 200 else "")),
                  ("Assumptions", _list(assumptions)), ("Validator warnings", _list(w["message"] for w in warnings))],
-                [fig], inline_js)
+                [fig] + list(extra_figs or []), inline_js)
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     Path(path).write_text(doc)
     return Path(path)

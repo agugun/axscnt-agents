@@ -240,7 +240,7 @@ CREATE TABLE geo_properties (
 CREATE TABLE faults (
     id         INTEGER PRIMARY KEY,
     version_id INTEGER NOT NULL REFERENCES geo_model_versions(id) ON DELETE CASCADE,
-    fault_name TEXT NOT NULL CHECK (length(fault_name) <= 8),
+    fault_name TEXT NOT NULL CHECK (length(fault_name) <= 32),   -- OPM allows > 8
     i1 INTEGER NOT NULL, i2 INTEGER NOT NULL,
     j1 INTEGER NOT NULL, j2 INTEGER NOT NULL,
     k1 INTEGER NOT NULL, k2 INTEGER NOT NULL,

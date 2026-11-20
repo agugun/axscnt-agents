@@ -45,19 +45,19 @@ def corey_sgof(swc=0.2, sgc=0.05, sorg=0.1, ng=2.0, no=2.0, krg_max=0.8, n=8):
     return rows
 
 
-def build_fluid(cfg, pvt: PVTService | None = None) -> dict:
+def build_fluid(cfg, pvt: PVTService | None = None, origin: str = "demo", name: str = FLUID) -> dict:
     path = cfg.inbox / "HELLO_lab_report.xlsx"
     write_template(path, example=True)
     fi, gaps = read_lab_report(path)
-    r = build_fluid_model(fi, FLUID, data=DataService("fluid", cfg), pvt=pvt or PVTService(cfg), origin="demo",
+    r = build_fluid_model(fi, name, data=DataService("fluid", cfg), pvt=pvt or PVTService(cfg), origin=origin,
                           user_description="hello demo oil", gaps=gaps)
     return _ok(r)
 
 
-def build_geo(cfg) -> dict:
+def build_geo(cfg, origin: str = "demo", name: str = GEO) -> dict:
     svc = DataService("geo", cfg)
     D = lambda n, **k: _ok(dwrap(svc, n)(**k))  # noqa: E731
-    v = D("create_version", kind="geo", model_name=GEO, origin="demo",
+    v = D("create_version", kind="geo", model_name=name, origin=origin,
           header={"unit_system": "METRIC", "grid_type": "cartesian", **GRID, "user_description": "hello demo box",
                   "assumptions_json": ["uniform properties", "Corey relative permeability (Swc 0.2, Sorw 0.2, Sorg 0.1)",
                                        "OWC below the grid: oil zone with connate water only"]})
@@ -76,7 +76,7 @@ def build_geo(cfg) -> dict:
     metrics = {"grid": "10 x 10 x 3 cartesian, 100 x 100 x 10 m", "active cells": 300,
                "pore volume (rm3)": f"{pv:,.0f}", "hydrocarbon pore volume (rm3)": f"{pv * 0.8:,.0f}",
                "datum": f"{DATUM_DEPTH:g} m at {DATUM_P:g} bar", "OWC": f"{OWC:g} m (below grid)"}
-    rep = geo_report(cfg.file_store / "qc" / f"geo_{GEO}_v{v['version']}.html", model=m["header"], metrics=metrics,
+    rep = geo_report(cfg.file_store / "qc" / f"geo_{name}_v{v['version']}.html", model=m["header"], metrics=metrics,
                      assumptions=m["header"]["assumptions_json"], warnings=val["warnings"],
                      swof=m["tables"]["swof"], sgof=m["tables"]["sgof"])
     rid = D("register_file", path=str(rep), kind="qc_report")["file_id"]

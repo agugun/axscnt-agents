@@ -98,7 +98,8 @@ def build_deck(spec: dict, cfg, *, origin: str | None = None) -> dict:
         s = date.fromisoformat(spec["start_date"])
         spec["end_date"] = s.replace(year=s.year + int(spec.get("years", 1))).isoformat()
     probs = cross_checks(fluid, geo, well)
-    if probs:
+    imported = any(m["header"]["origin"] == "imported" for m in (fluid, geo, well))
+    if probs and not imported:
         raise ToolError("CROSS_CHECK_FAILED", "; ".join(probs), probs)
 
     file_ids = [p["file_id"] for p in geo["tables"]["geo_properties"] if p["file_id"]]
@@ -123,5 +124,6 @@ def build_deck(spec: dict, cfg, *, origin: str | None = None) -> dict:
     say = (f"Deck {name} is built and passed the OPM parser." if ok else
            f"Deck {name} was written but failed the OPM check: {log.splitlines()[-1] if log else 'no output'}")
     return {"ok": ok, "deck_id": deck["id"], "path": str(deck_path), "status": status, "validation_log": log,
+            "cross_check_warnings": probs if imported else [],
             "models": {k: f"{m['header']['model_name']} v{m['header']['version']}" for k, m in
                        (("fluid", fluid), ("geo", geo), ("well", well))}, "spoken_summary": say}
