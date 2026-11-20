@@ -4,6 +4,7 @@ from __future__ import annotations
 import html
 import json
 import re
+import shutil
 from datetime import datetime
 from pathlib import Path
 
@@ -48,11 +49,14 @@ def import_to_drafts(cfg, deck_path: str, name: str) -> dict:
     """Parse the deck, write fluid/geo/well drafts (origin 'imported'), coverage report, submit for review."""
     if not re.fullmatch(r"[A-Za-z0-9_\-]+", name):
         raise ToolError(INVALID_INPUT, "name must be letters, digits, _ or -")
-    out = cfg.file_store / "imports" / name
+    out = _new_import_dir(cfg.file_store / "imports" / name)   # never reuse: earlier versions keep their files
     try:
         imp = import_deck(deck_path, out)
-    except ImportError_ as e:
-        raise ToolError("IMPORT_UNSUPPORTED", str(e)) from e
+    except Exception as e:
+        shutil.rmtree(out, ignore_errors=True)   # nothing registered yet: leave no empty import behind
+        if isinstance(e, ImportError_):
+            raise ToolError("IMPORT_UNSUPPORTED", str(e)) from e
+        raise
     svc = DataService("import", cfg)
     D = lambda n, **k: _ok(dwrap(svc, n)(**k))  # noqa: E731
     src = D("register_file", path=str(Path(deck_path).resolve()), kind="deck", note="imported source deck")["file_id"]
@@ -86,12 +90,38 @@ def import_to_drafts(cfg, deck_path: str, name: str) -> dict:
     spec = {**imp["spec"], "name": f"{name}_RT", "requirement": f"round trip of {Path(deck_path).name}"}
     spec_path = out / "deck_spec.json"
     spec_path.write_text(json.dumps(spec, default=str))
-    result.update(spec=str(spec_path), coverage_report=str(rep),
+    (out / IMPORT_META).write_text(json.dumps({"name": name, "source_deck": str(Path(deck_path).resolve()),
+                                               "versions": result["versions"], "created": datetime.now().isoformat()}))
+    result.update(spec=str(spec_path), coverage_report=str(rep), import_dir=str(out),
                   spoken_summary=(f"Imported {Path(deck_path).name} as {name}: fluid, geo and well models are waiting for "
                                   f"your review. {imp['coverage']['counts'].get('passthrough', 0)} keywords are carried "
                                   f"verbatim; schedule is {imp['coverage']['schedule_mode']}."))
     result["ok"] = True
     return result
+
+
+IMPORT_META = "import.json"
+
+
+def _new_import_dir(base: Path) -> Path:
+    """imports/<name>/import-NNN: one folder per import, so a re-import never overwrites files that earlier
+    (possibly approved) model versions were reviewed with."""
+    base.mkdir(parents=True, exist_ok=True)
+    nums = [int(p.name.split("-")[1]) for p in base.glob("import-[0-9]*") if p.name.split("-")[1].isdigit()]
+    out = base / f"import-{max(nums, default=0) + 1:03d}"
+    out.mkdir()
+    return out
+
+
+def _approved_import(cfg, name: str) -> tuple[Path, dict] | None:
+    """The newest import of this name whose fluid, geo and well versions are all approved."""
+    svc = DataService("deck", cfg)   # sees approved models only
+    approved = {k: {m["version_id"] for m in svc.list_models(kind=k)["models"]} for k in ("fluid", "geo", "well")}
+    for meta in sorted((cfg.file_store / "imports" / name).glob(f"import-*/{IMPORT_META}"), reverse=True):
+        v = json.loads(meta.read_text())["versions"]
+        if all(v.get(k) in approved[k] for k in approved):
+            return meta.parent, v
+    return None
 
 
 def _rollback(svc, result):
@@ -124,15 +154,22 @@ def _make_all(make, imp, D, deck_path, name, result):
 
 def verify(cfg, name: str) -> dict:
     """After approval: rebuild the deck, run original and rebuilt, compare static, init and dynamic results."""
-    spec_path = cfg.file_store / "imports" / name / "deck_spec.json"
-    if not spec_path.exists():
-        raise ToolError(INVALID_INPUT, f"no import named {name}")
-    spec = json.loads(spec_path.read_text())
-    spec.update(fluid=f"{name}_FLUID", geo=f"{name}_GEO", well=f"{name}_WELL")
+    found = _approved_import(cfg, name)
+    if found:   # rebuild from exactly the versions this import created, with this import's files
+        base, versions = found
+        models = {k: int(versions[k]) for k in ("fluid", "geo", "well")}
+    else:       # imports made before per-import folders: one shared folder, latest approved models
+        base = cfg.file_store / "imports" / name
+        models = {k: f"{name}_{k.upper()}" for k in ("fluid", "geo", "well")}
+        if not (base / "deck_spec.json").exists():
+            if any(base.glob(f"import-*/{IMPORT_META}")):
+                raise ToolError(INVALID_INPUT, f"no import of {name} has all three models approved yet")
+            raise ToolError(INVALID_INPUT, f"no import named {name}")
+    spec = json.loads((base / "deck_spec.json").read_text())
+    spec.update(models)
     d = build_deck(spec, cfg, origin="built")
     if not d["ok"]:
         return {"ok": False, "stage": "rebuild", "deck": d, "spoken_summary": d["spoken_summary"]}
-    base = cfg.file_store / "imports" / name
     orig = run_deck(spec["source_deck"], base / "run_original", cfg.flow_bin)
     rebuilt = run_deck(d["path"], base / "run_rebuilt", cfg.flow_bin)
     if not (orig["ok"] and rebuilt["ok"]):

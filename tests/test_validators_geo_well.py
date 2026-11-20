@@ -88,3 +88,19 @@ def test_well_failures(cfg):
     con.execute("UPDATE well_events SET control='ORAT' WHERE version_id=? AND well_name='INJ1'", (w,))
     ok, r = rules(con, "well", w)
     assert not ok and {"bhp_limit", "perf_ijk", "control"} <= r
+
+
+def test_extra_saturation_tables_are_a_warning(cfg):
+    # Norne: SATNUM is 1 everywhere, table 2 is the imbibition table selected by IMBNUM (passthrough)
+    con = connect(cfg.database)
+    vid = make_geo(con)
+    models.write_tables(con, "geo", vid, "swof", [dict(r, satnum=2) for r in corey_swof(swc=0.25)])
+    models.write_tables(con, "geo", vid, "sgof", [dict(r, satnum=2) for r in corey_sgof(swc=0.25)])
+    r = models.run_validator(con, "geo", vid)
+    assert "regions" not in {e["rule"] for e in r["errors"]}
+    assert any(w["rule"] == "regions" and "IMBNUM" in w["message"] for w in r["warnings"])
+    # a SATNUM region with no table is still an error
+    vid2 = make_geo(con)
+    models.write_tables(con, "geo", vid2, "geo_properties", [dict(keyword="SATNUM", const_value=2)])
+    errs = models.run_validator(con, "geo", vid2)["errors"]
+    assert any("SWOF has no table for SATNUM [2]" in e["message"] for e in errs), errs

@@ -73,8 +73,13 @@ def validate(con, vid: int) -> list[dict]:
     nsat = int(max(values.get("SATNUM", [1])))
     for name, tab in (("SWOF", swof), ("SGOF", sgof)):
         regs = {r["satnum"] for r in tab}
-        if tab and regs != set(range(1, nsat + 1)):
-            iss.error("regions", f"{name} covers SATNUM {sorted(regs)}, grid uses 1..{nsat}")
+        missing = set(range(1, nsat + 1)) - regs
+        if tab and missing:
+            iss.error("regions", f"{name} has no table for SATNUM {sorted(missing)}, grid uses 1..{nsat}")
+        elif tab and max(regs) > nsat:
+            # extra tables are valid: IMBNUM (hysteresis), KRNUM and similar region arrays select them
+            iss.warn("regions", f"{name} tables {sorted(regs - set(range(1, nsat + 1)))} are not used by SATNUM "
+                                f"(1..{nsat}); fine if IMBNUM or another region array selects them")
     if not swof:
         iss.error("required", "SWOF is empty")
     bysat = defaultdict(list)
