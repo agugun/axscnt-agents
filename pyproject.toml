@@ -25,6 +25,7 @@ dev = ["pytest"]
 [project.scripts]
 opmagent = "opmagent.cli:main"
 opmagent-data = "opmagent.servers.data_server:main"
+opmagent-pvt = "opmagent.servers.pvt_server:main"
 
 [tool.setuptools.packages.find]
 include = ["opmagent*"]

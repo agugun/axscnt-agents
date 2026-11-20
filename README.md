@@ -11,8 +11,8 @@ Design: see the architecture and user-guide docs (links in `docs/README.md`).
 | SQLite schema with human approval gate | done, tested |
 | Config, `opmagent init-db`, `opmagent doctor` | done |
 | Data MCP server (profiles, validators, reviewer tools) | done, tested |
-| PVT engine MCP server (NeqSim) | next |
-| Fluid modeler skill + QC report | planned |
+| PVT engine MCP server (NeqSim): characterise, CCE/DL/separator/viscosity, Psat tuning, black-oil tables | done, tested |
+| Fluid modeler skill + QC report | next |
 | Deck builder + `hello` | planned |
 | Well modeler, geo modeler | planned |
 | Run agent (+ debug), deck importer | planned |
@@ -50,6 +50,8 @@ Each agent starts the data server with its own profile. Example MCP client confi
   }
 }
 ```
+
+The PVT engine server takes no profile: `opmagent-pvt --config /path/to/opmagent.toml`.
 
 Profiles: `fluid`, `geo`, `well`, `import` (writers), `deck`, `run` (read approved models only), `reviewer` (approve/reject).
 Put the `reviewer` profile **only** in your own client, never in an agent's config. Approvals are recorded under
