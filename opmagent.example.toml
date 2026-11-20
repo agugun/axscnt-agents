@@ -1,0 +1,26 @@
+# Copy to opmagent.toml (or ~/.config/opmagent/opmagent.toml) and edit.
+
+[paths]
+database   = "~/opmagent/opm.db"
+file_store = "~/opmagent/files"        # inbox/ lives here
+flow_bin   = "flow"
+
+[defaults]
+unit_system       = "METRIC"
+eos               = "PR"               # PR, PR78 or SRK
+volume_shift      = true
+pseudo_components = 6
+
+[tolerances]
+psat = 0.02
+bo   = 0.02
+rs   = 0.03
+mu_o = 0.10
+
+[simulation]
+max_parallel = 2
+
+[debug]
+# opm_source_root = "~/src/opm"
+# opm_debug_flow  = "~/src/opm/build/opm-simulators/bin/flow"
+vscode_bin = "code"
