@@ -109,6 +109,14 @@ def cmd_review(args):
             print("No hello models are waiting for review.")
             return
     else:
+        from .core.errors import ToolError
+        try:
+            q = rv.get_qc_report(kind=args.kind, version_id=args.version_id)
+        except ToolError as e:
+            raise SystemExit(f"{e}. Run `opmagent review list` to see what is waiting.")
+        if q["status"] != "qc_ready":   # decided already (or still a draft): nothing to confirm
+            raise SystemExit(f"{args.kind} {q['model_name']} v{q['version']} (id {args.version_id}) is already "
+                             f"{q['status']}; nothing to do. Run `opmagent review list` to see what is waiting.")
         targets = [(args.kind, {"version_id": args.version_id})]
     for kind, m in targets:
         q = rv.get_qc_report(kind=kind, version_id=m["version_id"])

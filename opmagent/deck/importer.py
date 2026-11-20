@@ -19,6 +19,7 @@ import numpy as np
 SECTIONS = ("RUNSPEC", "GRID", "EDIT", "PROPS", "REGIONS", "SOLUTION", "SUMMARY", "SCHEDULE")
 MONTHS = {m: i + 1 for i, m in enumerate(["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"])}
 MONTHS["JLY"] = 7
+_PROD_RATES = ("oil_rate", "water_rate", "gas_rate", "liquid_rate")
 
 # keyword -> how it is handled
 MAPPED = {
@@ -38,6 +39,11 @@ REGENERATED = {"RUNSPEC", "GRID", "EDIT", "PROPS", "REGIONS", "SOLUTION", "SUMMA
 GRID_PROPS = ["PORO", "PERMX", "PERMY", "PERMZ", "NTG", "MULTX", "MULTY", "MULTZ", "MULTX-", "MULTY-", "MULTZ-", "MULTPV"]
 REGION_PROPS = ["SATNUM", "PVTNUM", "EQLNUM", "FIPNUM"]
 UNSUPPORTED = {"TEMP", "THERMAL", "SOLVENT", "POLYMER", "FOAM", "BRINE", "COMPS", "CO2STORE", "H2STORE", "BIOFILM"}
+# end-point scaling arrays: a cell the deck never assigns takes its value from the saturation table, so it must stay
+# unset in the rebuilt deck (written as N*); OPM's field props fill such cells with placeholders
+_EPS_BASE = ["SWL", "SWLPC", "SWCR", "SWU", "SGL", "SGLPC", "SGCR", "SGU", "SOWCR", "SOGCR",
+             "KRW", "KRWR", "KRO", "KRORW", "KRORG", "KRG", "KRGR", "PCW", "PCG"]
+ENDPOINT_KWS = {p + b + d for b in _EPS_BASE for p in ("", "I") for d in ("", "X", "X-", "Y", "Y-", "Z", "Z-")}
 
 
 class ImportError_(Exception):
@@ -96,6 +102,146 @@ def _val(tok):
 
 def _get(rec, i, default=None):
     return rec[i] if i < len(rec) and rec[i] is not None else default
+
+
+MD_TO_SI = 9.869232667160130e-16   # OPM: permeability in SI = deck mD * this, in double arithmetic
+
+
+def _opm_read(tokens: list[str]) -> np.ndarray:
+    """The doubles OPM's deck parser makes of these number tokens (it is not correctly rounded for every input)."""
+    from opm.io.parser import Parser
+    d = Parser().parse_string(f"RUNSPEC\nDIMENS\n {len(tokens)} 1 1 /\nGRID\nPORO\n " + " ".join(tokens) + " /\n")
+    return np.asarray(next(k for k in d if k.name == "PORO").get_raw_array())
+
+
+def exact_tokens(target: np.ndarray, factor: float = 1.0) -> tuple[list[str], int, np.ndarray]:
+    """Deck text for each value such that OPM reads it back as exactly target (after * factor for unit conversion).
+    OPM's parser cannot produce about half of all doubles (values only arithmetic yields, e.g. 1 - 0.07), so
+    returns the tokens, how many values are still inexact, and what OPM will read (in internal units)."""
+    target = np.asarray(target, dtype=float)
+    uniq, inv = np.unique(target, return_inverse=True)
+    deck = uniq / factor if factor != 1.0 else uniq
+    tok = np.array([repr(float(v)) for v in deck], dtype=object)
+    todo = np.flatnonzero(_opm_read(list(tok)) * factor != uniq) if factor != 1.0 else \
+        np.flatnonzero(_opm_read(list(tok)) != uniq)
+
+    def candidates(v):
+        out = [f"{v:.{p}g}" for p in (15, 16, 17)] + [f"{v:.20e}", f"{v:.25e}", f"{v:.30g}"]
+        for nb in (np.nextafter(v, np.inf), np.nextafter(v, -np.inf)):
+            out.append(repr(float(nb)))
+        m, e = f"{v:.16e}".split("e")
+        digits = m.replace(".", "").lstrip("-")
+        sign = "-" if v < 0 else ""
+        for step in (1, -1, 2, -2, 3, -3):
+            d = str(int(digits) + step)
+            if len(d) == len(digits):
+                out.append(f"{sign}{d[0]}.{d[1:]}e{e}")
+        return out
+
+    if len(todo):
+        cand = [(i, c) for i in todo for c in candidates(float(deck[i]))]
+        got = _opm_read([c for _, c in cand]) * factor
+        for (i, c), g in zip(cand, got):
+            if i in todo and g == uniq[i] and tok[i] != c:
+                tok[i] = c
+    read = _opm_read(list(tok))
+    read = read * factor if factor != 1.0 else read
+    left = np.flatnonzero(read != uniq)
+    return list(tok[inv]), int(np.isin(inv, left).sum()), read[inv]
+
+
+def _replay_ops(deck, written: dict, targets: set, nx, ny, nz, active: np.ndarray) -> tuple[list, set]:
+    """Some values only arise from arithmetic (SGU = 1 - SWL, PERMZ = 0.13 * PERMX) and OPM cannot read them from
+    text. For those arrays, replay the deck's own EQUALS/COPY/MULTIPLY/ADD on the exactly written arrays, so OPM
+    computes the same doubles. A replay is kept only if simulating it in double arithmetic reproduces every active
+    cell exactly. Returns [(array, keyword text)] in deck order and the set of arrays made exact."""
+    full = (1, nx, 1, ny, 1, nz)
+    box, ops = full, []
+    for kw in deck:
+        n = kw.name
+        if n in SECTIONS or n == "ENDBOX":
+            box = full
+        elif n == "BOX":
+            box = tuple(int(v) for v in records(kw)[0][:6])
+        elif n in ("EQUALS", "COPY", "MULTIPLY", "ADD"):
+            for r in records(kw):
+                if not r:
+                    continue
+                tgt, src, val = (str(r[1]).upper(), str(r[0]).upper(), None) if n == "COPY" else (str(r[0]).upper(), None, r[1])
+                if tgt in targets:
+                    b = tuple(int(v) if v is not None else box[i] for i, v in enumerate((list(r[2:8]) + [None] * 6)[:6]))
+                    ops.append((tgt, n, src, val, b))
+        elif n in targets:
+            ops.append((n, "DIRECT", None, None, full))   # array text in the deck: its base values are not known here
+    consts = sorted({repr(float(v)) for *_, v, _ in ops if v is not None})
+    opm = dict(zip(consts, _opm_read(consts))) if consts else {}
+    shape = (nz, ny, nx)
+    act = active.reshape(shape)
+    accepted = set(targets)
+    while accepted:
+        st = {k: w[0].reshape(shape).copy() for k, w in written.items()}
+        bad = set()
+        for tgt, n, src, val, b in ops:
+            if tgt not in accepted or tgt in bad:
+                continue
+            sl = (slice(b[4] - 1, b[5]), slice(b[2] - 1, b[3]), slice(b[0] - 1, b[1]))
+            f = written[tgt][2]
+            if n == "COPY" and src in st:
+                st[tgt][sl] = st[src][sl]
+            elif n == "EQUALS":
+                st[tgt][sl] = opm[repr(float(val))] * f
+            elif n == "MULTIPLY":
+                st[tgt][sl] = st[tgt][sl] * opm[repr(float(val))]
+            elif n == "ADD" and f == 1.0:
+                st[tgt][sl] = st[tgt][sl] + opm[repr(float(val))]
+            else:
+                bad.add(tgt)
+        for tgt in accepted - bad:
+            want = written[tgt][1].reshape(shape)
+            mask = act if written[tgt][3] is None else act & written[tgt][3].reshape(shape)
+            if not np.array_equal(st[tgt][mask], want[mask]):
+                bad.add(tgt)
+        if not bad:
+            break
+        accepted -= bad
+    out = []
+    for tgt, n, src, val, b in ops:
+        if tgt not in accepted:
+            continue
+        cells = " ".join(str(x) for x in b)
+        rec = f"'{src}' '{tgt}' {cells}" if n == "COPY" else f"'{tgt}' {repr(float(val))} {cells}"
+        out.append((tgt, f"{n}\n {rec} /\n/\n"))
+    return out, accepted
+
+
+def _assigned_cells(deck, names, nx, ny, nz) -> dict[str, np.ndarray]:
+    """Global cells (i fastest) each array gets a value in: direct keyword, EQUALS or COPY, honouring BOX/ENDBOX.
+    ADD/MULTIPLY only change cells that already have a value, so they assign nothing."""
+    masks = {n: np.zeros((nz, ny, nx), dtype=bool) for n in names}
+    full = (1, nx, 1, ny, 1, nz)
+    box = full
+
+    def mark(name, rec_box):
+        b = [int(v) if v is not None else box[i] for i, v in enumerate((list(rec_box) + [None] * 6)[:6])]
+        masks[name][b[4] - 1:b[5], b[2] - 1:b[3], b[0] - 1:b[1]] = True
+
+    for kw in deck:
+        n = kw.name
+        if n in SECTIONS or n == "ENDBOX":
+            box = full
+        elif n == "BOX":
+            box = tuple(int(v) for v in records(kw)[0][:6])
+        elif n in masks:
+            mark(n, ())
+        elif n == "EQUALS":
+            for r in records(kw):
+                if r and str(r[0]).upper() in masks:
+                    mark(str(r[0]).upper(), r[2:8])
+        elif n == "COPY":
+            for r in records(kw):
+                if len(r) > 1 and str(r[1]).upper() in masks:
+                    mark(str(r[1]).upper(), r[2:8])
+    return {n: m.ravel() for n, m in masks.items()}
 
 
 # ---------------------------------------------------------------- parsing
@@ -175,16 +321,40 @@ def import_deck(deck_path: str | Path, out_dir: str | Path) -> dict:
 
     files = []
 
-    def write_array(name, values_active, is_int=False, fill=0):
-        full = np.full(ncell, fill, dtype=float)
+    inexact = {}   # array -> cells OPM cannot read back bit-exactly (reported in coverage)
+    written = {}   # array -> (what OPM reads from the written file, global; target values; factor)
+
+    def write_array(name, values_active, is_int=False, fill=0, assigned=None, factor=1.0):
+        """values_active: OPM's final values (internal units = deck units * factor).
+        assigned: global bool mask; cells outside it are written as N* (left unset, as in the source deck)."""
+        full = np.full(ncell, fill * factor, dtype=float)
         full[active_idx] = values_active
         p = out_dir / f"{name.replace('-', 'M')}.INC"
-        fmt = (lambda v: str(int(v))) if is_int else (lambda v: repr(float(v)))   # full double precision: arrays must be bit-identical
+        if is_int:
+            vals = [str(int(v)) for v in full]
+        else:   # arrays must be bit-identical after OPM parses them again
+            vals, bad, read = exact_tokens(full, factor)
+            written[name] = (read, full, factor, assigned)
+            if bad:
+                inexact[name] = bad
+        toks = vals
+        if assigned is not None and not assigned.all():
+            toks, run = [], 0
+            for v, a in zip(vals, assigned):
+                if a:
+                    if run:
+                        toks.append(f"{run}*")
+                        run = 0
+                    toks.append(v)
+                else:
+                    run += 1
+            if run:
+                toks.append(f"{run}*")
         with open(p, "w") as f:
             f.write(f"{name}\n")
             row = []
-            for v in full:
-                row.append(fmt(v))
+            for v in toks:
+                row.append(v)
                 if len(row) == 8:
                     f.write(" " + " ".join(row) + "\n")
                     row = []
@@ -202,12 +372,13 @@ def import_deck(deck_path: str | Path, out_dir: str | Path) -> dict:
             continue
         if not len(arr):
             continue
-        if name.startswith("PERM"):
-            arr = np.asarray(arr) / 9.869232667160130e-16   # field props are SI (m2); decks use mD in METRIC and FIELD
+        si = np.asarray(arr)
+        factor = MD_TO_SI if name.startswith("PERM") else 1.0   # field props are SI (m2); decks use mD in METRIC and FIELD
+        arr = si / factor
         if np.allclose(arr, arr[0]) and actnum.all():
             props.append({"keyword": name, "const_value": float(arr[0])})
         else:
-            props.append({"keyword": name, "file": write_array(name, arr)})
+            props.append({"keyword": name, "file": write_array(name, si, factor=factor)})
     for name in REGION_PROPS:
         try:
             arr = fp.get_int_array(name)
@@ -239,6 +410,7 @@ def import_deck(deck_path: str | Path, out_dir: str | Path) -> dict:
             keep.append(p)
         passthrough[sec] = keep
     extra_mapped = set(GRID_PROPS + REGION_PROPS + ["SWATINIT", "ACTNUM"])
+    eps_assigned = _assigned_cells(deck, sorted((touched - extra_mapped) & ENDPOINT_KWS), nx, ny, nz)
     for name in sorted(touched - extra_mapped):
         arr = None
         for getter, is_int in ((fp.get_int_array, True), (fp.get_double_array, False)):
@@ -252,8 +424,18 @@ def import_deck(deck_path: str | Path, out_dir: str | Path) -> dict:
         sec = touched_in.get(name, "GRID")
         if sec == "EDIT":
             sec = "GRID"
-        path = write_array(name, arr, is_int=is_int, fill=1 if is_int else 0)
+        path = write_array(name, arr, is_int=is_int, fill=1 if is_int else 0, assigned=eps_assigned.get(name))
         passthrough[sec].append({"keyword": name, "raw_text": f"INCLUDE\n '{path}' /\n"})
+    # values OPM cannot read from text: recompute them with the deck's own operations, after the arrays are set
+    if inexact:
+        act_mask = np.zeros(ncell, dtype=bool)
+        act_mask[active_idx] = True
+        replay, exact = _replay_ops(deck, written, set(inexact), nx, ny, nz, act_mask)
+        for tgt, text in replay:
+            sec = "GRID" if tgt in GRID_PROPS else {"EDIT": "GRID"}.get(touched_in.get(tgt, "GRID"), touched_in.get(tgt, "GRID"))
+            passthrough[sec].append({"keyword": tgt, "raw_text": text})
+        for tgt in exact:
+            inexact.pop(tgt)
 
     geo_header = {"unit_system": unit, "grid_type": "corner_point" if corner else "cartesian", "nx": nx, "ny": ny, "nz": nz}
     if corner:
@@ -377,6 +559,7 @@ def import_deck(deck_path: str | Path, out_dir: str | Path) -> dict:
 
     # ------------------------------------------------ wells and schedule
     wells, comps, events, groups, gctrl, econ = {}, [], [], {}, [], []
+    inj_phase = {}   # well -> phase injected in WCONINJE/WCONINJH (WELSPECS phase may say OIL, e.g. Norne)
     cur = start
     verbatim_reasons = []
     schedule_extra = []
@@ -420,6 +603,10 @@ def import_deck(deck_path: str | Path, out_dir: str | Path) -> dict:
                                                         "GRAT", "LRAT", "RESV", "BHP", "THP", "RATE", "GRUP") for x in r[1:]):
                     verbatim_reasons.append(f"{name} {r[0]} uses UDQ/UDA values")
                 status_item = 2 if name in ("WCONINJE", "WCONINJH") else 1   # injectors: item 2 is the phase
+                if name in ("WCONINJE", "WCONINJH") and _get(r, 1) in ("WATER", "GAS"):
+                    seen = inj_phase.setdefault(r[0], [])
+                    if _get(r, 1) not in seen:
+                        seen.append(_get(r, 1))
                 ev = {"well_name": r[0], "event_date": cur.isoformat(), "status": _get(r, status_item, "OPEN")}
                 if name == "WCONPROD":
                     ev.update(mode="PREDICTION", control=_get(r, 2), oil_rate=_get(r, 3), water_rate=_get(r, 4), gas_rate=_get(r, 5),
@@ -449,11 +636,24 @@ def import_deck(deck_path: str | Path, out_dir: str | Path) -> dict:
             schedule_extra.append({"date": cur.isoformat(), "keyword": name, "raw_text": str(kw).rstrip() + "\n"})
     for w in wells.values():
         evs = [e for e in events if e["well_name"] == w["well_name"]]
-        produces = any(e.get("oil_rate") is not None or e.get("water_rate") is not None or e.get("gas_rate") is not None
-                       or (e.get("control") in ("ORAT", "WRAT", "GRAT", "LRAT", "RESV") and e.get("inj_rate") is None)
-                       for e in evs)
+        prod_evs = [e for e in evs if e.get("inj_rate") is None and e.get("control") != "RATE"
+                    and (e.get("control") is not None or any(e.get(k) is not None for k in _PROD_RATES))]
+        # WCONHIST with all rates zero is a placeholder (Norne opens its injectors this way): it produces nothing
+        placeholder = [e for e in prod_evs if e["mode"] == "HISTORY" and not any(e.get(k) for k in _PROD_RATES)]
+        produces = len(prod_evs) > len(placeholder)
         injects = any(e.get("inj_rate") is not None or e.get("control") == "RATE" for e in evs)
-        w["well_type"] = "INJECTOR" if injects and not produces and w["preferred_phase"] in ("WATER", "GAS") else "PRODUCER"
+        phases = inj_phase.get(w["well_name"], [])
+        if len(phases) > 1:   # WAG: one phase per well in the model, so the schedule must stay verbatim
+            verbatim_reasons.append(f"{w['well_name']} alternates injected phase {'/'.join(phases)}")
+        phase = (phases[0] if phases else None) or \
+            (w["preferred_phase"] if w["preferred_phase"] in ("WATER", "GAS") else None)
+        if injects and not produces and phase:
+            # the model keeps one phase per well and uses it as the injected phase, so it follows WCONINJE
+            w["well_type"], w["preferred_phase"] = "INJECTOR", phase
+            for e in placeholder:   # zero-rate producer entries on an injector: same flow as shut
+                e.update(status="SHUT", control=None)
+        else:
+            w["well_type"] = "PRODUCER"
         if w["preferred_phase"] not in ("OIL", "WATER", "GAS", "LIQ"):
             w["preferred_phase"] = "OIL"
         if w["group_name"] == "FIELD" or w["group_name"] in groups:
@@ -495,7 +695,8 @@ def import_deck(deck_path: str | Path, out_dir: str | Path) -> dict:
                             "wells": list(wells.values()), "well_completions": comps, "well_events": events}},
         "spec": spec, "files": files,
         "coverage": {"counts": dict(counts), "keywords": coverage, "schedule_mode": schedule_mode,
-                     "schedule_reasons": sorted(set(verbatim_reasons))[:30]},
+                     "schedule_reasons": sorted(set(verbatim_reasons))[:30],
+                     "inexact_cells": inexact},   # cells whose value OPM's parser cannot reproduce exactly
         "grid": {"nx": nx, "ny": ny, "nz": nz, "nactive": int(grid.nactive)},
     }
 

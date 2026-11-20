@@ -36,6 +36,9 @@ cp opmagent.example.toml opmagent.toml      # edit paths
 opmagent init-db
 opmagent doctor
 pytest -q
+# with the open decks (tools/fetch_open_data.sh): SPE1/SPE9 round trips too; OPMAGENT_SLOW=1 adds Norne (~10 min)
+OPM_TESTS_DIR=~/opmagent/open-data/opm-tests pytest -q
+OPMAGENT_SLOW=1 OPM_TESTS_DIR=~/opmagent/open-data/opm-tests pytest -q -k norne
 
 # create the agents workspace (MCP servers, agents, skills, config, database)
 opmagent setup ~/opm-agents

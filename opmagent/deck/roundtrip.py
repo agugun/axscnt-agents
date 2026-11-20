@@ -13,7 +13,8 @@ from pathlib import Path
 import numpy as np
 
 STATIC = ["PORV", "PERMX", "PERMY", "PERMZ", "PORO", "NTG", "TRANX", "TRANY", "TRANZ", "DEPTH", "DX", "DY", "DZ",
-          "SATNUM", "PVTNUM", "EQLNUM", "FIPNUM"]
+          "SATNUM", "PVTNUM", "EQLNUM", "FIPNUM", "IMBNUM"]
+# plus every end-point scaling array (SWL, ISWL, KRW, ...) the INIT files contain: unset cells are -1e20 there
 INIT = ["PRESSURE", "SWAT", "SGAS", "RS", "RV"]
 TOL = {"static": 1e-6, "init": 1e-6, "dynamic": 1e-4}   # INIT/UNRST are single precision (eps 1.2e-7)
 
@@ -41,8 +42,9 @@ def compare_static(run_a: Path, run_b: Path, stem_a: str, stem_b: str, tol=TOL["
     g = EGrid(str(run_a / f"{stem_a}.EGRID"))
     nx, ny, _ = g.dimension
     act = np.flatnonzero(np.array(g.export_actnum()) > 0) if hasattr(g, "export_actnum") else None
+    from .importer import ENDPOINT_KWS
     out, fails = {}, []
-    for k in STATIC:
+    for k in STATIC + sorted(ENDPOINT_KWS & (names_a | names_b)):
         if k not in names_a and k not in names_b:
             continue
         if (k in names_a) != (k in names_b):
