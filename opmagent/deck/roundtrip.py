@@ -15,7 +15,7 @@ import numpy as np
 STATIC = ["PORV", "PERMX", "PERMY", "PERMZ", "PORO", "NTG", "TRANX", "TRANY", "TRANZ", "DEPTH", "DX", "DY", "DZ",
           "SATNUM", "PVTNUM", "EQLNUM", "FIPNUM"]
 INIT = ["PRESSURE", "SWAT", "SGAS", "RS", "RV"]
-TOL = {"static": 1e-9, "init": 1e-6, "dynamic": 1e-4}
+TOL = {"static": 1e-6, "init": 1e-6, "dynamic": 1e-4}   # INIT/UNRST are single precision (eps 1.2e-7)
 
 
 def _rel(a, b) -> tuple[float, int]:

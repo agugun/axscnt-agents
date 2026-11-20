@@ -179,7 +179,7 @@ def import_deck(deck_path: str | Path, out_dir: str | Path) -> dict:
         full = np.full(ncell, fill, dtype=float)
         full[active_idx] = values_active
         p = out_dir / f"{name.replace('-', 'M')}.INC"
-        fmt = (lambda v: str(int(v))) if is_int else (lambda v: f"{v:.10g}")
+        fmt = (lambda v: str(int(v))) if is_int else (lambda v: repr(float(v)))   # full double precision: arrays must be bit-identical
         with open(p, "w") as f:
             f.write(f"{name}\n")
             row = []
