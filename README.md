@@ -13,8 +13,9 @@ Design: see the architecture and user-guide docs (links in `docs/README.md`).
 | Data MCP server (profiles, validators, reviewer tools) | done, tested |
 | PVT engine MCP server (NeqSim): characterise, CCE/DL/separator/viscosity, Psat tuning, black-oil tables | done, tested |
 | Fluid modeler: Excel template/reader, pipeline, QC report, agent skill | done, tested |
-| Deck builder + `hello` | next |
-| Well modeler, geo modeler | planned |
+| Deck builder, `hello`, run (flow binary or opm.simulators) | done, tested |
+| Human review CLI (`opmagent review`) | done |
+| Well modeler, geo modeler (real data) | next |
 | Run agent (+ debug), deck importer | planned |
 
 ## Laptop setup (Ubuntu)
@@ -28,13 +29,21 @@ sudo apt install -y mpi-default-bin libopm-simulators-bin python3-opm-simulators
 
 # project
 git clone https://github.com/agugun/axscnt-agents.git && cd axscnt-agents
-python3 -m venv --system-site-packages .venv && source .venv/bin/activate   # system site: OPM python bindings
-pip install -e ".[dev,geo]"
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev,geo,opm]"     # opm + opm-simulators wheels: parser and simulator bindings
 cp opmagent.example.toml opmagent.toml      # edit paths
 opmagent init-db
 opmagent doctor
 pytest -q
+
+# end-to-end check
+opmagent hello                       # builds the 3 demo models, waits for you
+opmagent review approve-hello        # you approve (shows what it will approve, asks y/N)
+opmagent hello                       # builds the HELLO deck, parses it with OPM, runs it 5 years
 ```
+
+The OPM Flow binary from the OPM package archive (`libopm-simulators-bin`) is optional: the runner uses
+`flow` when it's on PATH, otherwise the `opm.simulators` Python bindings.
 
 ## Fluid modeler
 
@@ -49,6 +58,15 @@ viscosity miss tolerance, nothing is written and the result says `needs_decision
 
 The agent skill is in `skills/fluid-modeler/SKILL.md`. For Claude Code, copy or link `skills/*` into
 `.claude/skills/` of the project you run the agents from.
+
+## Deck builder and runs
+
+```bash
+opmagent deck build --spec spec.json   # spec: see skills/deck-builder/SKILL.md
+opmagent run --deck FieldA_WF20        # runs the latest validated deck with that name
+opmagent review list                   # what's waiting for your review, with QC report paths
+opmagent review approve fluid 12       # or: reject geo 7 --comment "OWC should be 2165 m"
+```
 
 ## Registering the data server
 

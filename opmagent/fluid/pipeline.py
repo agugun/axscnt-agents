@@ -72,6 +72,11 @@ def build_fluid_model(fi: dict, model_name: str, *, data: DataService, pvt: PVTS
     bo = P("generate_black_oil", fluid_handle=h, p_min=p_min, p_max=p_max, n=n, stages=stages,
            salinity_ppm=fi.get("salinity_ppm", 0.0))
     assumptions += bo["summary"]["assumptions"]
+    if not fi.get("rsvd"):
+        rs_pb = max(r["rs"] for r in bo["tables"]["pvto"] if r["is_saturated"])  # exactly the table value
+        bo["tables"]["rsvd"] = [{"eqlnum": 1, "depth": 0.0, "rs": rs_pb},
+                                {"eqlnum": 1, "depth": 10000.0, "rs": rs_pb}]
+        assumptions.append(f"RSVD: no depth data; constant initial Rs = Rs at bubble point ({rs_pb:.1f} sm3/sm3)")
 
     # 4. draft version
     src = [D("register_file", path=fi["source_file"], kind="lab_report")["file_id"]] if fi.get("source_file") else []

@@ -20,6 +20,7 @@ dependencies = [
 
 [project.optional-dependencies]
 geo = ["lasio", "gstools"]
+opm = ["opm>=2025.10", "opm-simulators>=2025.10"]
 dev = ["pytest"]
 
 [project.scripts]

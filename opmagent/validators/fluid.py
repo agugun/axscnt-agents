@@ -124,9 +124,9 @@ def validate(con, vid: int) -> list[dict]:
         max_rs = max(r["rs"] for r in pvto if r["is_saturated"])
         max_p = max(r["pressure"] for r in pvto)
         for r in rsvd:
-            if r["rs"] > max_rs:
+            if r["rs"] > max_rs * (1 + 1e-9):
                 iss.error("rsvd_range", f"Rs {r['rs']:g} at depth {r['depth']:g} exceeds PVTO max saturated Rs {max_rs:g}", f"RSVD eqlnum {r['eqlnum']}")
         for r in pbvd:
-            if r["pb"] > max_p:
+            if r["pb"] > max_p * (1 + 1e-9):
                 iss.error("pbvd_range", f"Pb {r['pb']:g} at depth {r['depth']:g} exceeds PVTO pressure range {max_p:g}", f"PBVD eqlnum {r['eqlnum']}")
     return iss
