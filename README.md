@@ -12,8 +12,8 @@ Design: see the architecture and user-guide docs (links in `docs/README.md`).
 | Config, `opmagent init-db`, `opmagent doctor` | done |
 | Data MCP server (profiles, validators, reviewer tools) | done, tested |
 | PVT engine MCP server (NeqSim): characterise, CCE/DL/separator/viscosity, Psat tuning, black-oil tables | done, tested |
-| Fluid modeler skill + QC report | next |
-| Deck builder + `hello` | planned |
+| Fluid modeler: Excel template/reader, pipeline, QC report, agent skill | done, tested |
+| Deck builder + `hello` | next |
 | Well modeler, geo modeler | planned |
 | Run agent (+ debug), deck importer | planned |
 
@@ -35,6 +35,20 @@ opmagent init-db
 opmagent doctor
 pytest -q
 ```
+
+## Fluid modeler
+
+```bash
+opmagent fluid template lab.xlsx            # empty template (add --example for the demo oil)
+opmagent fluid build --input lab.xlsx --check            # list missing data
+opmagent fluid build --input lab.xlsx --name FieldA_Oil  # build, QC report, submit for review
+```
+
+Exit code 0 means the model is waiting for review; the QC report path is in the JSON output. If Bo, Rs or
+viscosity miss tolerance, nothing is written and the result says `needs_decision`.
+
+The agent skill is in `skills/fluid-modeler/SKILL.md`. For Claude Code, copy or link `skills/*` into
+`.claude/skills/` of the project you run the agents from.
 
 ## Registering the data server
 
@@ -65,7 +79,10 @@ opmagent/
   validators/   fluid, geo, well, cross-model rules
   servers/      data_server, pvt_server, sim_server (MCP)
   reports/      QC report builder
+  pvt/          NeqSim engine, demo oil
+  fluid/        Excel lab report, fluid pipeline
   hello/        default demo data
+skills/         agent skills (SKILL.md per agent)
 tools/          build_schema.py (regenerates schema.sql), gen_triggers.py
 tests/
 ```
