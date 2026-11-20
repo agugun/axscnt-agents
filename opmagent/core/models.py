@@ -332,3 +332,11 @@ def list_decks(con) -> list[dict]:
 def ambiguous(result: dict) -> None:
     if result.get("ambiguous"):
         raise ToolError(AMBIGUOUS, "more than one model matches; please choose", result["candidates"])
+
+
+def review_state(submit_result: dict) -> str:
+    """How a pipeline's summary describes a submitted version: waiting for review, or approved automatically."""
+    if submit_result.get("auto_approved"):
+        return "passed its validator and was approved automatically (approval is disabled)"
+    return "is waiting for your review"
+

@@ -96,6 +96,25 @@ def cmd_review(args):
     import json
     cfg = cfgmod.load(args.config)
     rv = _reviewer(cfg)
+    if args.rcmd == "comment":
+        from .core.errors import ToolError
+        try:
+            r = rv.add_review_comment(kind=args.kind, version_id=args.version_id, comment=args.text, item=args.item,
+                                      severity=args.severity)
+        except ToolError as e:
+            raise SystemExit(str(e))
+        print(r["spoken_summary"])
+        return
+    if args.rcmd == "feedback":
+        items = rv.get_review_feedback(kind=args.kind, model_name=args.model, status=None if args.all else "open")
+        print(items["spoken_summary"] if not items["feedback"] else f"{len(items['feedback'])} comment(s):")
+        for f in items["feedback"]:
+            ans = (f"  -> {f['status']}" + (f" in version id {f['addressed_in_version_id']}"
+                                            if f["addressed_in_version_id"] else "") + f": {f['response']}"
+                   if f["status"] != "open" else "")
+            print(f"  #{f['id']:<4} {f['model_kind']:5} {f['model_name']} v{f['version']} ({f['severity']}"
+                  f"{', ' + f['item'] if f['item'] else ''}) {f['comment']}{ans}"[:300])
+        return
     if args.rcmd == "list":
         print(rv.list_pending_reviews()["spoken_summary"])
         for p in rv.list_pending_reviews()["pending"]:
@@ -346,6 +365,162 @@ def cmd_geo_build(args):
     raise SystemExit(0 if r.get("ok") else 2)
 
 
+def cmd_study(args):
+    """Studies: init / status / list / events, and build a model or the deck from the study's data."""
+    import json
+    import getpass
+    from .core import db as dbmod, studies
+    from .core.errors import ToolError
+    cfg = cfgmod.load(args.config)
+    con = dbmod.connect(cfg.database)
+    try:
+        if args.scmd == "init":
+            r = studies.init_study(con, cfg.studies_dir, args.name, args.requirement, actor=getpass.getuser(),
+                                   years=args.years, end_date=args.end_date, start_date=args.start_date,
+                                   report=args.report, unit_system=args.unit_system,
+                                   summary=args.summary.split(",") if args.summary else None)
+            print(f"Study {args.name} created: {r['study']['folder']}\nPut its raw data in "
+                  f"{r['study']['folder']}/inbox; the data manager is next.")
+            return
+        if args.scmd == "list":
+            for s in studies.list_studies(con):
+                print(f"  {s['name']:<24} {s['status']:<9} {s['tasks_done']}/{s['tasks']} tasks done  "
+                      f"updated {s['updated_at']}")
+            return
+        if args.scmd == "events":
+            for e in studies.events(con, args.name, args.limit):
+                print(f"  {e['at']}  {(e['task'] or '-'):<6} {e['event']:<10} {e['actor'] or '':<8} {e['detail'] or ''}"[:200])
+            return
+        if args.scmd == "status":
+            st = studies.status(con, args.name)
+            if args.json:
+                print(json.dumps(st, indent=2, default=str))
+                return
+            print(st["spoken_summary"])
+            for t in st["tasks"]:
+                res = json.dumps(t["result"]) if t["result"] else ""
+                print(f"  {t['task']:<6} {studies.AGENT[t['task']]:<15} {t['status']:<11} {res}{('  ' + t['note']) if t['note'] else ''}"[:220])
+            for r in st["open_requests"]:
+                print(f"  request {r['id']}: {r['from_task']} -> {r['to_task']} ({r['kind']}): {r['message']}")
+            return
+        r = _study_build(cfg, con, args.what, args.name)
+    except ToolError as e:
+        r = e.to_dict()
+    print(json.dumps(r, indent=2, default=str)[:8000])
+    raise SystemExit(0 if r.get("ok") else 2)
+
+
+def _study_build(cfg, con, what, name):
+    """Run a modeler or the deck builder on the study's data in the database, with the study's names."""
+    import json
+    from .core import studies
+    from .core.errors import INVALID_INPUT, ToolError
+    from .data import store
+    st = studies.status(con, name)
+    spec, folder = st["study"]["spec"], Path(st["study"]["folder"])
+    if what != "deck" and not store.ready(con, name, what):
+        todo = [i["message"] for i in store.issues(con, name, what) if i["severity"] in ("required", "decision")]
+        raise ToolError(INVALID_INPUT, f"the {what} data isn't ready: " + ("; ".join(todo) if todo else
+                        f"nothing loaded; the data manager runs `opmagent data load {name}`"))
+    res = {t["task"]: t["result"] for t in st["tasks"]}
+    src = {"study": name}
+    if what == "fluid":
+        from .fluid.pipeline import build_fluid_model
+        from .servers.data_server import DataService
+        from .servers.pvt_server import PVTService
+        fi, gaps = store.fluid_input(con, name)
+        return build_fluid_model(fi, spec["models"]["fluid"], data=DataService("fluid", cfg), pvt=PVTService(cfg),
+                                 options={}, origin="built", user_description=f"study {name}", gaps=gaps)
+    if what == "geo":
+        from .geo.pipeline import build_geo_model
+        gspec = store.geo_spec(con, name)
+        return build_geo_model(cfg, tops=store.tops(con, name), logs=store.logs(con, name, gspec.get("curves")),
+                               spec=gspec, name=spec["models"]["geo"], surveys=store.survey_xyz(con, name),
+                               description=f"study {name}", data_source=src,
+                               source_file_ids=store.source_file_ids(con, name, store.FOR["geo"]))
+    if what == "well":
+        from .well.pipeline import build_well_model
+        geo_v = (res.get("geo") or {}).get("version_id")
+        return build_well_model(cfg, store.well_inputs(con, name), spec["models"]["well"],
+                                start_date=spec["start_date"], geo_version_id=geo_v,
+                                unit_system=spec.get("unit_system", "METRIC"), description=f"study {name}",
+                                data_source=src, source_file_ids=store.source_file_ids(con, name, store.FOR["well"]))
+    if what == "deck":
+        from .deck.build import build_deck
+        missing = [k for k in ("fluid", "geo", "well") if not (res.get(k) or {}).get("version_id")]
+        if missing:
+            raise ToolError(INVALID_INPUT, f"no finished {', '.join(missing)} model in study {name} yet")
+        ds = {"name": spec["deck"], "requirement": spec["requirement"], "start_date": spec["start_date"],
+              "report": spec["report"], **{k: int(res[k]["version_id"]) for k in ("fluid", "geo", "well")}}
+        for k in ("years", "end_date", "summary"):
+            if spec.get(k):
+                ds[k] = spec[k]
+        (folder / "deck").mkdir(exist_ok=True)
+        (folder / "deck" / "deck_spec.json").write_text(json.dumps(ds, indent=2))
+        return build_deck(ds, cfg)
+    raise ToolError(INVALID_INPUT, "build fluid, geo, well or deck")
+
+
+def cmd_data(args):
+    """Data manager: load a study's inbox into the database (load), only report (check), or show what is loaded."""
+    import json
+    from .core import db as dbmod
+    from .core.errors import ToolError
+    from .data import store
+    from .data.load import load
+    cfg = cfgmod.load(args.config)
+    con = dbmod.connect(cfg.database)
+    try:
+        if args.dcmd == "verify":
+            v = store.verify(con, args.name)
+            print(v["spoken_summary"])
+            for b in v["not_ok"]:
+                print(f"  {b['status']:<8} {b['original']}  ({b['path']})")
+            raise SystemExit(0 if not v["not_ok"] else 2)
+        if args.dcmd == "show":
+            m = store.inventory(con, args.name)
+            if args.dataset == "files":
+                for f in store.files(con, args.name, well=args.well):
+                    print(f"  {f['category']:<10} {f['format']:<10} {f['status']:<7} {f['original']}"
+                          f"{'  (' + f['well_name'] + ')' if f['well_name'] else ''}")
+                return
+            if args.dataset:
+                out = (store.log_stats(con, args.name, args.well) if args.dataset == "logs" else
+                       store.rows(con, args.name, args.dataset, args.well, args.limit))
+                print(json.dumps(out, indent=2, default=str))
+                return
+        else:
+            m = load(con, args.name, write=args.dcmd == "load")
+    except ToolError as e:
+        raise SystemExit(str(e))
+    print(m["spoken_summary"] + ("" if m.get("loaded", True) else "  (check only: nothing was written)"))
+    for k, d in m["datasets"].items():
+        if d["rows"] or args.dcmd != "show":
+            extra = (f"  wells: {', '.join(d['wells'][:10])}" if d.get("wells") else "") + \
+                    (f"  curves: {', '.join(d['curves'][:10])}" if d.get("curves") else "")
+            print(f"  {k:<13} {d['rows']:>7} {d.get('unit', 'rows')}{extra}"[:200])
+    for kind in ("fluid", "geo", "well"):
+        print(f"  {kind}: {'ready' if m['ready'][kind] else 'NOT ready'}")
+    for i in m["issues"]:
+        print(f"    {i['modeler']:<5} [{i['severity']}] {i['item']}: {i['message']}"[:220])
+    if m.get("unrecognised"):
+        print(f"  not recognised (left in the inbox): {', '.join(m['unrecognised'])}")
+    if args.json:
+        print(json.dumps(m, indent=2, default=str))
+    raise SystemExit(0 if m["all_ready"] else 2)
+
+
+def cmd_results(args):
+    """Results viewer: open a run in ResInsight (grid, properties over time, summary vectors)."""
+    from .viewer import open_in_resinsight
+    cfg = cfgmod.load(args.config)
+    r = open_in_resinsight(cfg, run_id=args.run, study=args.study, case=args.case, dry_run=args.dry_run)
+    print(r["spoken_summary"])
+    if args.dry_run:
+        print(" ".join(r["command"]))
+    raise SystemExit(0 if r["ok"] else 2)
+
+
 def cmd_setup(args):
     from pathlib import Path
     from .core import db as dbmod
@@ -405,6 +580,18 @@ def main(argv=None):
         x.add_argument("version_id", type=int)
         x.add_argument("--comment", required=name == "reject")
         x.set_defaults(fn=cmd_review)
+    x = rv.add_parser("comment", help="comment on a model version; the modeler answers it in its next version")
+    x.add_argument("kind", choices=["fluid", "geo", "well"])
+    x.add_argument("version_id", type=int)
+    x.add_argument("text")
+    x.add_argument("--item", help="what it is about, e.g. 'PERMX layer 3' or 'Psat'")
+    x.add_argument("--severity", choices=["change", "question", "note"], default="change")
+    x.set_defaults(fn=cmd_review)
+    x = rv.add_parser("feedback", help="review comments and the modelers' answers (open ones unless --all)")
+    x.add_argument("--kind", choices=["fluid", "geo", "well"])
+    x.add_argument("--model", help="model name")
+    x.add_argument("--all", action="store_true")
+    x.set_defaults(fn=cmd_review)
     x = rv.add_parser("approve-hello", help="approve the three hello demo models")
     x.set_defaults(fn=cmd_review, comment=None)
     dk = sub.add_parser("deck", help="deck builder").add_subparsers(dest="dcmd", required=True)
@@ -433,6 +620,53 @@ def main(argv=None):
     x.add_argument("--description")
     x.add_argument("--allow-gaps", action="store_true")
     x.set_defaults(fn=cmd_well_build)
+    sd = sub.add_parser("study", help="studies: the shared task board the agents work through").add_subparsers(
+        dest="scmd", required=True)
+    x = sd.add_parser("init", help="start a study: folder, study.json, task chain (deck builder)")
+    x.add_argument("name")
+    x.add_argument("--requirement", required=True, help="what the simulation should answer")
+    x.add_argument("--years", type=int)
+    x.add_argument("--end-date", dest="end_date")
+    x.add_argument("--start-date", dest="start_date")
+    x.add_argument("--report", choices=["monthly", "quarterly", "yearly"], default="monthly")
+    x.add_argument("--unit-system", dest="unit_system", choices=["METRIC", "FIELD"], default="METRIC")
+    x.add_argument("--summary", help="summary vectors, comma separated (default set if omitted)")
+    x.set_defaults(fn=cmd_study)
+    sd.add_parser("list", help="all studies").set_defaults(fn=cmd_study)
+    x = sd.add_parser("status", help="tasks, open requests and what is next")
+    x.add_argument("name")
+    x.add_argument("--json", action="store_true")
+    x.set_defaults(fn=cmd_study)
+    x = sd.add_parser("events", help="the study's history")
+    x.add_argument("name")
+    x.add_argument("--limit", type=int, default=50)
+    x.set_defaults(fn=cmd_study)
+    x = sd.add_parser("build", help="build a model or the deck from the study's data in the database")
+    x.add_argument("what", choices=["fluid", "geo", "well", "deck"])
+    x.add_argument("name")
+    x.set_defaults(fn=cmd_study)
+    da = sub.add_parser("data", help="data manager: load a study's raw data into the database").add_subparsers(
+        dest="dcmd", required=True)
+    for n_, h_ in (("check", "report what the inbox holds and what is missing (writes nothing)"),
+                   ("load", "convert the study inbox into the study data tables for the modelers"),
+                   ("show", "what is loaded; with a dataset, its rows (logs: per-curve statistics; files: catalog)"),
+                   ("verify", "check the filed originals are still the files that were loaded")):
+        x = da.add_parser(n_, help=h_)
+        x.add_argument("name")
+        if n_ == "show":
+            x.add_argument("dataset", nargs="?", help="wells, tops, surveys, perforations, controls, history, logs, "
+                                                      "files, sources, issues, log_curves, pvt_samples")
+            x.add_argument("--well")
+            x.add_argument("--limit", type=int, default=200)
+        x.add_argument("--json", action="store_true")
+        x.set_defaults(fn=cmd_data)
+    rs = sub.add_parser("results", help="results viewer").add_subparsers(dest="vcmd", required=True)
+    x = rs.add_parser("open", help="open a run in ResInsight")
+    x.add_argument("--run", type=int, help="run id (default: the study's run, or the latest run)")
+    x.add_argument("--study")
+    x.add_argument("--case", help="an EGRID/.DATA path or a run folder")
+    x.add_argument("--dry-run", action="store_true", help="print the command, don't start ResInsight")
+    x.set_defaults(fn=cmd_results)
     gm = sub.add_parser("geo", help="geo modeler").add_subparsers(dest="gcmd", required=True)
     x = gm.add_parser("build", help="build a corner-point geo model from tops, logs and a spec")
     x.add_argument("--tops", required=True)

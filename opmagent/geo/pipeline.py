@@ -15,6 +15,7 @@ from ..core.errors import INVALID_INPUT, ToolError
 from ..reports.simple_report import _list, _page, _table
 from ..servers.data_server import DataService
 from ..servers.data_server import wrap as dwrap
+from ..core.models import review_state
 from .build import build_grid, corey, read_logs
 
 
@@ -71,20 +72,25 @@ def _report(path, name, version, g, logs, spec, assumptions, warnings, swof, sgo
     return Path(path)
 
 
-def build_geo_model(cfg, *, tops: str, logs: list[str], spec: dict, name: str, surveys: str | None = None,
-                    description: str | None = None) -> dict:
+def build_geo_model(cfg, *, tops, logs, spec: dict, name: str, surveys=None, description: str | None = None,
+                    source_file_ids: list[int] | None = None, data_source: dict | None = None) -> dict:
+    """tops: CSV path or DataFrame; logs: LAS/CSV paths or a DataFrame (well_name, tvd, phi, perm, vsh); surveys:
+    a survey file, or a DataFrame of x, y, tvd stations. From a study (data_source = {"study": name}) the tables
+    come from the database and source_file_ids are the inbox files they were loaded from."""
     for key in ("surfaces", "layers", "contacts"):
         if key not in spec:
             raise ToolError(INVALID_INPUT, f"geo spec needs '{key}'")
     c = spec["contacts"]
     if "datum_depth" not in c or "datum_pressure" not in c:
         raise ToolError(INVALID_INPUT, "contacts need datum_depth and datum_pressure (and owc_depth / goc_depth if present)")
-    t = pd.read_csv(tops)
+    t = tops if isinstance(tops, pd.DataFrame) else pd.read_csv(tops)
     sv = None
-    if surveys:
+    if isinstance(surveys, pd.DataFrame):
+        sv = surveys
+    elif surveys:
         from ..well.ingest import read_table, surveys as to_xyz
         sv = pd.DataFrame(to_xyz(read_table(surveys), {}))
-    lg = read_logs(logs, sv, spec.get("curves"))
+    lg = logs if isinstance(logs, pd.DataFrame) else read_logs(logs, sv, spec.get("curves"))
     slug = re.sub(r"[^A-Za-z0-9_-]+", "_", name)
     svc = DataService("geo", cfg)
     D = lambda n, **k: _ok(dwrap(svc, n)(**k))  # noqa: E731
@@ -105,12 +111,17 @@ def build_geo_model(cfg, *, tops: str, logs: list[str], spec: dict, name: str, s
     ]
     if lg["perm"].isna().all():
         assumptions.append(f"no permeability log: k = a*10^(b*phi) with a, b = {spec.get('petro', {}).get('poro_perm', [0.01, 30.0])}")
-    src = [D("register_file", path=tops, kind="tops")["file_id"]] + [D("register_file", path=p, kind="well_log")["file_id"] for p in logs]
+    if source_file_ids is not None:
+        src = list(source_file_ids)
+    else:
+        src = [D("register_file", path=tops, kind="tops")["file_id"]] + \
+              [D("register_file", path=p, kind="well_log")["file_id"] for p in logs]
     gid = D("register_file", path=g["grid_file"], kind="grid")["file_id"]
     v = D("create_version", kind="geo", model_name=name, source_file_ids=src, header={
         "unit_system": "METRIC", "grid_type": "corner_point", "nx": g["nx"], "ny": g["ny"], "nz": g["nz"],
         "grid_file_id": gid, "user_description": description, "assumptions_json": assumptions,
-        "spec_json": {"geo_spec": spec, "areal": g["areal"], "layer_depths_file": g["layer_depths_file"]}})
+        "spec_json": {"geo_spec": spec, "areal": g["areal"], "layer_depths_file": g["layer_depths_file"],
+                      **({"data_source": data_source} if data_source else {})}})
     vid = v["version_id"]
     props = [{"keyword": k, "file_id": D("register_file", path=p, kind="property")["file_id"]} for k, p in g["files"].items()]
     D("write_tables", kind="geo", version_id=vid, table="geo_properties", rows=props)
@@ -129,9 +140,9 @@ def build_geo_model(cfg, *, tops: str, logs: list[str], spec: dict, name: str, s
                   assumptions, val["warnings"], swof, sgof)
     rid = D("register_file", path=str(rep), kind="qc_report")["file_id"]
     tot = sum(z["hcpv_rm3"] for z in g["zones"])
-    D("submit_for_review", kind="geo", version_id=vid, qc_report_file_id=rid,
-      metrics={"cells": g["nx"] * g["ny"] * g["nz"], "hcpv_rm3": round(tot), "zones": len(g["zones"])})
-    return {"ok": True, "status": "qc_ready", "version_id": vid, "version": v["version"], "qc_report": str(rep),
+    sub = D("submit_for_review", kind="geo", version_id=vid, qc_report_file_id=rid,
+            metrics={"cells": g["nx"] * g["ny"] * g["nz"], "hcpv_rm3": round(tot), "zones": len(g["zones"])})
+    return {"ok": True, "status": sub["header"]["status"], "version_id": vid, "version": v["version"], "qc_report": str(rep),
             "grid": f"{g['nx']} x {g['ny']} x {g['nz']}", "zones": g["zones"], "assumptions": assumptions,
-            "spoken_summary": f"Geo model {name} version {v['version']} is waiting for your review: grid {g['nx']} by "
+            "spoken_summary": f"Geo model {name} version {v['version']} {review_state(sub)}: grid {g['nx']} by "
                               f"{g['ny']} by {g['nz']}, hydrocarbon pore volume {tot / 1e6:.1f} million reservoir cubic metres."}

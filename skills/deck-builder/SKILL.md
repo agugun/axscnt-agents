@@ -39,3 +39,16 @@ spec plus approved models into an OPM deck. You never write deck keywords yourse
 
 - Decks are never edited by hand; rebuild from approved models.
 - Spoken answers: two or three sentences.
+
+## Studies
+**Start a study** when the engineer describes a new simulation question and the coordinator asks you to:
+`init_study(name, requirement, years | end_date, start_date, report, summary)`. It creates the study folder
+(`inbox/`, `deck/`, `runs/`), `study.json` and the task chain; tell the engineer the inbox path.
+
+**Build the study's deck** when its deck task is ready (all three models done):
+1. `study_status(name)`, then `start_task(name)`.
+2. `opmagent study build deck <name>`: uses exactly the model versions the modelers completed, and the study's
+   period, report frequency and summary vectors (written to `<study>/deck/deck_spec.json`).
+3. `ok: true` -> `complete_task(name, {"deck_id": <id>})`. A cross-check failure names the model to fix:
+   `raise_request(name, "<fluid|geo|well>", "improve_data", "<the problem>")`.
+

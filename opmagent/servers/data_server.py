@@ -1,6 +1,6 @@
 """Data MCP server. Start with a profile; it registers only that profile's tools.
 
-    opmagent-data --profile fluid|geo|well|import|deck|run|reviewer [--config opmagent.toml]
+    opmagent-data --profile fluid|geo|well|import|deck|run|data|view|reviewer [--config opmagent.toml]
 
 Every tool returns a dict with "ok", a short "spoken_summary" and its result, or
 {"ok": false, "code", "message", "details"} on failure. Write tools are recorded in audit_log.
@@ -18,11 +18,13 @@ import threading
 from mcp.server.mcpserver import MCPServer
 
 from ..core import config as cfgmod
-from ..core import db, files, models
-from ..core.errors import FORBIDDEN, ToolError
+from ..core import db, files, models, review, studies
+from ..core.errors import FORBIDDEN, INVALID_INPUT, ToolError
 
-PROFILES = ("fluid", "geo", "well", "import", "deck", "run", "reviewer")
+PROFILES = ("fluid", "geo", "well", "import", "deck", "run", "data", "view", "reviewer")
 MODELER_KIND = {"fluid": "fluid", "geo": "geo", "well": "well"}
+STUDY_TASK = {p: p for p in ("data", "fluid", "geo", "well", "deck", "run", "view")}   # profile -> its study task
+AUTO_REVIEWER = "auto (approval disabled)"
 
 
 class DataService:
@@ -130,6 +132,14 @@ class DataService:
         if accept_validator_errors and self.profile != "import":
             raise ToolError(FORBIDDEN, "only the import profile may submit with validator findings")
         h = models.submit_for_review(self.con, kind, version_id, qc_report_file_id, metrics, accept_validator_errors)
+        if self.cfg.auto_approve and not models.run_validator(self.con, kind, version_id)["errors"]:
+            # [study] auto_approve: approval disabled; recorded as an approval by AUTO_REVIEWER, so it stays visible
+            h = models.decide(self.con, kind, version_id, "approved", AUTO_REVIEWER, qc_report_file_id,
+                              "auto-approved: [study] auto_approve = true and the validator passed")
+            self._audit("auto_approve", {"kind": kind, "version_id": version_id}, "ok")
+            return {"ok": True, "header": h, "auto_approved": True,
+                    "spoken_summary": f"{kind} {h['model_name']} version {h['version']} passed its validator and was "
+                                      f"approved automatically (approval is disabled)."}
         return {"ok": True, "header": h,
                 "spoken_summary": f"{kind} {h['model_name']} version {h['version']} is waiting for your review."}
 
@@ -168,6 +178,172 @@ class DataService:
         d = models.get_deck(self.con, deck_id)
         return {"ok": True, "deck": d, "spoken_summary": f"Deck {d['name']}, {d['status']}."}
 
+    # ------------------------------------------------------------ studies (every agent: its own task only)
+    def _my_task(self) -> str:
+        t = STUDY_TASK.get(self.profile)
+        if not t:
+            raise ToolError(FORBIDDEN, f"profile '{self.profile}' has no study task")
+        return t
+
+    def init_study(self, name: str, requirement: str, years: int | None = None, end_date: str | None = None,
+                   start_date: str | None = None, report: str = "monthly", unit_system: str = "METRIC",
+                   summary: list[str] | None = None) -> dict:
+        """Start a study (deck builder): creates its folder (inbox/, deck/, runs/), study.json and the
+        task chain data -> fluid, geo, well -> deck -> run -> view. The data manager's task is ready first."""
+        if self.profile != "deck":
+            raise ToolError(FORBIDDEN, "only the deck builder starts studies")
+        st = studies.init_study(self.con, self.cfg.studies_dir, name, requirement, actor=self.profile, years=years,
+                                end_date=end_date, start_date=start_date, report=report, unit_system=unit_system,
+                                summary=summary)
+        st["spoken_summary"] = (f"Study {name} created in {st['study']['folder']}. Put its raw data in the inbox "
+                                f"folder there; the data manager is next.")
+        return {"ok": True, **st}
+
+    def study_status(self, name: str) -> dict:
+        """A study's tasks (waiting, ready, in_progress, blocked, done, failed), open requests, and what is next."""
+        return {"ok": True, **studies.status(self.con, name)}
+
+    def list_studies(self) -> dict:
+        """All studies with how many of their tasks are done."""
+        s = studies.list_studies(self.con)
+        return {"ok": True, "studies": s, "spoken_summary": f"{len(s)} stud(ies)."}
+
+    def start_task(self, name: str) -> dict:
+        """Start your own task in a study (it must be ready)."""
+        t = studies.start_task(self.con, name, self._my_task(), actor=self.profile)
+        return {"ok": True, "task": t, "spoken_summary": f"Started {t['task']} in study {name}."}
+
+    def complete_task(self, name: str, result: dict | None = None) -> dict:
+        """Finish your task with its result: modelers {"version_id"} of the approved model, deck builder
+        {"deck_id"}, run agent {"run_id"}, data manager {} once the data is loaded and ready (it records what was
+        loaded). Unlocks the next tasks."""
+        st = studies.complete_task(self.con, name, self._my_task(), result, actor=self.profile,
+                                   auto_approve=self.cfg.auto_approve)
+        nxt = ", ".join(f"{n} ({studies.AGENT[n]})" for n in st["unlocked"])
+        st["spoken_summary"] = f"{self._my_task()} done in study {name}." + (f" Now ready: {nxt}." if nxt else "")
+        return {"ok": True, **st}
+
+    def fail_task(self, name: str, note: str) -> dict:
+        """Mark your task failed with the reason (the coordinator can retry it)."""
+        return {"ok": True, **studies.fail_task(self.con, name, self._my_task(), note, actor=self.profile)}
+
+    def retry_task(self, name: str) -> dict:
+        """Put your failed task back to ready (once what made it fail is fixed)."""
+        return {"ok": True, **studies.retry_task(self.con, name, self._my_task(), actor=self.profile)}
+
+    def raise_request(self, name: str, to_task: str, kind: str, message: str) -> dict:
+        """Ask another task for something: kind missing_data, improve_data or question; to_task is usually 'data'.
+        Your task is blocked until the request is resolved."""
+        st = studies.raise_request(self.con, name, self._my_task(), to_task, kind, message, actor=self.profile)
+        st["spoken_summary"] = (f"Request {st['request_id']} sent to {to_task} ({studies.AGENT[to_task]}); "
+                                f"{self._my_task()} waits for it.")
+        return {"ok": True, **st}
+
+    def resolve_request(self, name: str, request_id: int, resolution: str) -> dict:
+        """Close a request addressed to your task, saying what you did; the asking task becomes ready again."""
+        st = studies.resolve_request(self.con, name, request_id, resolution, by_task=self._my_task(),
+                                     actor=self.profile)
+        st["spoken_summary"] = f"Request {request_id} resolved."
+        return {"ok": True, **st}
+
+    # ------------------------------------------------------------ study data (data manager writes, modelers read)
+    def load_study_data(self, name: str, check_only: bool = False) -> dict:
+        """Data manager: convert everything in the study's inbox into the study data tables (a reload replaces
+        them) and check it with the modelers' readers. check_only=true reports without writing anything."""
+        if self.profile != "data":
+            raise ToolError(FORBIDDEN, "only the data manager loads study data")
+        from ..data.load import load
+        return {"ok": True, **load(self.con, name, write=not check_only)}
+
+    def study_data(self, name: str) -> dict:
+        """What is loaded for a study: per dataset (pvt, tops, logs, geo_spec, contacts, wells, surveys,
+        perforations, controls, history) its rows, wells and source files; the open data issues; who is ready."""
+        from ..data import store
+        return {"ok": True, **store.inventory(self.con, name)}
+
+    def study_data_rows(self, name: str, dataset: str, well: str | None = None, limit: int = 200) -> dict:
+        """Rows of one study dataset: wells, tops, surveys, perforations, controls, history, sources, issues,
+        log_curves or pvt_samples, optionally for one well (for logs use log_stats / log_samples)."""
+        from ..data import store
+        r = store.rows(self.con, name, dataset, well, min(int(limit), 2000))
+        return {"ok": True, "rows": r, "spoken_summary": f"{len(r)} {dataset} row(s)."}
+
+    def log_stats(self, name: str, well: str | None = None) -> dict:
+        """Per well and log curve, from the catalog (no file is opened): unit, samples, depth range,
+        min / mean / max, and the LAS file it is in."""
+        from ..data import store
+        r = store.log_stats(self.con, name, well)
+        return {"ok": True, "curves": r, "spoken_summary": f"{len(r)} curve(s) in "
+                                                           f"{len({c['well_name'] for c in r})} well(s)."}
+
+    def log_samples(self, name: str, well: str, curves: list[str] | None = None, top: float | None = None,
+                    base: float | None = None, step: int = 1) -> dict:
+        """One well's log samples (depth and a value per curve), read from its LAS file(s) after checking they are
+        as loaded; optionally a depth window and every n-th sample. Keep it small: a window or a step."""
+        from ..data import store
+        r = store.log_samples(self.con, name, well, curves, top, base, step)
+        if len(r) > 5000:
+            raise ToolError(INVALID_INPUT, f"{len(r)} samples: narrow it with top/base or a larger step")
+        return {"ok": True, "samples": r, "spoken_summary": f"{len(r)} sample(s) for {well}."}
+
+    def study_files(self, name: str, category: str | None = None, well: str | None = None) -> dict:
+        """The study's file catalog: data kept as files (logs, seismic, surfaces, grids, documents, images) and
+        the filed originals of the tables, with format, path, original inbox name, well, status and metadata."""
+        from ..data import store
+        r = store.files(self.con, name, category, well)
+        return {"ok": True, "files": r, "spoken_summary": f"{len(r)} file(s)."}
+
+    def verify_study_files(self, name: str) -> dict:
+        """Check every catalogued file is still the file that was loaded (changed or gone ones need a reload)."""
+        from ..data import store
+        return {"ok": True, **store.verify(self.con, name)}
+
+    def check_study_data(self, name: str) -> dict:
+        """Run the checks that combine tables and files: tops vs porosity logs, perforations vs surveys, OWC vs
+        water saturation logs, production vs well types, files as loaded. Reports only; writes nothing."""
+        from ..data.checks import run_checks
+        out = [dict(zip(("modeler", "severity", "item", "message"), i)) for i in run_checks(self.con, name)]
+        if self.profile in MODELER_KIND:
+            out = [i for i in out if i["modeler"] == MODELER_KIND[self.profile]]
+        return {"ok": True, "issues": out, "spoken_summary": f"{len(out)} finding(s)." if out else "All checks pass."}
+
+    def fluid_sample(self, name: str) -> dict:
+        """The selected PVT lab sample of the study as the fluid modeler reads it (composition, separator, CCE,
+        DL, viscosity), with the data issues as gaps."""
+        from ..data import store
+        fi, gaps = store.fluid_input(self.con, name)
+        return {"ok": True, "fluid_input": fi, "gaps": gaps,
+                "spoken_summary": f"Sample {fi['sample_name']}, saturation pressure {fi['psat_lab']} bar, "
+                                  f"{len(gaps)} gap(s)."}
+
+    # ------------------------------------------------------------ review feedback
+    def get_review_feedback(self, kind: str | None = None, model_name: str | None = None,
+                            version_id: int | None = None, status: str | None = "open") -> dict:
+        """Review comments on models (open ones by default; status null for all). A modeler sees its own kind;
+        deal with the open ones in a new version and answer each with answer_review_feedback."""
+        if self.profile in MODELER_KIND:
+            if kind not in (None, MODELER_KIND[self.profile]):
+                raise ToolError(FORBIDDEN, f"profile '{self.profile}' reads only {MODELER_KIND[self.profile]} feedback")
+            kind = MODELER_KIND[self.profile]
+        items = review.list_feedback(self.con, kind, model_name, version_id, status)
+        return {"ok": True, "feedback": items, "spoken_summary": review.summary(items)}
+
+    def answer_review_feedback(self, feedback_id: int, response: str, status: str = "addressed",
+                               addressed_in_version_id: int | None = None) -> dict:
+        """Answer a review comment on your model: status addressed (with the version_id that addresses it) or
+        wontfix (with the reason). The comment itself can't be changed."""
+        f = review.answer(self.con, feedback_id, response, status, addressed_in_version_id,
+                          kind=MODELER_KIND.get(self.profile))
+        return {"ok": True, "feedback": f, "spoken_summary": f"Comment {feedback_id} {status}."}
+
+    def add_review_comment(self, kind: str, version_id: int, comment: str, item: str | None = None,
+                           severity: str = "change") -> dict:
+        """Reviewer: comment on a model version (severity change, question or note; item: what it is about,
+        e.g. 'PERMX layer 3' or 'Psat'). The modeler answers it in the next version."""
+        f = review.add_comment(self.con, kind, version_id, comment, self._reviewer(), item, severity)
+        return {"ok": True, "feedback": f, "spoken_summary": f"Comment {f['id']} added to {kind} "
+                                                             f"{f['model_name']} v{f['version']}."}
+
     # ------------------------------------------------------------ reviewer (human only)
     def list_pending_reviews(self) -> dict:
         """List model versions waiting for review."""
@@ -194,6 +370,7 @@ class DataService:
     def reject(self, kind: str, version_id: int, qc_report_file_id: int, comment: str) -> dict:
         """Reject a qc_ready version with a comment explaining why."""
         h = models.decide(self.con, kind, version_id, "rejected", self._reviewer(), qc_report_file_id, comment)
+        review.add_comment(self.con, kind, version_id, comment, self._reviewer(), "rejected", "change")
         return {"ok": True, "header": h, "spoken_summary": f"Rejected {kind} {h['model_name']} version {h['version']}."}
 
     def _reviewer(self) -> str:
@@ -204,13 +381,26 @@ class DataService:
 COMMON = ["resolve_name", "find_inbox_file", "list_models", "get_model"]
 WRITER = ["register_file", "create_version", "update_draft", "write_tables", "run_validator", "submit_for_review",
           "return_to_draft"]
+DATA_READ = ["study_data", "study_data_rows", "log_stats", "log_samples", "fluid_sample", "study_files",
+             "verify_study_files", "check_study_data"]
+FEEDBACK = ["get_review_feedback", "answer_review_feedback"]
+STUDY = ["study_status", "list_studies", "start_task", "complete_task", "fail_task", "retry_task", "raise_request",
+         "resolve_request"]
 TOOLS = {
-    "fluid": COMMON + WRITER, "geo": COMMON + WRITER, "well": COMMON + WRITER, "import": COMMON + WRITER,
-    "deck": COMMON + ["create_deck", "add_deck_file", "set_deck_status", "list_decks", "get_deck"],
-    "run": COMMON + ["list_decks", "get_deck"],
-    "reviewer": COMMON + ["list_pending_reviews", "get_qc_report", "approve", "reject", "list_decks", "get_deck"],
+    "fluid": COMMON + WRITER + STUDY + DATA_READ + FEEDBACK, "geo": COMMON + WRITER + STUDY + DATA_READ + FEEDBACK,
+    "well": COMMON + WRITER + STUDY + DATA_READ + FEEDBACK,
+    "import": COMMON + WRITER,
+    "deck": COMMON + ["create_deck", "add_deck_file", "set_deck_status", "list_decks", "get_deck", "init_study"] + STUDY,
+    "run": COMMON + ["list_decks", "get_deck"] + STUDY,
+    "data": COMMON + ["register_file", "load_study_data"] + DATA_READ + STUDY,
+    "view": COMMON + ["list_decks", "get_deck"] + STUDY,
+    "reviewer": COMMON + ["list_pending_reviews", "get_qc_report", "approve", "reject", "add_review_comment",
+                          "get_review_feedback", "list_decks", "get_deck", "study_status", "list_studies",
+                          "study_data", "study_data_rows", "log_stats"],
 }
-WRITE_TOOLS = set(WRITER) | {"create_deck", "add_deck_file", "set_deck_status", "approve", "reject"} - {"run_validator"}
+WRITE_TOOLS = (set(WRITER) | {"create_deck", "add_deck_file", "set_deck_status", "approve", "reject", "init_study",
+                               "load_study_data", "answer_review_feedback", "add_review_comment"}
+               | set(STUDY)) - {"run_validator", "study_status", "list_studies"}
 
 
 def wrap(svc: DataService, name: str):
