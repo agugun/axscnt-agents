@@ -536,6 +536,31 @@ CREATE TABLE decks (
     created_at       TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Simulation runs and their summary results (Run agent)
+CREATE TABLE IF NOT EXISTS runs (
+    id           INTEGER PRIMARY KEY,
+    deck_id      INTEGER NOT NULL REFERENCES decks(id),
+    status       TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued','running','done','failed','stored')),
+    engine       TEXT,
+    out_dir      TEXT NOT NULL,
+    pid          INTEGER,
+    returncode   INTEGER,
+    log_path     TEXT,
+    smspec_path  TEXT,
+    note         TEXT,
+    started_at   TEXT,
+    finished_at  TEXT,
+    created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS results (
+    run_id    INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+    vector    TEXT NOT NULL,          -- e.g. WBHP:PROD1, FOPR
+    time_days REAL NOT NULL,
+    value     REAL NOT NULL,
+    PRIMARY KEY (run_id, vector, time_days)
+);
+CREATE INDEX IF NOT EXISTS idx_runs_deck ON runs(deck_id);
+
 -- Keywords carried verbatim from an imported deck (no model home yet)
 CREATE TABLE deck_passthrough (
     id        INTEGER PRIMARY KEY,

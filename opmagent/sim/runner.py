@@ -1,4 +1,7 @@
-"""Run a deck with OPM Flow: the `flow` binary if available, else the opm.simulators Python bindings."""
+"""Run a deck with OPM Flow: the `flow` binary if available, else the opm.simulators Python bindings.
+
+Each run works on a copy of the deck in its own folder, so outputs never mix.
+"""
 from __future__ import annotations
 
 import shutil
@@ -15,28 +18,50 @@ sim.run()
 """
 
 
-def run_deck(deck_path: str | Path, out_dir: str | Path, flow_bin: str = "flow", timeout: int = 3600) -> dict:
-    src, out_dir = Path(deck_path), Path(out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    deck_path = out_dir / src.name          # run a copy: each run keeps its own outputs
-    shutil.copy2(src, deck_path)
+def command(deck_path: Path, out_dir: Path, flow_bin: str = "flow") -> tuple[list[str], str]:
     exe = shutil.which(flow_bin)
     if exe:
-        cmd, engine = [exe, str(deck_path), f"--output-dir={out_dir}"], "flow"
-    else:
-        try:
-            import opm.simulators  # noqa: F401
-        except ImportError:
-            return {"ok": False, "engine": None, "message": "neither the flow binary nor opm.simulators is available"}
-        cmd, engine = [sys.executable, "-c", _PY_RUN, str(deck_path)], "opm.simulators (Python)"
-    t0 = time.time()
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, cwd=out_dir)
+        return [exe, str(deck_path), f"--output-dir={out_dir}"], "flow"
+    try:
+        import opm.simulators  # noqa: F401
+    except ImportError as e:
+        raise RuntimeError("neither the flow binary nor opm.simulators is available") from e
+    return [sys.executable, "-c", _PY_RUN, str(deck_path)], "opm.simulators (Python)"
+
+
+def prepare(deck_path: str | Path, out_dir: str | Path) -> Path:
+    src, out_dir = Path(deck_path), Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    dst = out_dir / src.name
+    shutil.copy2(src, dst)
+    return dst
+
+
+def start(deck_path: str | Path, out_dir: str | Path, flow_bin: str = "flow") -> tuple[subprocess.Popen, str, Path]:
+    """Start a run in the background. Returns (process, engine, log path)."""
+    out_dir = Path(out_dir)
+    deck = prepare(deck_path, out_dir)
+    cmd, engine = command(deck, out_dir, flow_bin)
     log = out_dir / "run.log"
-    log.write_text(r.stdout + r.stderr)
-    smspec = out_dir / (deck_path.stem + ".SMSPEC")
-    return {"ok": r.returncode == 0 and smspec.exists(), "engine": engine, "seconds": round(time.time() - t0, 1),
-            "returncode": r.returncode, "log": str(log), "smspec": str(smspec) if smspec.exists() else None,
-            "log_tail": (r.stdout + r.stderr)[-2000:]}
+    fh = open(log, "w")
+    proc = subprocess.Popen(cmd, stdout=fh, stderr=subprocess.STDOUT, cwd=out_dir)
+    return proc, engine, log
+
+
+def run_deck(deck_path: str | Path, out_dir: str | Path, flow_bin: str = "flow", timeout: int = 3600) -> dict:
+    """Run to completion (blocking)."""
+    out_dir = Path(out_dir)
+    t0 = time.time()
+    try:
+        proc, engine, log = start(deck_path, out_dir, flow_bin)
+    except RuntimeError as e:
+        return {"ok": False, "engine": None, "message": str(e)}
+    rc = proc.wait(timeout=timeout)
+    smspec = out_dir / (Path(deck_path).stem + ".SMSPEC")
+    text = log.read_text(errors="replace")
+    return {"ok": rc == 0 and smspec.exists(), "engine": engine, "seconds": round(time.time() - t0, 1),
+            "returncode": rc, "log": str(log), "smspec": str(smspec) if smspec.exists() else None,
+            "log_tail": text[-2000:]}
 
 
 def summary_values(smspec: str | Path, vectors: list[str]) -> dict:
@@ -51,3 +76,19 @@ def summary_values(smspec: str | Path, vectors: list[str]) -> dict:
             out[v] = {"last": float(series[-1]), "series": [float(x) for x in series]}
     out["TIME"] = [float(x) for x in s["TIME"]] if "TIME" in keys else None
     return out
+
+
+def read_all(smspec: str | Path) -> tuple[list[float], dict[str, list[float]]]:
+    """All summary vectors: (time in days, {vector: values})."""
+    from opm.io.ecl import ESmry
+    s = ESmry(str(smspec))
+    t = [float(x) for x in s["TIME"]]
+    out = {}
+    for k in s.keys():
+        if k in ("TIME", "YEARS", "DAY", "MONTH", "YEAR", "TIMESTEP"):
+            continue
+        try:
+            out[k] = [float(x) for x in s[k]]
+        except Exception:  # noqa: BLE001
+            continue
+    return t, out
