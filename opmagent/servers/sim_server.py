@@ -140,12 +140,25 @@ class SimService:
                 "spoken_summary": f"Started run {rid} of deck {d['name']}."}
 
     def job_status(self, run_id: int, log_lines: int = 15) -> dict:
-        """Status of a run (running, done, failed, stored) and the end of its log."""
+        """Status of a run (running, done, failed, stored), its progress from the Flow log (report step, simulated
+        date, % of simulated time, elapsed, estimated time left, a stall warning) and the end of its log."""
         r = self._refresh(run_id)
-        tail = ""
+        tail, prog = "", None
         if r["log_path"] and Path(r["log_path"]).exists():
             tail = "\n".join(Path(r["log_path"]).read_text(errors="replace").splitlines()[-log_lines:])
-        return {"ok": True, "run": r, "log_tail": tail, "spoken_summary": f"Run {run_id} is {r['status']}."}
+            elapsed = None
+            if r["started_at"]:
+                end = datetime.fromisoformat(r["finished_at"]) if r["finished_at"] else datetime.now()
+                elapsed = (end - datetime.fromisoformat(r["started_at"])).total_seconds()
+            prog = runner.progress(r["log_path"], elapsed)
+        say = f"Run {run_id} is {r['status']}."
+        if prog and r["status"] == "running" and "report_step" in prog:
+            say = (f"Run {run_id} is running: report step {prog['report_step']} of {prog['report_steps']}, "
+                   f"{prog['date']}, {prog['percent']:.0f} percent"
+                   + (f", about {runner._dur(prog['eta_s'])} left." if "eta_s" in prog else "."))
+            if prog.get("stalled"):
+                say += f" No new log output for {runner._dur(prog['log_age_s'])}: it may be stuck."
+        return {"ok": True, "run": r, "progress": prog, "log_tail": tail, "spoken_summary": say}
 
     def wait(self, run_id: int, timeout_s: int = 600) -> dict:
         """Wait for a run to finish (up to timeout_s), then store its results."""

@@ -79,7 +79,9 @@ The agent skill is in `skills/fluid-modeler/SKILL.md`. For Claude Code, copy or 
 
 ```bash
 opmagent deck build --spec spec.json   # spec: see skills/deck-builder/SKILL.md
-opmagent run --deck FieldA_WF20        # runs the latest validated deck with that name
+opmagent run --deck FieldA_WF20        # runs the latest validated deck with that name, live progress on stderr
+opmagent runs list                     # runs the run agent started
+opmagent runs watch 12                 # follow run 12 live (default: the latest run); Ctrl-C stops watching only
 opmagent review list                   # what's waiting for your review, with QC report paths
 opmagent review approve fluid 12       # or: reject geo 7 --comment "OWC should be 2165 m" (interactive only)
 opmagent import deck --input FIELD.DATA --name FieldX    # reverse a deck into models for review
@@ -87,6 +89,14 @@ opmagent import verify --name FieldX                    # after approval: rebuil
 opmagent well build --wells w.csv --surveys s.csv --perforations p.csv --history h.xlsx --history-format volve --name FieldX_Wells
 opmagent geo build --tops tops.csv --logs *.las --spec geo.json --name FieldX_Geo
 ```
+
+**Watching a run.** Progress comes from Flow's log: report step, simulated date, percent of simulated time,
+elapsed time and an estimate of the time left, for example
+`running, report step 188/247, 03-Jul-2004, 73.4% of simulated time, 4m00s elapsed, about 1m27s left`.
+`opmagent run` and `opmagent import verify` show it while they run. `opmagent runs watch` follows a run the agent
+started, or any run folder (`opmagent runs watch data/files/imports/NORNE/import-001/run_rebuilt`). It warns when the
+log has had no new output for 2 minutes, and stops with the last log lines if Flow exits without finishing. The run
+agent's `job_status` returns the same progress. The full log is `run.log` in the run folder (`tail -f` works too).
 
 ## Registering the data server
 
@@ -108,6 +118,45 @@ The PVT engine server takes no profile: `opmagent-pvt --config /path/to/opmagent
 Profiles: `fluid`, `geo`, `well`, `import` (writers), `deck`, `run` (read approved models only), `reviewer` (approve/reject).
 Put the `reviewer` profile **only** in your own client, never in an agent's config. Approvals are recorded under
 `$OPMAGENT_REVIEWER` (or your OS user name).
+
+## Monitoring the agents (DBeaver)
+
+Everything the agents do lands in the workspace database (`~/opm-agents/data/opm.db`), so any SQLite client shows it.
+DBeaver Community Edition works well for browsing and querying:
+
+```bash
+sudo snap install dbeaver-ce --classic
+```
+
+Connect: **New Database Connection** > **SQLite** > path `~/opm-agents/data/opm.db` (accept the one-time driver
+download). Under **Connection details**, tick **Read-only connection** before **Finish**.
+
+Read-only matters. The database's triggers protect the approval gate (a decided model's status, the data of approved
+or rejected versions, and the `approvals` and `audit_log` rows cannot be changed), but other tables such as `files`
+(paths and checksums), `decks` and `runs` are not guarded. Approve and reject only with `opmagent review` or the
+reviewer MCP server, never by editing tables.
+
+Where to look:
+
+| Table / view | Shows |
+| --- | --- |
+| `audit_log` | every data-server **write** (create version, write tables, submit, approve ...): agent (`profile`), tool, outcome (`ok` or the error code), time, arguments as a hash. Reads are not logged |
+| `pending_review_fluid`, `_geo`, `_well` | models waiting for your review |
+| `fluid_model_versions`, `geo_model_versions`, `well_model_versions` | every version and its status |
+| `approvals` | approve / reject decisions, reviewer, comment |
+| `decks`, `runs` | built decks and simulation runs started through the run agent |
+
+Write activity per agent:
+
+```sql
+SELECT profile AS agent, COUNT(*) AS calls, SUM(outcome <> 'ok') AS failed, MAX(at) AS last_seen
+FROM audit_log GROUP BY profile ORDER BY last_seen DESC;
+```
+
+DBeaver does not refresh by itself: press F5 on a table. Not in the database: calls to the PVT and simulation
+servers, the Flow runs that `opmagent import verify` makes (their logs are under
+`data/files/imports/<name>/import-NNN/run_*`), and the agents' own reasoning, which is in the Claude Code sessions
+of the workspace.
 
 ## Layout
 

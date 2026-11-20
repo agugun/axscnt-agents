@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import shutil
 import subprocess
+from pathlib import Path
 
 from . import __version__
 from .core import config as cfgmod
@@ -154,6 +155,114 @@ def cmd_deck_build(args):
     raise SystemExit(0 if r.get("ok") else 2)
 
 
+def _progress_printer(label: str = ""):
+    """on_progress callback for runner.run_deck: one refreshing line on a terminal, a line per report step otherwise.
+    Writes to stderr, so JSON on stdout stays clean."""
+    import sys
+    tty = sys.stderr.isatty()
+    state = {"step": None}
+
+    def show(p):
+        text = f"{label}{p['line']}"
+        if tty:
+            sys.stderr.write("\r\033[K" + text + ("\n" if p["state"] == "finished" else ""))
+        elif p.get("report_step") != state["step"] or p["state"] == "finished" or p.get("stalled"):
+            sys.stderr.write(text + "\n")
+        sys.stderr.flush()
+        state["step"] = p.get("report_step")
+    return show
+
+
+def _flow_process(out_dir: Path) -> tuple[int | None, float]:
+    """(pid, seconds running) of a Flow process whose --output-dir is out_dir, from /proc; (None, 0) if none."""
+    import os
+    want = f"--output-dir={out_dir}"
+    for d in Path("/proc").glob("[0-9]*"):
+        try:
+            argv = (d / "cmdline").read_bytes().split(b"\0")
+            if want.encode() in argv or str(out_dir).encode() + b"/" in b" ".join(argv):
+                if b"flow" in Path(argv[0].decode()).name.encode():
+                    ticks = int((d / "stat").read_text().rsplit(")", 1)[1].split()[19])
+                    uptime = float(Path("/proc/uptime").read_text().split()[0])
+                    return int(d.name), uptime - ticks / os.sysconf("SC_CLK_TCK")
+        except (OSError, ValueError, IndexError):
+            continue
+    return None, 0.0
+
+
+def cmd_runs(args):
+    """List runs, or follow one live (a run id, a run folder or a run.log; default: the latest run)."""
+    import os
+    import sys
+    import time
+    from datetime import datetime
+    from .sim.runner import STALL_S, progress
+    cfg = cfgmod.load(args.config)
+    con = _reviewer(cfg).con
+    rows = [dict(r) for r in con.execute("SELECT r.*, d.name AS deck_name FROM runs r JOIN decks d ON d.id=r.deck_id "
+                                         "ORDER BY r.id DESC")]
+    if args.rcmd == "list":
+        if not rows:
+            print("No runs yet (runs started by the run agent are listed here).")
+        for r in rows:
+            print(f"  run {r['id']:<4} {r['deck_name']:<20} {r['status']:<8} started {r['started_at'] or '-'}  "
+                  f"finished {r['finished_at'] or '-'}  {r['log_path'] or ''}")
+        return
+    target, pid, started, finished = args.run, None, None, None
+    if target is None or str(target).isdigit():
+        r = next((r for r in rows if target is None or r["id"] == int(target)), None)
+        if not r:
+            raise SystemExit(f"no run {target}" if target else "no runs yet")
+        log, pid = Path(r["log_path"] or ""), r["pid"] if r["status"] == "running" else None
+        started = datetime.fromisoformat(r["started_at"]) if r["started_at"] else None
+        finished = datetime.fromisoformat(r["finished_at"]) if r["finished_at"] else None
+        print(f"run {r['id']} of deck {r['deck_name']} ({r['status']}), log {log}", file=sys.stderr)
+    else:   # a folder or log (e.g. an import verify run): find the Flow process writing there, for elapsed/ETA
+        p = Path(target).expanduser().resolve()
+        log = p / "run.log" if p.is_dir() else p
+        if not log.exists():
+            raise SystemExit(f"no run log at {log}")
+        pid, age = _flow_process(log.parent)
+        if pid:
+            started = datetime.fromtimestamp(time.time() - age)
+            print(f"Flow pid {pid} is writing {log}", file=sys.stderr)
+        elif progress(log)["state"] != "finished":
+            print(f"No Flow process is writing {log.parent} and its log has no 'End of simulation': "
+                  f"the run was stopped or failed. Last lines:", file=sys.stderr)
+            print("\n".join(log.read_text(errors="replace").splitlines()[-15:]), file=sys.stderr)
+            raise SystemExit(2)
+
+    def alive():
+        if not pid:
+            return None   # unknown (a folder given): stop on 'End of simulation'
+        try:
+            os.kill(pid, 0)
+            return True
+        except OSError:
+            return False
+
+    show = _progress_printer()
+    try:
+        while True:
+            pr = progress(log, ((finished or datetime.now()) - started).total_seconds() if started else None)
+            show(pr)
+            if pr["state"] == "finished":
+                break
+            if alive() is False:
+                print(f"\nFlow (pid {pid}) is no longer running and the log has no 'End of simulation': "
+                      f"the run failed or was stopped. Last lines:", file=sys.stderr)
+                print("\n".join(log.read_text(errors="replace").splitlines()[-15:]), file=sys.stderr)
+                raise SystemExit(2)
+            if args.once:
+                print(file=sys.stderr)
+                break
+            time.sleep(args.interval)
+    except KeyboardInterrupt:
+        print("\nstopped watching (the run itself keeps going)", file=sys.stderr)
+    if pr.get("stalled"):
+        print(f"no new log output for over {STALL_S} s: check `top` for flow, or the log {log}", file=sys.stderr)
+
+
 def cmd_run(args):
     import json
     from .sim.runner import run_deck, summary_values
@@ -166,7 +275,10 @@ def cmd_run(args):
     if deck["status"] != "validated":
         raise SystemExit(f"deck {args.deck} is {deck['status']}, not validated")
     path = next(f["path"] for f in deck["files"] if f["role"] == "DATA")
-    r = run_deck(path, cfg.file_store / "runs" / f"{args.deck}_deck{d['id']}", cfg.flow_bin)
+    out = cfg.file_store / "runs" / f"{args.deck}_deck{d['id']}"
+    import sys
+    print(f"running {args.deck} in {out} (log: {out / 'run.log'})", file=sys.stderr)
+    r = run_deck(path, out, cfg.flow_bin, on_progress=_progress_printer())
     if r["ok"]:
         r["summary"] = {k: v["last"] for k, v in summary_values(r["smspec"], ["FOPR", "FPR", "FWCT", "FOPT"]).items()
                         if isinstance(v, dict)}
@@ -191,7 +303,10 @@ def cmd_import(args):
     from .deck.import_pipeline import import_to_drafts, verify
     cfg = cfgmod.load(args.config)
     try:
-        r = import_to_drafts(cfg, args.input, args.name) if args.icmd == "deck" else verify(cfg, args.name)
+        if args.icmd == "deck":
+            r = import_to_drafts(cfg, args.input, args.name)
+        else:
+            r = verify(cfg, args.name, on_progress=lambda label: _progress_printer(f"{label}: "))
     except ToolError as e:
         r = e.to_dict()
     print(r.get("spoken_summary", ""))
@@ -296,9 +411,16 @@ def main(argv=None):
     x = dk.add_parser("build", help="build a deck from a JSON spec")
     x.add_argument("--spec", required=True)
     x.set_defaults(fn=cmd_deck_build)
-    x = sub.add_parser("run", help="run a validated deck")
+    x = sub.add_parser("run", help="run a validated deck (shows live progress)")
     x.add_argument("--deck", required=True)
     x.set_defaults(fn=cmd_run)
+    rn = sub.add_parser("runs", help="list runs, or follow one live").add_subparsers(dest="rcmd", required=True)
+    rn.add_parser("list", help="runs started by the run agent").set_defaults(fn=cmd_runs)
+    x = rn.add_parser("watch", help="follow a run: report step, date, %% done, elapsed, time left, stalls")
+    x.add_argument("run", nargs="?", help="run id, a run folder or a run.log (default: the latest run)")
+    x.add_argument("--interval", type=float, default=2.0, help="seconds between updates")
+    x.add_argument("--once", action="store_true", help="print the current progress once and exit")
+    x.set_defaults(fn=cmd_runs)
     wl = sub.add_parser("well", help="well modeler").add_subparsers(dest="wcmd", required=True)
     x = wl.add_parser("build", help="build a well model from CSV/Excel inputs and submit it for review")
     for a_ in ("wells", "surveys", "perforations", "history", "controls", "groups"):

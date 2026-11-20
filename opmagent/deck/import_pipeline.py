@@ -152,8 +152,9 @@ def _make_all(make, imp, D, deck_path, name, result):
     make("well", w["header"], w["tables"], {"geo_version_id": geo_v["version_id"]})
 
 
-def verify(cfg, name: str) -> dict:
-    """After approval: rebuild the deck, run original and rebuilt, compare static, init and dynamic results."""
+def verify(cfg, name: str, on_progress=None) -> dict:
+    """After approval: rebuild the deck, run original and rebuilt, compare static, init and dynamic results.
+    on_progress(label) -> callback, called once per run ('original', 'rebuilt'), to follow each Flow run live."""
     found = _approved_import(cfg, name)
     if found:   # rebuild from exactly the versions this import created, with this import's files
         base, versions = found
@@ -170,8 +171,9 @@ def verify(cfg, name: str) -> dict:
     d = build_deck(spec, cfg, origin="built")
     if not d["ok"]:
         return {"ok": False, "stage": "rebuild", "deck": d, "spoken_summary": d["spoken_summary"]}
-    orig = run_deck(spec["source_deck"], base / "run_original", cfg.flow_bin)
-    rebuilt = run_deck(d["path"], base / "run_rebuilt", cfg.flow_bin)
+    cb = on_progress or (lambda _label: None)
+    orig = run_deck(spec["source_deck"], base / "run_original", cfg.flow_bin, on_progress=cb("original"))
+    rebuilt = run_deck(d["path"], base / "run_rebuilt", cfg.flow_bin, on_progress=cb("rebuilt"))
     if not (orig["ok"] and rebuilt["ok"]):
         bad = "original" if not orig["ok"] else "rebuilt"
         return {"ok": False, "stage": f"run {bad}", "original": orig, "rebuilt": rebuilt,

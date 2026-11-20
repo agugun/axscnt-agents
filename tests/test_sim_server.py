@@ -29,7 +29,10 @@ def test_run_store_query_compare(cfg, deck_id):
     assert a["ok"], a
     done = S("wait", run_id=a["run_id"], timeout_s=300)
     assert done["ok"] and done["vectors"] > 10, done
-    assert S("job_status", run_id=a["run_id"])["run"]["status"] == "stored"
+    st = S("job_status", run_id=a["run_id"])
+    assert st["run"]["status"] == "stored"
+    assert st["progress"]["state"] == "finished" and st["progress"]["percent"] == 100.0, st["progress"]
+    assert st["progress"]["report_steps"] > 1 and st["progress"]["elapsed_s"] >= 0
     q = S("query_results", run_id=a["run_id"], vectors=["FOPR", "WBHP:PROD1", "NOPE"])
     assert q["series"]["FOPR"]["last"] == pytest.approx(500, rel=0.01) and q["missing"] == ["NOPE"]
     b = S("run_simulation", deck_id=deck_id)
