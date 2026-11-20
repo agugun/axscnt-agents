@@ -8,6 +8,7 @@ from __future__ import annotations
 import re
 
 from ..core.errors import INVALID_INPUT, ToolError
+from ..core.models import review_state
 from ..reports.fluid_report import build_report
 from ..servers.data_server import DataService
 from ..servers.data_server import wrap as dwrap
@@ -115,7 +116,7 @@ def build_fluid_model(fi: dict, model_name: str, *, data: DataService, pvt: PVTS
             metrics={k: (round(x, 4) if isinstance(x, float) else x) for k, x in metrics.items()})
     return {"ok": True, "status": sub["header"]["status"], "version_id": vid, "version": v["version"],
             "qc_report": str(report), "metrics": metrics, "checks": tuned["checks"], "assumptions": assumptions,
-            "spoken_summary": f"Fluid {model_name} version {v['version']} is ready for your review. Bubble point "
+            "spoken_summary": f"Fluid {model_name} version {v['version']} {review_state(sub)}. Bubble point "
                               f"{psat:.0f} bar, Rs {metrics['rs_at_pb']:.0f}, Bo {metrics['bo_at_pb']:.3f}; "
                               f"all checks within tolerance." if tuned["within_tolerance"] else
-                              f"Fluid {model_name} version {v['version']} is ready for review, with an accepted tolerance miss."}
+                              f"Fluid {model_name} version {v['version']} {review_state(sub)}, with an accepted tolerance miss."}

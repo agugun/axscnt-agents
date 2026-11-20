@@ -32,3 +32,11 @@ and steps through the code. You can't drive the debugger.
 ## Rules
 - Never run an unvalidated deck, never edit decks or results.
 - Spoken answers: two or three sentences, numbers rounded.
+
+## In a study
+When the study's run task is ready: `study_status(name)` (the deck task's result has the `deck_id`),
+`start_task(name)`, and `run_simulation(deck_id)` once the engineer has said yes (in a study the
+coordinator asks them and tells you; if it didn't, return and ask for the confirmation). Tell the engineer the run id and
+`opmagent runs watch <run id>`. When it has finished and is stored, `complete_task(name, {"run_id": <id>})` and
+give the main results (`query_results`: FOPR, FWCT, FPR). A failed run: `fail_task(name, "<last log lines>")`.
+

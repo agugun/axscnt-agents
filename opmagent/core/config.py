@@ -27,10 +27,16 @@ class Config:
     opm_source_root: Path | None = None
     opm_debug_flow: Path | None = None
     vscode_bin: str = "code"
+    auto_approve: bool = False          # [study] auto_approve: models that pass their validator are approved
+    resinsight_bin: str | None = None   # [viewer] resinsight_bin: ResInsight launcher (bin/resinsight)
 
     @property
     def inbox(self) -> Path:
         return self.file_store / "inbox"
+
+    @property
+    def studies_dir(self) -> Path:
+        return self.file_store / "studies"
 
 
 def _expand(p: str | None) -> Path | None:
@@ -47,7 +53,7 @@ def load(path: str | os.PathLike | None = None) -> Config:
         raise FileNotFoundError(
             "opmagent.toml not found; copy opmagent.example.toml and set OPMAGENT_CONFIG or place it in the working directory"
         )
-    paths, d, sim, dbg = (data.get(k, {}) for k in ("paths", "defaults", "simulation", "debug"))
+    paths, d, sim, dbg, st, vw = (data.get(k, {}) for k in ("paths", "defaults", "simulation", "debug", "study", "viewer"))
     cfg = Config(
         database=_expand(paths["database"]),
         file_store=_expand(paths["file_store"]),
@@ -61,5 +67,7 @@ def load(path: str | os.PathLike | None = None) -> Config:
         opm_source_root=_expand(dbg.get("opm_source_root")),
         opm_debug_flow=_expand(dbg.get("opm_debug_flow")),
         vscode_bin=dbg.get("vscode_bin", "code"),
+        auto_approve=bool(st.get("auto_approve", False)),
+        resinsight_bin=os.path.expanduser(vw["resinsight_bin"]) if vw.get("resinsight_bin") else None,
     )
     return cfg

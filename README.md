@@ -1,6 +1,8 @@
 # axscnt-agents
 
-Agent system for OPM Flow reservoir simulation (black oil). Fluid, geo and well modeler agents build versioned models from your data; you approve each one; a deck builder turns approved models into validated OPM decks; a run agent runs them and stores results. A deck importer reverse-engineers existing decks with a round-trip check.
+Agent system for OPM Flow reservoir simulation (black oil). For each **study**, a data manager prepares the raw data; fluid, geo and well modeler agents build versioned models from it; you approve each one (or turn on auto-approve); a deck builder turns approved models into validated OPM decks; a run agent runs them and stores results; a results viewer opens them in ResInsight. A deck importer reverse-engineers existing decks with a round-trip check.
+
+Version 0.2.0: see [CHANGELOG.md](CHANGELOG.md).
 
 Design: see the architecture and user-guide docs (links in `docs/README.md`).
 
@@ -8,8 +10,11 @@ Design: see the architecture and user-guide docs (links in `docs/README.md`).
 
 | Agent / part | How it runs | State |
 | --- | --- | --- |
-| Database + human approval gate | SQLite, triggers | done, tested |
-| Data server (profiles: fluid, geo, well, import, deck, run, reviewer) | MCP `opmagent-data` | done, tested |
+| Database + human approval gate (optional auto-approve) | SQLite, triggers | done, tested |
+| Data server (profiles: fluid, geo, well, import, deck, run, data, view, reviewer) | MCP `opmagent-data` | done, tested |
+| Studies: task board, requests between agents, coordinator skill | `opmagent study`, `study` skill | done, tested |
+| Data manager (study inbox -> modeler input formats) | `opmagent data check / prepare` | done, tested |
+| Results viewer (ResInsight) | `opmagent results open` | done, tested |
 | Fluid modeler (NeqSim, Excel lab report) | MCP `opmagent-pvt` + `opmagent fluid build` | done, tested |
 | Geo modeler (tops + LAS -> corner-point grid, kriging) | `opmagent geo build` | done, tested |
 | Well modeler (surveys, perforations, history incl. Volve, controls) | `opmagent well build` | done, tested |
@@ -60,6 +65,51 @@ downloaded from Equinor's portal (Equinor Open Data Licence).
 
 The OPM Flow binary from the OPM package archive (`libopm-simulators-bin`) is optional: the runner uses
 `flow` when it's on PATH, otherwise the `opm.simulators` Python bindings.
+
+## Studies
+
+A study is one simulation question, worked through by all the agents in order:
+
+```
+deck builder starts it -> data manager loads the data into the database -> fluid, geo, well modelers -> deck builder -> run agent -> results viewer
+```
+
+The database is the hub:
+- **Tabular data.** The data manager converts tables (tops, wells, surveys, perforations, controls, production, the lab report) into the study data tables (`data_*`), each row linked to its source file.
+- **File-native data.** LAS logs, SEG-Y, surfaces, grids, documents and images stay files, as they came, in `<study>/data/<category>/`, so Techlog, Petrel or ResInsight can open them. The database catalogs them (`data_files`; each LAS curve's unit, depth range and statistics in `data_log_curves`).
+- **One way to read.** The modelers read both through one Python layer (`opmagent.data.store`). It checks every file against the checksum it was loaded with, and its checks combine both sides, for example tops against the porosity logs or the OWC against the SW logs.
+- **Models.** The modelers analyse the data and build their models from it.
+- **Review.** Review comments (`review_feedback`, with the modeler's answers) and approvals are stored next to the models.
+
+```bash
+opmagent study init FieldA_WF --requirement "Waterflood with 2 injectors, 20 years" --years 20 --report quarterly
+# put the raw data in data/files/studies/FieldA_WF/inbox/ (lab report workbook, LAS, tops, well tables, Volve exports, geo.json)
+opmagent data check FieldA_WF          # what each modeler will get, and what is missing (writes nothing)
+opmagent data load FieldA_WF           # tables -> database; LAS, SEG-Y, docs ... filed in studies/FieldA_WF/data/ and catalogued
+opmagent data show FieldA_WF [logs|files|wells|tops|history ...] [--well W]   # what is loaded; rows; log statistics; catalog
+opmagent data verify FieldA_WF         # the filed originals are still the files that were loaded
+opmagent study build geo FieldA_WF     # likewise fluid, well, then deck: from the database, with the study's names
+opmagent review comment geo 12 "PERMX too high in layer 3" --item "PERMX L3"   # feedback the modeler answers
+opmagent review feedback --all         # comments and answers
+opmagent study status FieldA_WF        # the board: tasks, open requests, what is next
+opmagent study events FieldA_WF        # its history
+opmagent results open --study FieldA_WF   # open the study's run in ResInsight
+```
+
+In Claude Code you don't type these: in your own session in the workspace, ask "start a study ..." and then "run
+study FieldA_WF". The `study` skill coordinates: it reads the board and hands each agent its ready task. Agents
+start and complete only their own task, through their data-server profile. A modeler that lacks data raises a
+request to the data manager and is blocked until it is resolved. Completing a task checks its result (an approved
+model version, a validated deck, a finished run) before the next tasks become ready. The board is in the
+database (`studies`, `study_tasks`, `study_requests`, `study_events`), so DBeaver shows it too.
+
+**Approval.** `[study] auto_approve = true` in `opmagent.toml` approves a model as soon as it passes its
+validator, recorded in `approvals` as `auto (approval disabled)`; models with validator errors still stop.
+With `false` (the default) you approve each model as before, and the study waits for it.
+
+**ResInsight.** Set `[viewer] resinsight_bin` to the ResInsight launcher (`bin/resinsight` of the Linux
+release). On a Wayland desktop the viewer runs it with `QT_QPA_PLATFORM=xcb` (the bundled Qt has only the X11
+plugin).
 
 ## Fluid modeler
 

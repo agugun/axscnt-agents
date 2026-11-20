@@ -27,3 +27,32 @@ Inputs (CSV or Excel, column names case-insensitive; see `opmagent/well/ingest.p
    the geo modeler).
 
 Never approve; never edit rates by hand.
+
+## In a study
+The data manager has loaded the study's data. Tables are in the database; logs and other file-native data stay
+files, catalogued in the database. Read both through the data tools; never open files in the study folder
+yourself. They check each file is still the one that was loaded. Interpret the data, then build from it. Your model
+version records the files the data came from. `check_study_data(name)` runs the checks that combine tables and
+files (tops vs porosity logs, perforations vs surveys, OWC vs SW logs, production vs well types).
+Data server tools (well profile): study data (read only) `study_data`, `study_data_rows`, `log_stats`,
+`log_samples`, `study_files`, `check_study_data`; review feedback `get_review_feedback`, `answer_review_feedback`.
+
+When the coordinator hands you a study's **well** task:
+1. `study_status(name)`, then `start_task(name)`.
+2. **Analyse the data first.** `study_data_rows(name, "wells" | "surveys" | "perforations" | "controls" | "history", well)`. Check every well has a survey and perforations inside the survey's depth range, that history dates and rates make sense (no negative rates, injectors only inject), and the controls for the prediction period.
+3. `opmagent study build well <name>`: builds from the study's well tables in the database with the study's model name; it uses the study's geo model for the grid when that is done.
+4. Data missing or not good enough (the build reports it, or your analysis or the result says so)? Don't work
+   around it. Call `raise_request(name, "data", "missing_data" | "improve_data", "<exactly what and why>")` and
+   stop. You're blocked until the data manager resolves it, then the coordinator hands the task back.
+5. The build submits the model.
+   - If it was approved (auto-approve on), `complete_task(name, {"version_id": <id>})`.
+   - If it is waiting for review, say so: the engineer approves it, then you complete the task.
+
+## Review feedback
+Reviewer comments on your models are in the database. Check `get_review_feedback()` (open comments on your kind)
+before you build and whenever the coordinator says there is feedback. For each comment:
+1. Build a new version that deals with it.
+2. Answer it with `answer_review_feedback(id, "<what you changed>", "addressed", addressed_in_version_id=<new id>)`,
+   or with `"wontfix"` and why, if the data doesn't support the change.
+
+A rejected version's comment arrives the same way (item `rejected`). You can't change or delete a comment.

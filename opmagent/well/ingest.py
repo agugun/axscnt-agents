@@ -25,7 +25,12 @@ VOLVE_COLUMNS = {  # Volve 'Volve production data.xlsx', daily sheet
 }
 
 
-def read_table(path: str | Path, sheet: str | None = None) -> pd.DataFrame:
+def read_table(path, sheet: str | None = None) -> pd.DataFrame:
+    """A CSV or Excel sheet, or a DataFrame as it is (the study data store hands over DataFrames)."""
+    if isinstance(path, pd.DataFrame):
+        df = path.copy()
+        df.columns = [str(c).strip() for c in df.columns]
+        return df
     p = Path(path)
     if p.suffix.lower() in (".xlsx", ".xlsm", ".xls"):
         df = pd.read_excel(p, sheet_name=sheet or 0)
@@ -72,11 +77,12 @@ def surveys(df: pd.DataFrame, heads: dict[str, tuple[float, float]]) -> list[dic
     out = []
     for w, g in df.groupby("well_name"):
         g = g.sort_values("md")
-        if {"x", "y", "tvd"} <= set(g.columns):
+        has = lambda cols: set(cols) <= set(g.columns) and g[list(cols)].notna().all().all()  # noqa: E731
+        if has(("x", "y", "tvd")):
             xs, ys, zs = g["x"].values, g["y"].values, g["tvd"].values
-        elif {"inc", "azi"} <= set(g.columns):
-            x0 = float(g["x0"].iloc[0]) if "x0" in g else heads.get(w, (0.0, 0.0))[0]
-            y0 = float(g["y0"].iloc[0]) if "y0" in g else heads.get(w, (0.0, 0.0))[1]
+        elif has(("inc", "azi")):
+            x0 = float(g["x0"].iloc[0]) if "x0" in g and pd.notna(g["x0"].iloc[0]) else heads.get(w, (0.0, 0.0))[0]
+            y0 = float(g["y0"].iloc[0]) if "y0" in g and pd.notna(g["y0"].iloc[0]) else heads.get(w, (0.0, 0.0))[1]
             xs, ys, zs = min_curvature(g["md"].values, g["inc"].values, g["azi"].values, x0, y0, float(g["md"].iloc[0]))
         else:
             raise ValueError(f"survey for {w} needs (x, y, tvd) or (inc, azi)")
@@ -129,11 +135,18 @@ def monthly_history(df: pd.DataFrame, wells: dict[str, dict]) -> list[dict]:
     return events
 
 
+def _given(v) -> bool:
+    """An input was supplied: a non-empty path or a non-empty DataFrame."""
+    if isinstance(v, pd.DataFrame):
+        return not v.empty
+    return bool(v)
+
+
 def read_inputs(files: dict) -> dict:
     """files: {'wells': path, 'surveys': path, 'perforations': path, 'history': path, 'controls': path,
     'groups': path, 'history_format': 'standard'|'volve'}. Returns rows for the well model and a gap list."""
     gaps = []
-    if not files.get("wells"):
+    if not _given(files.get("wells")):
         raise ValueError("a wells table is required")
     w = _lower(read_table(files["wells"]))
     need = {"well_name", "type", "phase"}
@@ -153,11 +166,11 @@ def read_inputs(files: dict) -> dict:
                        "head_j": int(r["j"]) if "j" in r and pd.notna(r["j"]) else None,
                        "ref_depth": float(r["ref_depth"]) if "ref_depth" in r and pd.notna(r["ref_depth"]) else None}
     heads = {n: (x["head_x"] or 0.0, x["head_y"] or 0.0) for n, x in wells.items()}
-    traj = surveys(read_table(files["surveys"]), heads) if files.get("surveys") else []
+    traj = surveys(read_table(files["surveys"]), heads) if _given(files.get("surveys")) else []
     if not traj:
         gaps.append({"severity": "required", "item": "surveys", "message": "no deviation surveys: perforations can't be placed"})
     perfs = []
-    if files.get("perforations"):
+    if _given(files.get("perforations")):
         p = _lower(read_table(files["perforations"]))
         for _, r in p.iterrows():
             perfs.append({"well_name": str(r["well_name"]), "event_date": pd.to_datetime(r["date"]).date().isoformat(),
@@ -168,13 +181,13 @@ def read_inputs(files: dict) -> dict:
     else:
         gaps.append({"severity": "required", "item": "perforations", "message": "no perforation records"})
     events = []
-    if files.get("history"):
+    if _given(files.get("history")):
         hist = volve_history(files["history"]) if files.get("history_format") == "volve" else read_table(files["history"])
         events += monthly_history(hist, wells)
         unknown = sorted(set(_lower(hist)["well_name"].astype(str)) - set(wells))
         if unknown:
             gaps.append({"severity": "warning", "item": "history", "message": f"history for wells not in the wells table: {unknown[:5]}"})
-    if files.get("controls"):
+    if _given(files.get("controls")):
         c = _lower(read_table(files["controls"]))
         for _, r in c.iterrows():
             w_ = str(r["well_name"])
@@ -190,7 +203,7 @@ def read_inputs(files: dict) -> dict:
     if not events:
         gaps.append({"severity": "recommended", "item": "history/controls", "message": "no history or prediction controls"})
     groups = []
-    if files.get("groups"):
+    if _given(files.get("groups")):
         g = _lower(read_table(files["groups"]))
         groups = [{"group_name": str(r["group"]), "parent_group": str(r.get("parent") or "FIELD")} for _, r in g.iterrows()]
     else:

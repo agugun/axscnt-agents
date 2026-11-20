@@ -24,3 +24,12 @@ max_parallel = 2
 # opm_source_root = "~/src/opm"
 # opm_debug_flow  = "~/src/opm/build/opm-simulators/bin/flow"
 vscode_bin = "code"
+
+[study]
+# true: a model that passes its validator is approved automatically (recorded in approvals as
+# "auto (approval disabled)"); models with validator errors still stop. false: you approve each model.
+auto_approve = false
+
+[viewer]
+# ResInsight launcher, for the results viewer (opmagent results open)
+# resinsight_bin = "~/opm-agents/ResInsight/bin/resinsight"

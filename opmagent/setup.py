@@ -23,19 +23,33 @@ AGENTS = {
     "deck-importer": ("import", ["opm-sim"], "Imports existing OPM/Eclipse decks into models for review and verifies the round trip."),
     "deck-builder": ("deck", [], "Builds validated OPM decks from a simulation requirement and approved models."),
     "run-agent": ("run", ["opm-sim"], "Runs validated decks, stores and compares results, and prepares VS Code debug sessions."),
+    "data-manager": ("data", [], "Loads a study's raw data from many sources (lab reports, LAS, tops, well tables, production history, Volve) into the database for the modelers, and answers their data requests."),
+    "results-viewer": ("view", [], "Opens finished runs in ResInsight: grid, properties over time and summary vectors."),
 }
-SKILL_OF = {"fluid-modeler": "fluid-modeler", "geo-modeler": "geo-modeler", "well-modeler": "well-modeler",
-            "deck-importer": "deck-importer", "deck-builder": "deck-builder", "run-agent": "run-agent"}
+SKILL_OF = {name: name for name in AGENTS}
 
 CLAUDE_MD = """# OPM agents workspace
 
 Agents build reservoir simulation inputs for OPM Flow. The SQLite database is the hub; agents never
-talk to each other. Each agent uses only its own data-server profile.
+talk to each other directly. Each agent uses only its own data-server profile.
+
+## Studies
+Work for one simulation question is a **study** (`opmagent study status <name>`): a folder with an inbox and
+a task chain data -> fluid, geo, well -> deck -> run -> view on a shared board. Each agent starts and completes
+only its own task (`start_task`, `complete_task`), and asks another task for missing or poor data with
+`raise_request` (to `data`, the data manager), which blocks it until the request is resolved. In your own
+session, the `study` skill coordinates: it hands each agent its ready task. Outside a study, work as before.
+
+In a study the database holds everything:
+- **Raw data.** The data manager converts tabular data into the study data tables. It files the rest as it came (LAS, SEG-Y, surfaces, documents) in `<study>/data/` and catalogs those files in the database.
+- **Models.** The modelers read both through the data tools (`study_data`, `study_data_rows`, `log_stats`, `log_samples`, `fluid_sample`, `study_files`, `check_study_data`), interpret the data, and build from it. Never open or edit files in a study's `data/` folder yourself.
+- **Review feedback.** The reviewer's comments are in `review_feedback`. A modeler answers them (`get_review_feedback`, `answer_review_feedback`) with the version that addresses them.
 
 ## Rules for every agent
 - Numbers come from the opmagent tools, never from you. Never invent data; ask for what's missing.
 - You can't approve or reject models. Only the user can, from their own client (reviewer profile)
-  or with `opmagent review` in a terminal.
+  or with `opmagent review` in a terminal. With `[study] auto_approve = true` in opmagent.toml, a model
+  that passes its validator is approved automatically and recorded as "auto (approval disabled)".
 - Read back before anything that changes data or starts a job (import, run, debug, clean-up) and wait for "yes".
 - Answers are short enough to read aloud: two or three sentences, numbers rounded. Every tool result has a
   `spoken_summary` you can use.
@@ -84,6 +98,13 @@ max_parallel = 2
 # opm_source_root = "~/src/opm"
 # opm_debug_flow  = "~/src/opm/build/opm-simulators/bin/flow"
 vscode_bin = "code"
+
+[study]
+# true: a model that passes its validator is approved automatically (recorded as "auto (approval disabled)")
+auto_approve = false
+
+[viewer]
+{'resinsight_bin = "' + str(ws / 'ResInsight' / 'bin' / 'resinsight') + '"' if (ws / 'ResInsight' / 'bin' / 'resinsight').exists() else '# resinsight_bin = "~/ResInsight/bin/resinsight"'}
 """)
         created.append(str(cfg_path))
     c = str(cfg_path)

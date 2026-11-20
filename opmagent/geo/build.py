@@ -50,36 +50,57 @@ def interpolate(xs, ys, vals, gx, gy, *, method="auto", length_scale=None, nugge
 
 
 # ---------------------------------------------------------------- logs
-def read_logs(paths: list[str], surveys: pd.DataFrame | None = None, curve_map: dict | None = None) -> pd.DataFrame:
-    """Return rows well_name, tvd, phi, perm, vsh from LAS or CSV files."""
-    cm = {"phi": ["PHIE", "PHIT", "PORO", "PHI", "NPHI_CORR"], "perm": ["PERM", "KLOGH", "KH", "PERMX"],
+CURVES = {"phi": ["PHIE", "PHIT", "PORO", "PHI", "NPHI_CORR"], "perm": ["PERM", "KLOGH", "KH", "PERMX"],
           "vsh": ["VSH", "VCL", "VSHALE"], "tvd": ["TVD", "TVDSS"]}
-    if curve_map:
-        for k, v in curve_map.items():
-            cm[k] = [v] + cm.get(k, [])
+
+
+def curve_map(overrides: dict | None = None) -> dict:
+    """Which log mnemonics stand for porosity, permeability, shale volume and TVD (spec 'curves' first)."""
+    cm = {k: list(v) for k, v in CURVES.items()}
+    for k, v in (overrides or {}).items():
+        cm[k] = [v] + cm.get(k, [])
+    return cm
+
+
+def pick_curves(df: pd.DataFrame, well: str, surveys: pd.DataFrame | None, cm: dict) -> pd.DataFrame:
+    """One well's log table (first column = the depth index, then a column per curve) -> rows well_name, tvd,
+    phi, perm, vsh. Depth is TVD if there is a TVD curve, else MD converted with the survey, else MD = TVD."""
+    depth_col = df.columns[0]
+    out = pd.DataFrame(index=df.index)
+    out["well_name"] = well
+    tvd = next((c for c in cm["tvd"] if c in df.columns), None)
+    if tvd:
+        out["tvd"] = df[tvd]
+    elif surveys is not None and well in set(surveys["well_name"]):
+        s = surveys[surveys["well_name"] == well].sort_values("md")
+        out["tvd"] = np.interp(df[depth_col], s["md"], s["tvd"])
+    else:
+        out["tvd"] = df[depth_col]   # vertical well: MD = TVD
+    for k in ("phi", "perm", "vsh"):
+        c = next((c for c in cm[k] if c in df.columns), None)
+        out[k] = df[c] if c else np.nan
+    return out
+
+
+def clean_logs(frames: list[pd.DataFrame]) -> pd.DataFrame:
+    if not frames:
+        return pd.DataFrame(columns=["well_name", "tvd", "phi", "perm", "vsh"])
+    out = pd.concat(frames, ignore_index=True)
+    out["well_name"] = out["well_name"].astype(str)
+    out.loc[(out["phi"] < 0) | (out["phi"] > 0.6), "phi"] = np.nan
+    return out
+
+
+def read_logs(paths: list[str], surveys: pd.DataFrame | None = None, curve_map_: dict | None = None) -> pd.DataFrame:
+    """Return rows well_name, tvd, phi, perm, vsh from LAS or CSV files."""
+    cm = curve_map(curve_map_)
     frames = []
     for p in paths:
         p = Path(p)
         if p.suffix.lower() == ".las":
             import lasio
             las = lasio.read(str(p))
-            df = las.df().reset_index()
-            well = str(las.well.WELL.value or p.stem)
-            depth_col = df.columns[0]
-            out = pd.DataFrame(index=df.index)
-            out["well_name"] = well
-            tvd = next((c for c in cm["tvd"] if c in df.columns), None)
-            if tvd:
-                out["tvd"] = df[tvd]
-            elif surveys is not None and well in set(surveys["well_name"]):
-                s = surveys[surveys["well_name"] == well].sort_values("md")
-                out["tvd"] = np.interp(df[depth_col], s["md"], s["tvd"])
-            else:
-                out["tvd"] = df[depth_col]   # vertical well: MD = TVD
-            for k in ("phi", "perm", "vsh"):
-                c = next((c for c in cm[k] if c in df.columns), None)
-                out[k] = df[c] if c else np.nan
-            frames.append(out)
+            frames.append(pick_curves(las.df().reset_index(), str(las.well.WELL.value or p.stem), surveys, cm))
         else:
             df = pd.read_csv(p)
             df.columns = [c.lower() for c in df.columns]
@@ -87,12 +108,7 @@ def read_logs(paths: list[str], surveys: pd.DataFrame | None = None, curve_map: 
                 if k not in df:
                     df[k] = np.nan
             frames.append(df[["well_name", "tvd", "phi", "perm", "vsh"]])
-    if not frames:
-        return pd.DataFrame(columns=["well_name", "tvd", "phi", "perm", "vsh"])
-    out = pd.concat(frames, ignore_index=True)
-    out["well_name"] = out["well_name"].astype(str)
-    out.loc[(out["phi"] < 0) | (out["phi"] > 0.6), "phi"] = np.nan
-    return out
+    return clean_logs(frames)
 
 
 # ---------------------------------------------------------------- build
