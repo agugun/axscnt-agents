@@ -242,7 +242,7 @@ def build_grid(tops: pd.DataFrame, logs: pd.DataFrame, spec: dict, out_dir: Path
     return {"nx": nx, "ny": ny, "nz": nz, "grid_file": str(grid_file), "layer_depths_file": str(depths_file),
             "areal": {"x0": x0, "y0": y0, "dx": dx, "dy": dy}, "files": files, "zones": zones,
             "upscaled": upscaled, "arrays": {"phi": phi, "perm": perm, "ntg": ntg}, "top": float(ln.min()),
-            "base": float(ln.max()), "surfaces_centre": [s.tolist() for s in surf_cent][:0]}
+            "base": float(ln.max())}
 
 
 def corey(spec: dict) -> tuple[list[dict], list[dict]]:

@@ -374,24 +374,26 @@ class DataService:
         return {"ok": True, "feedback": f, "spoken_summary": f"Comment {f['id']} added to {kind} "
                                                              f"{f['model_name']} v{f['version']}."}
 
-    # ------------------------------------------------------------ QC notebooks (fluid modeler)
+    # ------------------------------------------------------------ QC notebooks (fluid, geo and well modelers)
     def _qc_folder(self, version_id: int):
-        self._kind_allowed("fluid")
-        h = models.header(self.con, "fluid", version_id)
-        return h, runner.qc_dir(self.cfg.file_store, h["model_name"], h["version"])
+        kind = MODELER_KIND.get(self.profile)
+        if kind not in runner.KINDS:
+            raise ToolError(FORBIDDEN, f"profile '{self.profile}' has no QC notebooks")
+        h = models.header(self.con, kind, version_id)
+        return kind, h, runner.qc_dir(self.cfg.file_store, h["model_name"], h["version"], kind)
 
     def run_qc_notebook(self, version_id: int) -> dict:
-        """Re-run the standard fluid QC notebook for a draft version (e.g. after return_to_draft) and register
-        the new report. Pass the returned qc_report_file_id to submit_for_review. Versions under review or
-        approved keep the report they were reviewed with."""
-        h, folder = self._qc_folder(version_id)
+        """Re-run the standard QC notebook (fluid, geo or well, by your profile) for a draft version (e.g. after
+        return_to_draft) and register the new report. Pass the returned qc_report_file_id to submit_for_review.
+        Versions under review or approved keep the report they were reviewed with."""
+        kind, h, folder = self._qc_folder(version_id)
         if h["status"] != "draft":
-            raise ToolError(FORBIDDEN, f"fluid {h['model_name']} v{h['version']} is {h['status']}; its QC report is "
+            raise ToolError(FORBIDDEN, f"{kind} {h['model_name']} v{h['version']} is {h['status']}; its QC report is "
                                        "frozen (return it to draft first)")
-        r = runner.run_fluid_qc(folder, self.cfg.database, version_id, timeout=self.cfg.qc_timeout_s)
+        r = runner.run_qc(kind, folder, self.cfg.database, version_id, timeout=self.cfg.qc_timeout_s)
         if not r["ok"]:
             raise ToolError("QC_NOTEBOOK_FAILED", f"the QC notebook failed: {r['error']}", {"notebook": r["notebook"]})
-        files.register_file(self.con, r["notebook"], "qc_report", f"executed QC notebook, fluid version {version_id}")
+        files.register_file(self.con, r["notebook"], "qc_report", f"executed QC notebook, {kind} version {version_id}")
         fid = files.register_file(self.con, r["html"], "qc_report")
         s = r["summary"]
         return {"ok": True, "qc_report_file_id": fid, "html": r["html"], "notebook": r["notebook"],
@@ -401,11 +403,11 @@ class DataService:
                                   f"{s['counts']['warn']} warn finding(s)."}
 
     def create_investigation_notebook(self, version_id: int, purpose: str) -> dict:
-        """Start a free-form investigation notebook for a fluid version (any status): purpose, parameters and
+        """Start a free-form investigation notebook for a fluid, geo or well version (any status): purpose, parameters and
         data-loading cells are written for you. Add analysis cells to the returned path (read only: load,
         compute, plot; model changes go through a new build), then call run_investigation_notebook."""
-        _, folder = self._qc_folder(version_id)
-        path = runner.create_investigation(folder, self.cfg.database, version_id, purpose)
+        kind, _, folder = self._qc_folder(version_id)
+        path = runner.create_investigation(folder, self.cfg.database, version_id, purpose, kind)
         return {"ok": True, "path": str(path),
                 "spoken_summary": f"Investigation notebook created: {path.name}. Add the analysis cells, then run it."}
 
@@ -464,8 +466,8 @@ STUDY = ["study_status", "list_studies", "start_task", "complete_task", "fail_ta
          "resolve_request"]
 QC_NOTEBOOKS = ["run_qc_notebook", "create_investigation_notebook", "run_investigation_notebook"]
 TOOLS = {
-    "fluid": COMMON + WRITER + STUDY + DATA_READ + FEEDBACK + QC_NOTEBOOKS, "geo": COMMON + WRITER + STUDY + DATA_READ + FEEDBACK,
-    "well": COMMON + WRITER + STUDY + DATA_READ + FEEDBACK,
+    "fluid": COMMON + WRITER + STUDY + DATA_READ + FEEDBACK + QC_NOTEBOOKS, "geo": COMMON + WRITER + STUDY + DATA_READ + FEEDBACK + QC_NOTEBOOKS,
+    "well": COMMON + WRITER + STUDY + DATA_READ + FEEDBACK + QC_NOTEBOOKS,
     "import": COMMON + WRITER,
     "deck": COMMON + ["create_deck", "add_deck_file", "set_deck_status", "list_decks", "get_deck", "init_study"] + STUDY,
     "run": COMMON + ["list_decks", "get_deck"] + STUDY,

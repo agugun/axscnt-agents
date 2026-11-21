@@ -130,7 +130,7 @@ auto_approve = false
     lines = []
     for name, (profile, extra, desc) in AGENTS.items():
         tools = ["Bash", "Read", "Write", "Glob", "Grep", f"mcp__opm-data-{profile}"] + [f"mcp__{e}" for e in extra]
-        if profile == "fluid":
+        if profile in ("fluid", "geo", "well"):
             tools[3:3] = ["NotebookEdit"]   # writes the analysis cells of its investigation notebooks
         body = f"""---
 name: {name}

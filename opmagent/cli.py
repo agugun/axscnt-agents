@@ -86,18 +86,22 @@ def cmd_fluid_build(args):
     raise SystemExit(0 if r.get("ok") else 2)
 
 
-def cmd_fluid_notebook(args):
-    """QC notebooks: re-run the standard QC, start or run an investigation (same rules as the MCP tools)."""
+def cmd_model_notebook(args):
+    """QC notebooks (fluid or geo): re-run the standard QC, start or run an investigation (same rules as the
+    MCP tools)."""
     import json
     import subprocess
 
     from .servers.data_server import DataService, wrap
 
     cfg = cfgmod.load(args.config)
-    svc = DataService("fluid", cfg)
-    if args.fcmd == "qc":
+    kind = getattr(args, "nb_kind", "fluid")
+    svc = DataService(kind, cfg)
+    cmd = {"fluid": "fcmd", "geo": "gcmd", "well": "wcmd"}[kind]
+    cmd = getattr(args, cmd)
+    if cmd == "qc":
         r = wrap(svc, "run_qc_notebook")(version_id=args.version_id)
-    elif args.fcmd == "investigate":
+    elif cmd == "investigate":
         r = wrap(svc, "create_investigation_notebook")(version_id=args.version_id, purpose=args.purpose)
         if r.get("ok") and args.open:
             try:
@@ -752,15 +756,15 @@ def main(argv=None):
     b.set_defaults(fn=cmd_fluid_build)
     x = fl.add_parser("qc", help="re-run the standard QC notebook for a draft version (prints the new report's file id)")
     x.add_argument("version_id", type=int)
-    x.set_defaults(fn=cmd_fluid_notebook)
+    x.set_defaults(fn=cmd_model_notebook)
     x = fl.add_parser("investigate", help="start an investigation notebook for a fluid version")
     x.add_argument("version_id", type=int)
     x.add_argument("--purpose", required=True, help='what to look into, e.g. "C7+ MW sensitivity on the CVD match"')
     x.add_argument("--open", action="store_true", help="open it in VS Code ([debug] vscode_bin)")
-    x.set_defaults(fn=cmd_fluid_notebook)
+    x.set_defaults(fn=cmd_model_notebook)
     x = fl.add_parser("run-notebook", help="execute an investigation notebook and export it to HTML")
     x.add_argument("path")
-    x.set_defaults(fn=cmd_fluid_notebook)
+    x.set_defaults(fn=cmd_model_notebook)
     rv = sub.add_parser("review", help="human review (approve / reject)").add_subparsers(dest="rcmd", required=True)
     rv.add_parser("list", help="what is waiting for review").set_defaults(fn=cmd_review)
     for name in ("approve", "reject"):
@@ -814,6 +818,17 @@ def main(argv=None):
     x.add_argument("--description")
     x.add_argument("--allow-gaps", action="store_true")
     x.set_defaults(fn=cmd_well_build)
+    x = wl.add_parser("qc", help="re-run the standard QC notebook for a draft version (prints the new report's file id)")
+    x.add_argument("version_id", type=int)
+    x.set_defaults(fn=cmd_model_notebook, nb_kind="well")
+    x = wl.add_parser("investigate", help="start an investigation notebook for a well version")
+    x.add_argument("version_id", type=int)
+    x.add_argument("--purpose", required=True, help='what to look into, e.g. "P1 oil volume above measured"')
+    x.add_argument("--open", action="store_true", help="open it in VS Code ([debug] vscode_bin)")
+    x.set_defaults(fn=cmd_model_notebook, nb_kind="well")
+    x = wl.add_parser("run-notebook", help="execute an investigation notebook and export it to HTML")
+    x.add_argument("path")
+    x.set_defaults(fn=cmd_model_notebook, nb_kind="well")
     sd = sub.add_parser("study", help="studies: the shared task board the agents work through").add_subparsers(
         dest="scmd", required=True)
     x = sd.add_parser("init", help="start a study: folder, study.json, task chain (deck builder)")
@@ -900,6 +915,17 @@ def main(argv=None):
     x.add_argument("--name", required=True)
     x.add_argument("--description")
     x.set_defaults(fn=cmd_geo_build)
+    x = gm.add_parser("qc", help="re-run the standard QC notebook for a draft version (prints the new report's file id)")
+    x.add_argument("version_id", type=int)
+    x.set_defaults(fn=cmd_model_notebook, nb_kind="geo")
+    x = gm.add_parser("investigate", help="start an investigation notebook for a geo version")
+    x.add_argument("version_id", type=int)
+    x.add_argument("--purpose", required=True, help='what to look into, e.g. "poor porosity fit at B in layer 2"')
+    x.add_argument("--open", action="store_true", help="open it in VS Code ([debug] vscode_bin)")
+    x.set_defaults(fn=cmd_model_notebook, nb_kind="geo")
+    x = gm.add_parser("run-notebook", help="execute an investigation notebook and export it to HTML")
+    x.add_argument("path")
+    x.set_defaults(fn=cmd_model_notebook, nb_kind="geo")
     im = sub.add_parser("import", help="deck importer (reverse deck)").add_subparsers(dest="icmd", required=True)
     x = im.add_parser("deck", help="import a deck into fluid/geo/well drafts for review")
     x.add_argument("--input", required=True)
