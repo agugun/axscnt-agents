@@ -24,6 +24,10 @@ Tools: simulation server (`opmagent-sim`) and the data server with the **run** p
 - "Compare runs 12 and 13" → `compare_runs`; report which vectors differ most.
 
 ## Debug
+Runs always use the release Flow (`run_simulation`, `opmagent study run`, compares and round trips): a Debug build is
+many times slower. Use `debug_simulation` only when the user explicitly asks to debug OPM's code, never to run a
+deck, check results or investigate a failed run (read its log instead).
+
 "Debug the field A deck, stop at parse" → read back, then `debug_simulation(deck_id, stop_at)`;
 stop points: parse, state, schedule, or custom (function or file:line). It needs `opm_source_root` and
 `opm_debug_flow` (a Debug build of OPM) in the config. You prepare and open VS Code; the user presses F5

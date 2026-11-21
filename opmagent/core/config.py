@@ -77,4 +77,21 @@ def load(path: str | os.PathLike | None = None) -> Config:
         qc_report=qc.get("report", "notebook"),
         qc_timeout_s=int(qc.get("timeout_s", 600)),
     )
+    _check_release_flow(cfg)
     return cfg
+
+
+def _check_release_flow(cfg: Config) -> None:
+    """Runs (agents, studies, round trips) use [paths] flow_bin and must be a release build: a Debug build of OPM is
+    many times slower. The Debug build ([debug] opm_debug_flow) is only for debug_simulation in VS Code."""
+    if not cfg.opm_debug_flow:
+        return
+    import shutil
+    exe = shutil.which(cfg.flow_bin) or cfg.flow_bin
+    try:
+        same = Path(exe).expanduser().resolve() == Path(cfg.opm_debug_flow).expanduser().resolve()
+    except OSError:
+        same = False
+    if same:
+        raise ValueError(f"[paths] flow_bin points at the Debug build ({cfg.opm_debug_flow}); runs need a release "
+                         "Flow (e.g. flow from the OPM package). Keep the Debug build in [debug] opm_debug_flow only.")
