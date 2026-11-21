@@ -25,6 +25,15 @@ QC notebooks for the fluid modeler.
   The notebook tools are on the geo profile too, with `opmagent geo qc | investigate | run-notebook`; the geo
   agent gets NotebookEdit. With `[qc] report = "html"` the static report is kept. Models from a deck keep
   their model view.
+- **Well QC notebook** (`opmagent/notebooks/well_qc.ipynb`, checks in `well_qc_lib`), kept in
+  `qc/well_<model>_v<N>/` with the measured history (`history.csv`). Findings: heads vs surveys, wells inside the
+  geo grid, station spacing, dogleg severity; perforations open before a well flows and, with a geo version,
+  placed in the grid as the deck builder does (length outside the layers, tight cells, producers below the OWC
+  or above the GOC); the volume the deck applies vs the measured volume per well and phase (downtime: WCONHIST
+  applies volume / producing days for the whole month), missing months, spikes, missing BHP; events before the
+  start, prediction overlapping the history, targets far above the last rates. Plots: plan view, perforated
+  cells, sections through the zones, rates and cumulatives vs measured, the schedule.
+  `opmagent well qc | investigate | run-notebook`; the well agent gets NotebookEdit.
 
 Studies: the agents work through one simulation question together.
 

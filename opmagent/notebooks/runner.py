@@ -6,7 +6,8 @@ saved per version:
 
     <file_store>/qc/<kind>_<model>_v<N>/
         payload.json          what the pipeline knew at build time (fluid: lab data, simulations, checks,
-                              spec; geo: tops, upscaled logs, zones, spec, and logs.csv next to it)
+                              spec; geo: tops, upscaled logs, zones, spec, and logs.csv next to it;
+                              well: gaps and assumptions, and history.csv, the measured history)
         <kind>_qc.ipynb       the executed notebook (code + outputs)
         <kind>_qc.html        the reviewer's copy (registered as the version's QC report; its sha256 is
                               what an approval is tied to)
@@ -31,7 +32,8 @@ from ..core.files import sha256_of
 TEMPLATE_DIR = Path(__file__).parent
 FLUID_TEMPLATE = TEMPLATE_DIR / "fluid_qc.ipynb"
 GEO_TEMPLATE = TEMPLATE_DIR / "geo_qc.ipynb"
-KINDS = ("fluid", "geo")
+WELL_TEMPLATE = TEMPLATE_DIR / "well_qc.ipynb"
+KINDS = ("fluid", "geo", "well")
 KERNEL_NAME = "opmagent-qc"
 
 
@@ -47,7 +49,7 @@ def template(kind: str) -> Path:
     if kind not in KINDS:
         raise ToolError(INVALID_INPUT, f"no QC notebook for {kind} models (only {', '.join(KINDS)})")
     # looked up at call time, so a test can swap a template
-    return FLUID_TEMPLATE if kind == "fluid" else GEO_TEMPLATE
+    return {"fluid": FLUID_TEMPLATE, "geo": GEO_TEMPLATE, "well": WELL_TEMPLATE}[kind]
 
 
 def write_payload(folder: Path, payload: dict) -> Path:
@@ -148,7 +150,11 @@ LOADERS = {
             "data = qc.load(payload_path, db_path, version_id)\n"
             "arr, logs, tops = data['arrays'], data['logs'], data['tops']   # arr['PORO'][k, j, i]; logs per sample\n"
             "ld = data['layer_depths']   # (nz+1, ny, nx) layer boundaries at cell centres; qc.fig_section, qc.fig_well ...\n"),
+    "well": ("data = qc.load(payload_path, db_path, version_id)\n"
+             "ev, comp, traj, measured = data['events'], data['completions'], data['trajectory'], data['measured']\n"
+             "geo = data['geo']   # the geo version the wells sit in (or None); qc.place(data) puts perforations in cells\n"),
 }
+LIBS = {"fluid": "qc_lib", "geo": "geo_qc_lib", "well": "well_qc_lib"}
 
 
 def create_investigation(folder: Path, db_path: Path, version_id: int, purpose: str, kind: str = "fluid") -> Path:
@@ -172,7 +178,7 @@ def create_investigation(folder: Path, db_path: Path, version_id: int, purpose: 
         nbformat.v4.new_code_cell(
             "import plotly.io as pio\n"
             "pio.renderers.default = 'notebook'\n"
-            f"from opmagent.notebooks import {'qc_lib' if kind == 'fluid' else 'geo_qc_lib'} as qc\n"
+            f"from opmagent.notebooks import {LIBS[kind]} as qc\n"
             + LOADERS[kind] + "qc.header(data)"),
         nbformat.v4.new_markdown_cell("## Analysis"),
         nbformat.v4.new_code_cell("# add the analysis here"),

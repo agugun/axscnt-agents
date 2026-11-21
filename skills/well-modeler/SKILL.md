@@ -18,15 +18,42 @@ Inputs (CSV or Excel, column names case-insensitive; see `opmagent/well/ingest.p
 1. Find the files (`find_inbox_file` by spoken name). Ask for anything required that's missing:
    wells, surveys and perforations are required; history or controls are recommended.
 2. `opmagent well build --wells W --surveys S --perforations P [--history H [--history-format volve]]
-   [--controls C] [--groups G] --name <Name> [--start-date YYYY-MM-DD]`
+   [--controls C] [--groups G] --name <Name> [--start-date YYYY-MM-DD] [--geo-version <geo version id>]`
+   Pass the geo version when there is one: the QC then places the perforations in its grid.
 3. Read the result: `qc_ready` → tell the user it's waiting for review (wells, perforations, history months,
    QC report path). Validator errors → explain each (e.g. "producer needs a BHP limit in prediction") and
    ask for the fix; don't invent numbers.
+   - `qc_overall` is `warn` or `fail` → read `qc_summary.json` next to the report, tell the user each finding
+     in one line, and investigate before they review (see QC notebooks).
+   - `status: draft` with `qc_notebook` → a notebook cell failed; report it, don't work around it.
 4. History is aggregated to monthly average rates (volume / producing days); say so if asked.
 5. Perforations are stored by MD; the deck builder places them in grid cells (regular grids and grids from
    the geo modeler).
 
 Never approve; never edit rates by hand.
+
+## QC notebooks
+The QC report is the executed standard notebook (`well_qc.html` in `qc/well_<model>_v<N>/`, with
+`history.csv`, the measured history as it came in). It reads the model from the database and checks:
+- well heads against the surveys, wells inside the geo grid, survey station spacing, dogleg severity;
+- perforations open before each well first flows, overlapping records; with a geo version, each perforation
+  placed in the grid as the deck builder does: length outside the layers, tight cells, producers perforated
+  below the OWC or above the GOC;
+- history: the volume the deck applies (rate x days until the next event) against the measured volume per
+  well and phase, missing months (the previous rate carries on), spikes, missing BHP;
+- controls: events before the start, prediction overlapping the history, targets far above the last rates.
+
+A volume finding usually means downtime: rates are volume / producing days, but WCONHIST applies them for the
+whole month. Tell the user the size per well; the fix (efficiency factors, rates over calendar days, or
+accepting it) is theirs to choose.
+
+Data server tools (well profile): `run_qc_notebook`, `create_investigation_notebook`,
+`run_investigation_notebook`. An investigation starts with `data`, `ev`, `comp`, `traj`, `measured` and `geo`
+loaded; `well_qc_lib` (`qc`) has the checks and plots (`qc.place(data)`, `qc.fig_history(data, 'P1')`,
+`qc.fig_section(data, 'P1')`). Write the analysis and a conclusion, run it, and report where the HTML is.
+Notebooks only read and plot; a change to the model is a new build. After `return_to_draft`,
+`run_qc_notebook(version_id)` and `submit_for_review` with the returned `qc_report_file_id`. Models from a deck
+get a model view instead.
 
 ## In a study
 The data manager has loaded the study's data. Tables are in the database; logs and other file-native data stay

@@ -180,7 +180,7 @@ def read_inputs(files: dict) -> dict:
                           "diameter": float(r["diameter"]) if "diameter" in r and pd.notna(r["diameter"]) else None})
     else:
         gaps.append({"severity": "required", "item": "perforations", "message": "no perforation records"})
-    events = []
+    events, hist = [], None
     if _given(files.get("history")):
         hist = volve_history(files["history"]) if files.get("history_format") == "volve" else read_table(files["history"])
         events += monthly_history(hist, wells)
@@ -210,4 +210,4 @@ def read_inputs(files: dict) -> dict:
         names = {w["group_name"] for w in wells.values()} - {"FIELD"}
         groups = [{"group_name": n, "parent_group": "FIELD"} for n in sorted(names)]
     return {"wells": list(wells.values()), "well_trajectory": traj, "well_completions": perfs, "well_events": events,
-            "well_groups": groups, "gaps": gaps}
+            "well_groups": groups, "gaps": gaps, "history_input": _lower(hist) if hist is not None else None}

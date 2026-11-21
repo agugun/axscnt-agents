@@ -1,12 +1,19 @@
-"""Well modeler pipeline: inputs -> draft well model -> validate -> QC report -> submit for review."""
+"""Well modeler pipeline: inputs -> draft well model -> validate -> QC report -> submit for review.
+
+The QC report is the executed standard notebook (opmagent/notebooks/well_qc.ipynb) exported to HTML, kept per
+version in <file_store>/qc/well_<model>_v<N>/ with its payload, the measured history (history.csv) and
+qc_summary.json. With [qc] report = "html" it is the static report."""
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
+import pandas as pd
 import plotly.graph_objects as go
 
 from ..core.errors import INVALID_INPUT, ToolError
 from ..core.models import review_state
+from ..notebooks import runner
 from ..reports.simple_report import well_report
 from ..servers.data_server import DataService
 from ..servers.data_server import wrap as dwrap
@@ -54,17 +61,54 @@ def build_well_model(cfg, files: dict, name: str, *, start_date: str | None = No
     m = svc.get_model(kind="well", version_id=vid)
     t = m["tables"]
     slug = re.sub(r"[^A-Za-z0-9_-]+", "_", name)
-    rep = well_report(cfg.file_store / "qc" / f"well_{slug}_v{v['version']}.html", model=m["header"], wells=t["wells"],
-                      completions=t["well_completions"], events=t["well_events"], assumptions=assumptions,
-                      warnings=val["warnings"], extra_figs=_history_figs(t["well_events"]))
+    qc_extra, findings_say = {}, ""
+    if cfg.qc_report == "notebook":
+        folder = runner.qc_dir(cfg.file_store, name, v["version"], kind="well")
+        folder.mkdir(parents=True, exist_ok=True)
+        hist = data.get("history_input")
+        if hist is not None:
+            cols = [c for c in ("well_name", "date", "oil", "water", "gas", "water_inj", "gas_inj", "bhp", "thp", "hours")
+                    if c in hist.columns]
+            h = hist[cols].copy()
+            h["date"] = pd.to_datetime(h["date"])
+            h["well_name"] = h["well_name"].astype(str)
+            h.to_csv(folder / "history.csv", index=False)
+        else:
+            (folder / "history.csv").unlink(missing_ok=True)
+        runner.write_payload(folder, {
+            "model_name": name, "version": v["version"], "version_id": vid, "db_path": str(cfg.database),
+            "assumptions": assumptions, "validator_warnings": val["warnings"], "gaps": data["gaps"],
+            "history_file": "history.csv", "history_format": files.get("history_format", "standard")})
+        nb = runner.run_qc("well", folder, cfg.database, vid, timeout=cfg.qc_timeout_s)
+        if not nb["ok"]:
+            return {"ok": False, "status": "draft", "version_id": vid, "qc_notebook": nb["notebook"],
+                    "error": nb["error"], "spoken_summary": f"The QC notebook failed ({nb['error']}). The draft is "
+                    f"kept; open {nb['notebook']} to see the failing cell."}
+        rep = Path(nb["html"])
+        D("register_file", path=nb["notebook"], kind="qc_report", note=f"executed QC notebook, well version {vid}")
+        D("register_file", path=nb["payload"], kind="qc_report", note=f"QC payload, well version {vid}")
+        if (folder / "history.csv").is_file():
+            D("register_file", path=str(folder / "history.csv"), kind="qc_report", note=f"measured history, well version {vid}")
+        s = nb["summary"]
+        qc_extra = {"qc_notebook": nb["notebook"], "qc_findings": s["counts"], "qc_overall": s["overall"],
+                    "qc_notebook_sha256": nb["notebook_sha256"]}
+        if s["overall"] != "pass":
+            findings_say = (f" The QC notebook flags {s['counts']['fail']} fail and {s['counts']['warn']} warn "
+                            f"finding(s) for the reviewer.")
+    else:
+        rep = well_report(cfg.file_store / "qc" / f"well_{slug}_v{v['version']}.html", model=m["header"], wells=t["wells"],
+                          completions=t["well_completions"], events=t["well_events"], assumptions=assumptions,
+                          warnings=val["warnings"], extra_figs=_history_figs(t["well_events"]))
     rid = D("register_file", path=str(rep), kind="qc_report")["file_id"]
     n_hist = sum(1 for e in t["well_events"] if e["mode"] == "HISTORY")
     sub = D("submit_for_review", kind="well", version_id=vid, qc_report_file_id=rid,
-            metrics={"wells": len(t["wells"]), "history_months": n_hist, "perforations": len(t["well_completions"])})
+            metrics={"wells": len(t["wells"]), "history_months": n_hist, "perforations": len(t["well_completions"]),
+                     **{k: x for k, x in qc_extra.items() if k != "qc_notebook"}})
     return {"ok": True, "status": sub["header"]["status"], "version_id": vid, "version": v["version"], "qc_report": str(rep),
-            "assumptions": assumptions,
+            **qc_extra, "assumptions": assumptions,
             "spoken_summary": f"Well model {name} version {v['version']} {review_state(sub)}: {len(t['wells'])} wells, "
-                              f"{len(t['well_completions'])} perforation records, {n_hist} monthly history rows."}
+                              f"{len(t['well_completions'])} perforation records, {n_hist} monthly history rows."
+                              + findings_say}
 
 
 def _history_figs(events):

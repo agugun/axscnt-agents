@@ -97,7 +97,8 @@ def cmd_model_notebook(args):
     cfg = cfgmod.load(args.config)
     kind = getattr(args, "nb_kind", "fluid")
     svc = DataService(kind, cfg)
-    cmd = args.fcmd if kind == "fluid" else args.gcmd
+    cmd = {"fluid": "fcmd", "geo": "gcmd", "well": "wcmd"}[kind]
+    cmd = getattr(args, cmd)
     if cmd == "qc":
         r = wrap(svc, "run_qc_notebook")(version_id=args.version_id)
     elif cmd == "investigate":
@@ -817,6 +818,17 @@ def main(argv=None):
     x.add_argument("--description")
     x.add_argument("--allow-gaps", action="store_true")
     x.set_defaults(fn=cmd_well_build)
+    x = wl.add_parser("qc", help="re-run the standard QC notebook for a draft version (prints the new report's file id)")
+    x.add_argument("version_id", type=int)
+    x.set_defaults(fn=cmd_model_notebook, nb_kind="well")
+    x = wl.add_parser("investigate", help="start an investigation notebook for a well version")
+    x.add_argument("version_id", type=int)
+    x.add_argument("--purpose", required=True, help='what to look into, e.g. "P1 oil volume above measured"')
+    x.add_argument("--open", action="store_true", help="open it in VS Code ([debug] vscode_bin)")
+    x.set_defaults(fn=cmd_model_notebook, nb_kind="well")
+    x = wl.add_parser("run-notebook", help="execute an investigation notebook and export it to HTML")
+    x.add_argument("path")
+    x.set_defaults(fn=cmd_model_notebook, nb_kind="well")
     sd = sub.add_parser("study", help="studies: the shared task board the agents work through").add_subparsers(
         dest="scmd", required=True)
     x = sd.add_parser("init", help="start a study: folder, study.json, task chain (deck builder)")

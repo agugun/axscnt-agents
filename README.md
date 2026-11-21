@@ -20,7 +20,7 @@ Design: see the architecture and user-guide docs (links in `docs/README.md`).
 | Results viewer (ResInsight) | `opmagent results open` | done, tested |
 | Fluid modeler (NeqSim, Excel lab report) | MCP `opmagent-pvt` + `opmagent fluid build` | done, tested |
 | Geo modeler (tops + LAS -> corner-point grid, kriging, QC notebook) | `opmagent geo build / qc / investigate` | done, tested |
-| Well modeler (surveys, perforations, history incl. Volve, controls) | `opmagent well build` | done, tested |
+| Well modeler (surveys, perforations, history incl. Volve, controls, QC notebook) | `opmagent well build / qc / investigate` | done, tested |
 | Deck builder | `opmagent deck build` | done, tested |
 | Run agent (runs, results, compare, VS Code debug) | MCP `opmagent-sim` | done, tested |
 | Deck importer + round trip (SPE1, SPE9, Norne) | `opmagent import deck / verify` | done, tested |
@@ -206,8 +206,30 @@ registered files (sha256 checked) and the tables from the database. It covers:
 - **Contacts, volumes, SCAL:** contacts against the spec and the grid's depth range; pore volume and HCPV
   recomputed from the stored arrays; SWOF/SGOF end points against the spec.
 
-Findings don't block the build; they are listed for the reviewer. The geo profile has the same notebook tools as
-the fluid profile. Models from a deck keep their model view (`opmagent study view`).
+Findings don't block the build; they are listed for the reviewer. The geo and well profiles have the same notebook
+tools as the fluid profile. Models from a deck keep their model view (`opmagent study view`).
+
+## Well modeler
+
+```bash
+opmagent well build --wells w.csv --surveys s.csv --perforations p.csv --history h.xlsx --history-format volve \
+    --controls c.csv --name FieldX_Wells --geo-version 7      # the geo version: perforations placed in its grid
+opmagent well investigate 9 --purpose "P1 oil volume above measured" --open
+opmagent well qc 9            # re-run the standard QC for a draft, then resubmit
+```
+
+The well QC report is a notebook as well (`opmagent/notebooks/well_qc.ipynb`), kept in
+`data/files/qc/well_<model>_v<N>/` with `history.csv`, the measured history as it came in. It covers:
+- **Wells and trajectories:** heads against the surveys, wells inside the geo grid, impossible station spacing,
+  dogleg severity; a plan view over the top layer's porosity.
+- **Perforations:** open before the well first flows; with a geo version, each interval placed in the grid's
+  cells the way the deck builder does: length outside the layers, tight cells, producers below the OWC or above
+  the GOC; a section of each well through the zones.
+- **History:** the volume the deck applies (each rate until the next event) against the measured volume, per well
+  and phase. Rates are volume / producing days and `WCONHIST` applies them for the whole month, so downtime shows up
+  here. Also missing months (the previous rate carries on), spikes and missing BHP.
+- **Controls:** events before the start, prediction overlapping the history, targets far above the last rates;
+  the schedule of every well.
 
 ## Deck builder and runs
 
@@ -220,7 +242,6 @@ opmagent review list                   # what's waiting for your review, with QC
 opmagent review approve fluid 12       # or: reject geo 7 --comment "OWC should be 2165 m" (interactive only)
 opmagent import deck --input FIELD.DATA --name FieldX    # reverse a deck into models for review
 opmagent import verify --name FieldX                    # after approval: rebuild, run both, compare
-opmagent well build --wells w.csv --surveys s.csv --perforations p.csv --history h.xlsx --history-format volve --name FieldX_Wells
 ```
 
 **Watching a run.** Progress comes from Flow's log: report step, simulated date, percent of simulated time,
@@ -301,7 +322,7 @@ opmagent/
   servers/      data_server, pvt_server, sim_server (MCP)
   data/         study data: inbox load, checks, store (one read layer, checksums), deck and study input
   reports/      static QC reports ([qc] report = "html"), model views of deck data
-  notebooks/    QC notebook templates (fluid, geo), qc_lib / geo_qc_lib helpers, headless runner
+  notebooks/    QC notebook templates (fluid, geo, well), qc_lib / geo_qc_lib / well_qc_lib, headless runner
   pvt/          NeqSim engine, demo oil
   fluid/        Excel lab report, fluid pipeline
   geo/          geo modeler (gridding, kriging)
