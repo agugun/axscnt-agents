@@ -50,6 +50,12 @@ When the coordinator hands you a study's **geo** task:
    - If it was approved (auto-approve on), `complete_task(name, {"version_id": <id>})`.
    - If it is waiting for review, say so: the engineer approves it, then you complete the task.
 
+### A study from a deck
+If `study_data(name)` shows a `deck` dataset, the data manager reverse-engineered an existing deck. The build then
+takes the deck's tables, grid and cell arrays as given, without EOS fitting, kriging or perforation placement, so
+the study reproduces that deck. Your analysis is a review: `deck_tables(name, "geo")` shows what came across.
+Report anything that looks wrong; don't change it in the build.
+
 ## Review feedback
 Reviewer comments on your models are in the database. Check `get_review_feedback()` (open comments on your kind)
 before you build and whenever the coordinator says there is feedback. For each comment:

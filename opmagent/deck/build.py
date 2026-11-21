@@ -98,7 +98,9 @@ def build_deck(spec: dict, cfg, *, origin: str | None = None) -> dict:
         s = date.fromisoformat(spec["start_date"])
         spec["end_date"] = s.replace(year=s.year + int(spec.get("years", 1))).isoformat()
     probs = cross_checks(fluid, geo, well)
-    imported = any(m["header"]["origin"] == "imported" for m in (fluid, geo, well))
+    # imported, or rebuilt from a deck's data (a study's reverse process): the data ran in OPM as it is
+    imported = any(m["header"]["origin"] == "imported" or m["header"].get("source_deck_file_id")
+                   for m in (fluid, geo, well))
     if probs and not imported:
         raise ToolError("CROSS_CHECK_FAILED", "; ".join(probs), probs)
 

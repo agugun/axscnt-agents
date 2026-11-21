@@ -30,6 +30,12 @@ vscode_bin = "code"
 # "auto (approval disabled)"); models with validator errors still stop. false: you approve each model.
 auto_approve = false
 
+[qc]
+# notebook: the QC report is the standard Jupyter template (opmagent/notebooks/fluid_qc.ipynb), executed
+# headlessly and exported to HTML; the .ipynb is kept next to it. html: the older static report.
+report    = "notebook"
+timeout_s = 600
+
 [viewer]
 # ResInsight launcher, for the results viewer (opmagent results open)
 # resinsight_bin = "~/opm-agents/ResInsight/bin/resinsight"

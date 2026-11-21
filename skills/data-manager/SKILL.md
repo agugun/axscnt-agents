@@ -64,6 +64,26 @@ If someone edits a filed file after loading, the modelers' reads refuse it ("cha
 `verify_study_files` shows which files. Put the corrected file in the inbox and load again; never edit files in
 `data/` by hand.
 
+## From a deck (the reverse process)
+When the engineer asks to rebuild an existing deck as a study, reverse-engineer it into the study's data:
+`load_deck_data(name, "<deck .DATA>")` (or `opmagent data from-deck <name> <deck>`). The path is absolute, or
+relative to the study inbox. Run it with `check_only=true` first and read back what it found:
+- the grid size and number of wells
+- the tables per model
+- how many keywords are carried verbatim (`passthrough`)
+- whether the schedule is modelled or verbatim
+- the period, which comes from the deck
+
+What it stores:
+- **Tables in the database:** PVT, SCAL, rock, contacts, faults, wells, groups, completions and the schedule, with exact numbers.
+- **Files in `data/deck/load-NNN/`:** the grid and each cell array. Every load gets its own folder, so models built from an earlier load keep their files.
+- **The deck's spec:** dates, schedule mode and passthrough, so the deck builder renders the same deck.
+
+The modelers rebuild from this; at the end `opmagent study compare <name>` checks the study's run reproduces the
+source deck. It replaces any data loaded from the inbox (and the other way round). A deck only holds the
+modelers' results, not raw lab data, logs or tops, so a study from a deck rebuilds that deck; it can't be
+re-derived from measurements.
+
 ## Requests from modelers
 A modeler that finds data missing or poor raises a request to `data`. Your task is then reopened (ready) and the
 request shows in `study_status` under `open_requests`. To deal with it:

@@ -1,14 +1,20 @@
 """Fluid modeler pipeline: lab data -> tuned EOS -> black-oil tables -> draft -> QC report -> review.
 
+The QC report is the executed standard notebook (opmagent/notebooks/fluid_qc.ipynb) exported to HTML,
+or the static HTML report when [qc] report = "html".
+
 The agent drives this through `opmagent fluid build` (or step by step through the MCP tools).
 It uses the same DataService (fluid profile) and PVTService as the MCP servers, so every rule applies.
 """
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 from ..core.errors import INVALID_INPUT, ToolError
 from ..core.models import review_state
+from ..notebooks import runner
+from ..pvt.defaults import DEFAULT_STAGES
 from ..reports.fluid_report import build_report
 from ..servers.data_server import DataService
 from ..servers.data_server import wrap as dwrap
@@ -105,18 +111,50 @@ def build_fluid_model(fi: dict, model_name: str, *, data: DataService, pvt: PVTS
     for k, c in tuned["checks"].items():
         if k != "psat":
             metrics[f"{k}_max_error_pct"] = round(c["error"] * 100, 2)
-    slug = re.sub(r"[^A-Za-z0-9_-]+", "_", model_name)
-    report = build_report(data.cfg.file_store / "qc" / f"fluid_{slug}_v{v['version']}.html", model_name=model_name,
-                          version=v["version"], sample=fi.get("sample_name"), metrics=metrics, checks=tuned["checks"],
-                          assumptions=assumptions, warnings=val["warnings"], tables=bo["tables"], qc_sim=qc_sim,
-                          lab={"cce": fi.get("cce", []), "dl": fi.get("dl", []), "viscosity": fi.get("viscosity", [])},
-                          spec=tuned["spec"], inline_js=inline_js)
+    lab = {"cce": fi.get("cce", []), "dl": fi.get("dl", []), "viscosity": fi.get("viscosity", [])}
+    qc_extra, findings_say = {}, ""
+    if data.cfg.qc_report == "notebook":
+        folder = runner.qc_dir(data.cfg.file_store, model_name, v["version"])
+        runner.write_payload(folder, {
+            "model_name": model_name, "version": v["version"], "version_id": vid, "sample": fi.get("sample_name"),
+            "db_path": str(data.cfg.database), "spec": tuned["spec"], "metrics": metrics, "checks": tuned["checks"],
+            "assumptions": assumptions, "validator_warnings": val["warnings"], "p_range": [p_min, p_max],
+            "lab": {**lab, "composition": fi["composition"], "plus_fraction": fi["plus_fraction"],
+                    "separator_stages": stages or [{"pressure": s.pressure, "temperature": s.temperature}
+                                                   for s in DEFAULT_STAGES], "measured": m},
+            "model": {**qc_sim, "separator": sep,
+                      # DL is path dependent: compare point by point on the lab's own steps
+                      "dl_lab_steps": P("simulate_dl", fluid_handle=h,
+                                        pressures=[r["pressure"] for r in fi["dl"]])["rows"] if fi.get("dl") else []}})
+        nb = runner.run_fluid_qc(folder, data.cfg.database, vid, timeout=data.cfg.qc_timeout_s)
+        if not nb["ok"]:
+            return {"ok": False, "status": "draft", "version_id": vid, "qc_notebook": nb["notebook"],
+                    "error": nb["error"], "spoken_summary": f"The QC notebook failed ({nb['error']}). The draft is "
+                    f"kept; open {nb['notebook']} to see the failing cell."}
+        report = Path(nb["html"])
+        D("register_file", path=nb["notebook"], kind="qc_report", note=f"executed QC notebook, fluid version {vid}")
+        D("register_file", path=nb["payload"], kind="qc_report", note=f"QC payload, fluid version {vid}")
+        s = nb["summary"]
+        qc_extra = {"qc_notebook": nb["notebook"], "qc_findings": s["counts"], "qc_overall": s["overall"],
+                    "qc_notebook_sha256": nb["notebook_sha256"]}
+        if s["overall"] != "pass":
+            findings_say = (f" The QC notebook flags {s['counts']['fail']} fail and {s['counts']['warn']} warn "
+                            f"finding(s) for the reviewer.")
+    else:
+        slug = re.sub(r"[^A-Za-z0-9_-]+", "_", model_name)
+        report = build_report(data.cfg.file_store / "qc" / f"fluid_{slug}_v{v['version']}.html", model_name=model_name,
+                              version=v["version"], sample=fi.get("sample_name"), metrics=metrics, checks=tuned["checks"],
+                              assumptions=assumptions, warnings=val["warnings"], tables=bo["tables"], qc_sim=qc_sim,
+                              lab=lab, spec=tuned["spec"], inline_js=inline_js)
     rid = D("register_file", path=str(report), kind="qc_report")["file_id"]
     sub = D("submit_for_review", kind="fluid", version_id=vid, qc_report_file_id=rid,
-            metrics={k: (round(x, 4) if isinstance(x, float) else x) for k, x in metrics.items()})
+            metrics={**{k: (round(x, 4) if isinstance(x, float) else x) for k, x in metrics.items()},
+                     **{k: x for k, x in qc_extra.items() if k != "qc_notebook"}})
     return {"ok": True, "status": sub["header"]["status"], "version_id": vid, "version": v["version"],
-            "qc_report": str(report), "metrics": metrics, "checks": tuned["checks"], "assumptions": assumptions,
-            "spoken_summary": f"Fluid {model_name} version {v['version']} {review_state(sub)}. Bubble point "
-                              f"{psat:.0f} bar, Rs {metrics['rs_at_pb']:.0f}, Bo {metrics['bo_at_pb']:.3f}; "
-                              f"all checks within tolerance." if tuned["within_tolerance"] else
-                              f"Fluid {model_name} version {v['version']} {review_state(sub)}, with an accepted tolerance miss."}
+            "qc_report": str(report), **qc_extra, "metrics": metrics, "checks": tuned["checks"],
+            "assumptions": assumptions,
+            "spoken_summary": (f"Fluid {model_name} version {v['version']} {review_state(sub)}. Bubble point "
+                               f"{psat:.0f} bar, Rs {metrics['rs_at_pb']:.0f}, Bo {metrics['bo_at_pb']:.3f}; "
+                               f"all checks within tolerance." if tuned["within_tolerance"] else
+                               f"Fluid {model_name} version {v['version']} {review_state(sub)}, with an accepted "
+                               f"tolerance miss.") + findings_say}

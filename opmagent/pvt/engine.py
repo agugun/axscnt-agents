@@ -111,6 +111,32 @@ def _total_volume(s) -> float:
     return sum(s.getPhase(i).getVolume("m3") for i in range(s.getNumberOfPhases()))
 
 
+def components(spec: FluidSpec) -> list[dict]:
+    """The characterised components (after plus-fraction splitting and lumping): name, mol %, molar mass g/mol."""
+    ph = build(spec).getPhase(0)
+    return [{"name": str(ph.getComponent(i).getComponentName()), "mol_percent": 100.0 * ph.getComponent(i).getz(),
+             "mw_g_mol": 1000.0 * ph.getComponent(i).getMolarMass(),
+             "pseudo": str(ph.getComponent(i).getComponentName()).endswith("_PC")}
+            for i in range(ph.getNumberOfComponents())]
+
+
+def phase_envelope(spec: FluidSpec) -> dict:
+    """P-T phase envelope (degC, bar): bubble and dew branches, cricondenbar and cricondentherm."""
+    ops = _Ops(build(spec))
+    ops.calcPTphaseEnvelope()
+
+    def branch(t_key, p_key):
+        return [(t - 273.15, p) for t, p in zip(list(ops.get(t_key)), list(ops.get(p_key)))
+                if not (math.isnan(t) or math.isnan(p))]
+
+    def point(key):
+        t, p = list(ops.get(key))[:2]
+        return {"temperature_c": t - 273.15, "pressure": p}
+
+    return {"bubble": branch("bubT", "bubP"), "dew": branch("dewT", "dewP"),
+            "cricondenbar": point("cricondenbar"), "cricondentherm": point("cricondentherm")}
+
+
 def saturation_pressure(spec: FluidSpec) -> float:
     s = build(spec)
     sim = jneqsim.pvtsimulation.simulation.SaturationPressure(s)

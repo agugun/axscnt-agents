@@ -16,6 +16,11 @@ dependencies = [
   "openpyxl",
   "jinja2",
   "plotly",
+  # QC notebooks: executed headlessly in a kernel of this interpreter, exported to HTML
+  "nbformat>=5.9",
+  "nbclient>=0.10",
+  "nbconvert>=7",
+  "ipykernel>=6",
 ]
 
 [project.optional-dependencies]
@@ -34,4 +39,4 @@ opmagent-sim = "opmagent.servers.sim_server:main"
 include = ["opmagent*"]
 
 [tool.setuptools.package-data]
-opmagent = ["core/*.sql"]
+opmagent = ["core/*.sql", "notebooks/*.ipynb"]

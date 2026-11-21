@@ -2,6 +2,20 @@
 
 ## 0.2.0 (unreleased)
 
+QC notebooks for the fluid modeler.
+
+- **Standard QC notebook** (`opmagent/notebooks/fluid_qc.ipynb`). It is now the fluid QC report: each build
+  writes a payload, runs the template in a fresh kernel and registers the HTML export as the version's report.
+  The approval stays tied to that file's sha256, and the executed `.ipynb` and the payload are registered with
+  it. Its findings cover lab data, lab vs model and the black-oil tables as stored. They go into `qc_json`
+  metrics (`qc_overall`, `qc_findings`, `qc_notebook_sha256`). A failing cell leaves the version a draft.
+- **Investigation notebooks**: `create_investigation_notebook` / `run_investigation_notebook` (fluid profile)
+  and `opmagent fluid investigate | run-notebook`. They are registered as supporting evidence.
+- `run_qc_notebook` / `opmagent fluid qc`: re-run the standard QC for a draft and get a new report to resubmit.
+- DL lab-vs-model errors are compared on the lab's own steps; DL is path dependent.
+- `[qc] report = "notebook" | "html"`, `[qc] timeout_s`. `engine.phase_envelope`, `engine.components`.
+- New dependencies: nbformat, nbclient, nbconvert, ipykernel.
+
 Studies: the agents work through one simulation question together.
 
 - **Study board** (`studies`, `study_tasks`, `study_requests`, `study_events`, added to existing databases on
@@ -28,6 +42,14 @@ Studies: the agents work through one simulation question together.
   - perforations vs surveyed depth
   - OWC vs water saturation logs
   - production vs well types
+- **Reverse process: a study from an existing deck.** The data manager reads a deck into the study's data: `opmagent data from-deck <study> <deck> [--check]`, MCP `load_deck_data`.
+  - Tables go to the database: PVT, SCAL, rock, contacts, faults, wells, groups, IJK completions and the schedule (`data_deck_rows`, exact numbers).
+  - The grid and cell arrays stay files in `<study>/data/deck/load-NNN/`, catalogued. Each load gets its own folder.
+  - The model headers, deck spec and coverage go to `data_deck`.
+  - The modelers build normal versions from it with `opmagent study build`, going through their validators and the approval gate. The deck builder renders the source deck's dates, schedule and passthrough keywords.
+  - `opmagent study compare <study>` runs the source deck and checks the study's run reproduces it: static, initial state and every summary vector.
+  - Tested through whole studies on the hello deck, a deck built forward from raw data, SPE1, SPE9 and Norne.
+  - A deck holds the modelers' results, not their raw data. So a study from a deck rebuilds that deck as given; it doesn't re-derive lab data, logs or tops.
 - **Modelers read through the data layer.** New read tools: `study_data`, `study_data_rows`, `log_stats` (catalog), `log_samples` (from the files), `fluid_sample`, `study_files`, `check_study_data`.
   - The modelers use them for their analysis and interpretation.
   - `opmagent study build fluid|geo|well` builds from the tables. The version records the inbox files the data came from.

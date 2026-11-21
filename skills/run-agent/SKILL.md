@@ -40,3 +40,8 @@ coordinator asks them and tells you; if it didn't, return and ask for the confir
 `opmagent runs watch <run id>`. When it has finished and is stored, `complete_task(name, {"run_id": <id>})` and
 give the main results (`query_results`: FOPR, FWCT, FPR). A failed run: `fail_task(name, "<last log lines>")`.
 
+If the study was rebuilt from a deck, prove it: once the engineer has said yes (it starts Flow for the source
+deck once), run `opmagent study compare <name>`. It checks the static grid and properties, the initial state and
+every summary vector against the source deck's run. Report pass or fail, and on a fail the first vectors that
+differ (the report is in `<study>/runs/compare_with_source.json`).
+

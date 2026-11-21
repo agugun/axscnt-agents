@@ -91,6 +91,12 @@ opmagent data verify FieldA_WF         # the filed originals are still the files
 opmagent study build geo FieldA_WF     # likewise fluid, well, then deck: from the database, with the study's names
 opmagent review comment geo 12 "PERMX too high in layer 3" --item "PERMX L3"   # feedback the modeler answers
 opmagent review feedback --all         # comments and answers
+
+# the reverse process: a study that rebuilds an existing deck
+opmagent study init SPE9_RB --requirement "rebuild SPE9"
+opmagent data from-deck SPE9_RB ~/opmagent/open-data/opm-tests/spe9/SPE9.DATA   # tables -> database, arrays -> files
+opmagent study build geo SPE9_RB       # likewise fluid, then well (after geo), then deck: the deck's data as given
+opmagent study compare SPE9_RB         # after the run: the study reproduces the source deck (static, initial, dynamic)
 opmagent study status FieldA_WF        # the board: tasks, open requests, what is next
 opmagent study events FieldA_WF        # its history
 opmagent results open --study FieldA_WF   # open the study's run in ResInsight
@@ -121,6 +127,41 @@ opmagent fluid build --input lab.xlsx --name FieldA_Oil  # build, QC report, sub
 
 Exit code 0 means the model is waiting for review; the QC report path is in the JSON output. If Bo, Rs or
 viscosity miss tolerance, nothing is written and the result says `needs_decision`.
+
+### QC notebooks
+
+The QC report is a Jupyter notebook. Every build runs the standard template
+(`opmagent/notebooks/fluid_qc.ipynb`) headlessly in a fresh kernel of the opmagent environment and keeps the
+results per version in `data/files/qc/fluid_<model>_v<N>/`:
+
+| File | What it is |
+|---|---|
+| `payload.json` | what the build knew: lab data, simulated experiments, tuning checks, EOS spec |
+| `fluid_qc.ipynb` | the executed notebook; open it in VS Code to re-run cells or change a plot |
+| `fluid_qc.html` | the reviewer's copy, without code. It is the version's registered QC report, and an approval is tied to its sha256 |
+| `qc_summary.json` | pass / warn / fail findings |
+| `investigations/` | free-form notebooks |
+
+The template reads the black-oil tables back from the database (read-only), so it checks the rows the deck
+builder will write. It covers:
+- **Lab data:** composition sum, DL monotonicity, the CCE break against Psat, and the characterised composition.
+- **Phase envelope:** reservoir and separator conditions, and Psat from both the model and the lab.
+- **Lab vs model:** CCE, DL (compared on the lab's own steps) and viscosity, with error tables.
+- **What OPM needs from the tables:** saturated and undersaturated PVTO trends, an undersaturated branch on the
+  top Rs, PVDG trends, pressure coverage, and RSVD within the Rs range.
+
+Warn and fail findings don't block the build. They are listed for the reviewer and in the spoken summary. If a
+cell fails, the version stays a draft and the error points at the notebook.
+
+```bash
+opmagent fluid investigate 12 --purpose "C7+ MW sensitivity on the DL match" --open   # starter notebook in VS Code
+opmagent fluid run-notebook data/files/qc/fluid_FieldA_Oil_v3/investigations/01_C7_MW_sensitivity.ipynb
+opmagent fluid qc 12          # re-run the standard QC for a draft (after return_to_draft), then resubmit
+```
+
+The agent has the same commands as MCP tools on the fluid profile: `create_investigation_notebook`,
+`run_investigation_notebook` and `run_qc_notebook`. Notebooks only read and plot; changing the model always
+takes a new build. Set `[qc] report = "html"` to go back to the static report.
 
 The agent skill is in `skills/fluid-modeler/SKILL.md`. For Claude Code, copy or link `skills/*` into
 `.claude/skills/` of the project you run the agents from.
@@ -215,7 +256,8 @@ opmagent/
   core/         schema_base.sql, schema.sql (generated), db.py, config.py
   validators/   fluid, geo, well, cross-model rules
   servers/      data_server, pvt_server, sim_server (MCP)
-  reports/      QC report builder
+  reports/      static QC report builder ([qc] report = "html")
+  notebooks/    QC notebook template, qc_lib helpers, headless runner
   pvt/          NeqSim engine, demo oil
   fluid/        Excel lab report, fluid pipeline
   geo/          geo modeler (gridding, kriging)

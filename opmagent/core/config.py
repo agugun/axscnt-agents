@@ -29,6 +29,8 @@ class Config:
     vscode_bin: str = "code"
     auto_approve: bool = False          # [study] auto_approve: models that pass their validator are approved
     resinsight_bin: str | None = None   # [viewer] resinsight_bin: ResInsight launcher (bin/resinsight)
+    qc_report: str = "notebook"         # [qc] report: "notebook" (executed Jupyter template) or "html" (static report)
+    qc_timeout_s: int = 600             # [qc] timeout_s: per-cell timeout for QC notebooks
 
     @property
     def inbox(self) -> Path:
@@ -54,6 +56,9 @@ def load(path: str | os.PathLike | None = None) -> Config:
             "opmagent.toml not found; copy opmagent.example.toml and set OPMAGENT_CONFIG or place it in the working directory"
         )
     paths, d, sim, dbg, st, vw = (data.get(k, {}) for k in ("paths", "defaults", "simulation", "debug", "study", "viewer"))
+    qc = data.get("qc", {})
+    if qc.get("report", "notebook") not in ("notebook", "html"):
+        raise ValueError('[qc] report must be "notebook" or "html"')
     cfg = Config(
         database=_expand(paths["database"]),
         file_store=_expand(paths["file_store"]),
@@ -69,5 +74,7 @@ def load(path: str | os.PathLike | None = None) -> Config:
         vscode_bin=dbg.get("vscode_bin", "code"),
         auto_approve=bool(st.get("auto_approve", False)),
         resinsight_bin=os.path.expanduser(vw["resinsight_bin"]) if vw.get("resinsight_bin") else None,
+        qc_report=qc.get("report", "notebook"),
+        qc_timeout_s=int(qc.get("timeout_s", 600)),
     )
     return cfg

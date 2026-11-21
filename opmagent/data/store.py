@@ -300,6 +300,15 @@ def inventory(con, study) -> dict:
                    "categories": {r[0]: r[1] for r in con.execute(
                        "SELECT category, COUNT(*) FROM data_files WHERE study_id = ? GROUP BY category", (sid,))},
                    "not_ok": one("SELECT COUNT(*) FROM data_files WHERE study_id = ? AND status != 'ok'")}
+    dk = con.execute("SELECT source_path, coverage_json, grid_json FROM data_deck WHERE study_id = ?", (sid,)).fetchone()
+    ds["deck"] = {"rows": one("SELECT COUNT(*) FROM data_deck_rows WHERE study_id = ?")}
+    if dk:
+        cov = json.loads(dk["coverage_json"] or "{}")
+        ds["deck"].update(source=dk["source_path"], grid=json.loads(dk["grid_json"] or "{}"),
+                          schedule_mode=cov.get("schedule_mode"), coverage=cov.get("counts"),
+                          tables={r[0] + "." + r[1]: r[2] for r in con.execute(
+                              "SELECT kind, tbl, COUNT(*) FROM data_deck_rows WHERE study_id = ? GROUP BY kind, tbl",
+                              (sid,))})
     if ds["history"]["rows"]:
         ds["history"]["dates"] = list(con.execute("SELECT MIN(date), MAX(date) FROM data_production "
                                                   "WHERE study_id = ?", (sid,)).fetchone())

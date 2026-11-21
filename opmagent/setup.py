@@ -23,7 +23,7 @@ AGENTS = {
     "deck-importer": ("import", ["opm-sim"], "Imports existing OPM/Eclipse decks into models for review and verifies the round trip."),
     "deck-builder": ("deck", [], "Builds validated OPM decks from a simulation requirement and approved models."),
     "run-agent": ("run", ["opm-sim"], "Runs validated decks, stores and compares results, and prepares VS Code debug sessions."),
-    "data-manager": ("data", [], "Loads a study's raw data from many sources (lab reports, LAS, tops, well tables, production history, Volve) into the database for the modelers, and answers their data requests."),
+    "data-manager": ("data", [], "Loads a study's raw data from many sources (lab reports, LAS, tops, well tables, production history, Volve) into the database for the modelers, reverse-engineers existing decks into study data, and answers the modelers' data requests."),
     "results-viewer": ("view", [], "Opens finished runs in ResInsight: grid, properties over time and summary vectors."),
 }
 SKILL_OF = {name: name for name in AGENTS}
@@ -130,6 +130,8 @@ auto_approve = false
     lines = []
     for name, (profile, extra, desc) in AGENTS.items():
         tools = ["Bash", "Read", "Write", "Glob", "Grep", f"mcp__opm-data-{profile}"] + [f"mcp__{e}" for e in extra]
+        if profile == "fluid":
+            tools[3:3] = ["NotebookEdit"]   # writes the analysis cells of its investigation notebooks
         body = f"""---
 name: {name}
 description: {desc}

@@ -20,6 +20,7 @@ from mcp.server.mcpserver import MCPServer
 from ..core import config as cfgmod
 from ..core import db, files, models, review, studies
 from ..core.errors import FORBIDDEN, INVALID_INPUT, ToolError
+from ..notebooks import runner
 
 PROFILES = ("fluid", "geo", "well", "import", "deck", "run", "data", "view", "reviewer")
 MODELER_KIND = {"fluid": "fluid", "geo": "geo", "well": "well"}
@@ -255,6 +256,27 @@ class DataService:
         from ..data.load import load
         return {"ok": True, **load(self.con, name, write=not check_only)}
 
+    def load_deck_data(self, name: str, deck_path: str, check_only: bool = False) -> dict:
+        """Data manager, the reverse process: read an existing deck (absolute path, or relative to the study inbox)
+        into the study's data, so the modelers rebuild exactly that deck: tables (PVT, SCAL, contacts, wells,
+        completions, schedule) into the database, the grid and cell arrays as files. Replaces the study's data."""
+        if self.profile != "data":
+            raise ToolError(FORBIDDEN, "only the data manager loads study data")
+        from ..data.deck_source import load_deck
+        return {"ok": True, **load_deck(self.con, name, deck_path, write=not check_only)}
+
+    def deck_tables(self, name: str, kind: str | None = None, table: str | None = None, limit: int = 200) -> dict:
+        """For a study whose data came from a deck: its tables per model (fluid pvto/pvdg/pvtw/density/...,
+        geo swof/sgof/rock/contacts/faults, well wells/well_completions/well_events), first `limit` rows each."""
+        from ..data.deck_source import deck_info, deck_tables
+        info = deck_info(self.con, name)
+        t = deck_tables(self.con, name, kind, table)
+        n = {f"{k}.{tb}": len(r) for k, tabs in t.items() for tb, r in tabs.items()}
+        t = {k: {tb: r[:int(limit)] for tb, r in tabs.items()} for k, tabs in t.items()}
+        return {"ok": True, "source": info["source_path"], "grid": info["grid"], "props": info["props"],
+                "spec": {k: v for k, v in info["spec"].items() if k not in ("passthrough", "summary_passthrough")},
+                "row_counts": n, "tables": t, "spoken_summary": f"{sum(n.values())} row(s) in {len(n)} table(s)."}
+
     def study_data(self, name: str) -> dict:
         """What is loaded for a study: per dataset (pvt, tops, logs, geo_spec, contacts, wells, surveys,
         perforations, controls, history) its rows, wells and source files; the open data issues; who is ready."""
@@ -344,6 +366,52 @@ class DataService:
         return {"ok": True, "feedback": f, "spoken_summary": f"Comment {f['id']} added to {kind} "
                                                              f"{f['model_name']} v{f['version']}."}
 
+    # ------------------------------------------------------------ QC notebooks (fluid modeler)
+    def _qc_folder(self, version_id: int):
+        self._kind_allowed("fluid")
+        h = models.header(self.con, "fluid", version_id)
+        return h, runner.qc_dir(self.cfg.file_store, h["model_name"], h["version"])
+
+    def run_qc_notebook(self, version_id: int) -> dict:
+        """Re-run the standard fluid QC notebook for a draft version (e.g. after return_to_draft) and register
+        the new report. Pass the returned qc_report_file_id to submit_for_review. Versions under review or
+        approved keep the report they were reviewed with."""
+        h, folder = self._qc_folder(version_id)
+        if h["status"] != "draft":
+            raise ToolError(FORBIDDEN, f"fluid {h['model_name']} v{h['version']} is {h['status']}; its QC report is "
+                                       "frozen (return it to draft first)")
+        r = runner.run_fluid_qc(folder, self.cfg.database, version_id, timeout=self.cfg.qc_timeout_s)
+        if not r["ok"]:
+            raise ToolError("QC_NOTEBOOK_FAILED", f"the QC notebook failed: {r['error']}", {"notebook": r["notebook"]})
+        files.register_file(self.con, r["notebook"], "qc_report", f"executed QC notebook, fluid version {version_id}")
+        fid = files.register_file(self.con, r["html"], "qc_report")
+        s = r["summary"]
+        return {"ok": True, "qc_report_file_id": fid, "html": r["html"], "notebook": r["notebook"],
+                "overall": s["overall"], "counts": s["counts"],
+                "findings": [f for f in s["findings"] if f["status"] in ("fail", "warn")],
+                "spoken_summary": f"QC notebook ran: {s['overall']}, {s['counts']['fail']} fail and "
+                                  f"{s['counts']['warn']} warn finding(s)."}
+
+    def create_investigation_notebook(self, version_id: int, purpose: str) -> dict:
+        """Start a free-form investigation notebook for a fluid version (any status): purpose, parameters and
+        data-loading cells are written for you. Add analysis cells to the returned path (read only: load,
+        compute, plot; model changes go through a new build), then call run_investigation_notebook."""
+        _, folder = self._qc_folder(version_id)
+        path = runner.create_investigation(folder, self.cfg.database, version_id, purpose)
+        return {"ok": True, "path": str(path),
+                "spoken_summary": f"Investigation notebook created: {path.name}. Add the analysis cells, then run it."}
+
+    def run_investigation_notebook(self, path: str) -> dict:
+        """Execute an investigation notebook (under the QC folder) in a fresh kernel, export it to HTML with the
+        code shown, and register both as supporting evidence for the reviewer."""
+        r = runner.run_notebook(path, self.cfg.file_store / "qc", timeout=self.cfg.qc_timeout_s)
+        fid = files.register_file(self.con, r["html"], "qc_report", f"investigation: {os.path.basename(path)}")
+        files.register_file(self.con, r["notebook"], "qc_report", f"investigation notebook: {os.path.basename(path)}")
+        say = ("Investigation ran." if r["ok"] else
+               f"Investigation stopped at a failing cell ({r['error']}); the outputs so far are saved.")
+        return {"ok": True, "ran_clean": r["ok"], "error": r["error"], "html": r["html"], "notebook": r["notebook"],
+                "file_id": fid, "spoken_summary": say}
+
     # ------------------------------------------------------------ reviewer (human only)
     def list_pending_reviews(self) -> dict:
         """List model versions waiting for review."""
@@ -382,25 +450,26 @@ COMMON = ["resolve_name", "find_inbox_file", "list_models", "get_model"]
 WRITER = ["register_file", "create_version", "update_draft", "write_tables", "run_validator", "submit_for_review",
           "return_to_draft"]
 DATA_READ = ["study_data", "study_data_rows", "log_stats", "log_samples", "fluid_sample", "study_files",
-             "verify_study_files", "check_study_data"]
+             "verify_study_files", "check_study_data", "deck_tables"]
 FEEDBACK = ["get_review_feedback", "answer_review_feedback"]
 STUDY = ["study_status", "list_studies", "start_task", "complete_task", "fail_task", "retry_task", "raise_request",
          "resolve_request"]
+QC_NOTEBOOKS = ["run_qc_notebook", "create_investigation_notebook", "run_investigation_notebook"]
 TOOLS = {
-    "fluid": COMMON + WRITER + STUDY + DATA_READ + FEEDBACK, "geo": COMMON + WRITER + STUDY + DATA_READ + FEEDBACK,
+    "fluid": COMMON + WRITER + STUDY + DATA_READ + FEEDBACK + QC_NOTEBOOKS, "geo": COMMON + WRITER + STUDY + DATA_READ + FEEDBACK,
     "well": COMMON + WRITER + STUDY + DATA_READ + FEEDBACK,
     "import": COMMON + WRITER,
     "deck": COMMON + ["create_deck", "add_deck_file", "set_deck_status", "list_decks", "get_deck", "init_study"] + STUDY,
     "run": COMMON + ["list_decks", "get_deck"] + STUDY,
-    "data": COMMON + ["register_file", "load_study_data"] + DATA_READ + STUDY,
+    "data": COMMON + ["register_file", "load_study_data", "load_deck_data"] + DATA_READ + STUDY,
     "view": COMMON + ["list_decks", "get_deck"] + STUDY,
     "reviewer": COMMON + ["list_pending_reviews", "get_qc_report", "approve", "reject", "add_review_comment",
                           "get_review_feedback", "list_decks", "get_deck", "study_status", "list_studies",
                           "study_data", "study_data_rows", "log_stats"],
 }
 WRITE_TOOLS = (set(WRITER) | {"create_deck", "add_deck_file", "set_deck_status", "approve", "reject", "init_study",
-                               "load_study_data", "answer_review_feedback", "add_review_comment"}
-               | set(STUDY)) - {"run_validator", "study_status", "list_studies"}
+                               "load_study_data", "load_deck_data", "answer_review_feedback", "add_review_comment"}
+               | set(STUDY) | set(QC_NOTEBOOKS)) - {"run_validator", "study_status", "list_studies"}
 
 
 def wrap(svc: DataService, name: str):

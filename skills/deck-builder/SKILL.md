@@ -52,3 +52,6 @@ spec plus approved models into an OPM deck. You never write deck keywords yourse
 3. `ok: true` -> `complete_task(name, {"deck_id": <id>})`. A cross-check failure names the model to fix:
    `raise_request(name, "<fluid|geo|well>", "improve_data", "<the problem>")`.
 
+For a study whose data came from a deck (the data manager's reverse process), `opmagent study build deck <name>`
+uses the source deck's own dates, report steps, schedule and verbatim keywords rather than the study's period,
+so the deck is the same as the source.

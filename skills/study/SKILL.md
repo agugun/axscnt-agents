@@ -23,6 +23,13 @@ period (years or end date), start date, report frequency; ask for what's missing
 engineer the study's `inbox/` folder and what to put there (lab report workbook, LAS logs, tops, well tables,
 production history, the grid spec and contacts), and that the data manager is next.
 
+### A study from an existing deck (the reverse process)
+If the engineer wants to rebuild a deck as a study ("make a study from SPE9.DATA"):
+1. Read back the name, the requirement and the deck's path. The period comes from the deck.
+2. On "yes", start the study as above, then hand the data task to the **data-manager**: "load the deck `<path>` (`load_deck_data`)".
+3. From there the study runs as usual: the modelers rebuild from the deck's data, the well modeler after geo.
+4. After the run, ask the engineer, then have the **run-agent** run `opmagent study compare <name>`. Report whether the study reproduces the deck.
+
 ## Run a study (repeat until complete)
 1. `opmagent study status <name> --json`. The `next` list is the ready tasks and their agents.
 2. Hand each ready task to its agent (Agent tool, the agent's name), with: the study name, "do your study task

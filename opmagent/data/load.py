@@ -87,7 +87,7 @@ DATASETS = {
 }
 STUDY_TABLES = ["data_issues", "data_geo_spec", "data_contacts", "data_pvt_samples", "data_production",
                 "data_controls", "data_perforations", "data_log_curves", "data_surveys", "data_tops", "data_wells",
-                "data_sources", "data_files"]
+                "data_sources", "data_deck_rows", "data_deck", "data_files"]
 
 
 def _norm(c) -> str:
@@ -307,6 +307,9 @@ def load(con, name: str, *, write: bool = True, geo_spec: dict | None = None) ->
         from .checks import run_checks
         for i in run_checks(con, st["id"]):
             L.issue(*i)
+        for p in f["decks"]:
+            L.issue("data", "warning", L.rel(p), f"{L.rel(p)} is a deck: to rebuild the study from it, load it with "
+                                                 f"opmagent data from-deck {name} {L.rel(p)} (it replaces this data)")
         for u in f.get("unreadable", []):
             L.issue("data", "warning", "unreadable", u)
         con.executemany("INSERT INTO data_issues(study_id, modeler, severity, item, message) VALUES (?,?,?,?,?)",
