@@ -21,6 +21,8 @@ mu_o = 0.10
 max_parallel = 2
 
 [debug]
+# Only for debug_simulation (VS Code, step through OPM's code). Runs always use [paths] flow_bin, a release Flow:
+# a Debug build is many times slower, and opmagent refuses a flow_bin that points at opm_debug_flow.
 # opm_source_root = "~/src/opm"
 # opm_debug_flow  = "~/src/opm/build/opm-simulators/bin/flow"
 vscode_bin = "code"
