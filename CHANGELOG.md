@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.3.0 (unreleased)
+
+The reservoir-engineering model: a fourth model kind, `res`, with its own agent, review and approval.
+
+**Upgrade: a fresh database.** SCAL, rock compressibility, contacts and the region arrays moved from the geo model
+to the res model, and SQLite can't change the existing tables in place. `opmagent` refuses a 0.2 database and says
+so; move it aside and run `opmagent init-db` (or `opmagent setup <workspace>`), then rebuild the studies.
+No approvals are carried over. Design: [docs/design/res-model.md](docs/design/res-model.md).
+
+- **Res model** (`res_models`, `res_model_versions`, `res_properties`; `swof`, `sgof`, `rock`, `contacts`,
+  `aquifers`, `aquifer_connections` now belong to it): the dynamic half of the reservoir model, defined on one geo
+  version (`geo_version_id`, required). Region arrays SATNUM, EQLNUM, FIPNUM, ROCKNUM and SWATINIT moved with it;
+  PVTNUM stays in geo. The lifecycle triggers, approval gate and review feedback work for `res` like the others.
+- **Geo model** is the static model: grid, cell properties, PVTNUM, faults. The geo pipeline no longer writes SCAL,
+  rock or contacts (`contacts` in the geo spec is optional, for the HCPV in its summary only); its QC notebook drops
+  the contacts and SCAL checks.
+- **Res modeler** agent (`res` profile, which also reads geo models) and `res-modeler` skill.
+  `opmagent res build --spec --geo-version --name`, `opmagent study build res`: Corey per rock type or measured
+  tables, rock, contacts per EQLNUM, region arrays by geo zone or layer range. Validator: region arrays against the
+  geo grid, SWOF/SGOF rules per SATNUM, contacts per EQLNUM, aquifer connections. Static QC page for now.
+- **Decks take four approved models**: `decks.res_version_id`; a trigger checks it is approved, has the deck's unit
+  system and is defined on the deck's geo version. The deck builder merges geo and res (`render.combine`).
+- **Studies**: chain `data -> fluid, geo -> res (after geo), well -> deck -> run -> view`; model name `<study>_Res`.
+  Contacts are the res modeler's input: their data issues and the contacts-vs-SW-log check are reported for `res`.
+- **Reverse process and importer** produce four models; the deck comparison compares the res tables too. SPE1,
+  SPE9 and Norne (reverse study and importer round trip) pass unchanged. `hello` builds four demo models.
+- The well QC notebook takes the contacts from the res model on its geo version.
+
 ## 0.2.0 (unreleased)
 
 QC notebooks for the fluid modeler.

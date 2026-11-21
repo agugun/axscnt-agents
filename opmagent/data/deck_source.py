@@ -2,7 +2,7 @@
 
 The data manager reads a deck (`opmagent data from-deck <study> <deck>`, MCP `load_deck_data`) and stores what
 each modeler needs to rebuild it exactly; the modelers build their versions from it the usual way
-(`opmagent study build fluid|geo|well`), the deck builder renders the deck with the source deck's own schedule,
+(`opmagent study build fluid|geo|res|well`), the deck builder renders the deck with the source deck's own schedule,
 dates and passthrough keywords, and `opmagent study compare` runs the source deck and checks the study's run
 reproduces it (static grid and properties, initial state, every summary vector).
 
@@ -33,7 +33,8 @@ from ..core import studies
 from ..core.errors import INVALID_INPUT, NOT_FOUND, ToolError
 from . import store
 
-KINDS = ("fluid", "geo", "well")
+KINDS = ("fluid", "geo", "res", "well")
+RES_PROPS = {"SATNUM", "EQLNUM", "FIPNUM", "ROCKNUM", "SWATINIT"}   # arrays of the res model; the rest are geo's
 
 
 def _json_default(v):
@@ -100,7 +101,8 @@ def load_deck(con, name: str, deck_path: str | Path, *, write: bool = True) -> d
                     (sid, src_fid, str(deck_path), deck_path.name, "deck", rows))
         # arrays and the grid stay files: catalogue each, and point the geo header and properties at them
         ids = {}
-        for p in sorted({*imp["files"], *(x["file"] for x in imp["geo"]["props"] if "file" in x),
+        all_props = imp["geo"]["props"] + imp["res"]["props"]
+        for p in sorted({*imp["files"], *(x["file"] for x in all_props if "file" in x),
                          *([imp["geo"]["header"]["grid_file"]] if imp["geo"]["header"].get("grid_file") else [])}):
             p = Path(p)
             fid = filesmod.register_file(con, p, "grid" if p.name == "GRID.GRDECL" else "property")
@@ -116,7 +118,7 @@ def load_deck(con, name: str, deck_path: str | Path, *, write: bool = True) -> d
         if grid_file:
             headers["geo"]["grid_data_file_id"] = ids[str(Path(grid_file))]
         props = [{"keyword": x["keyword"], "data_file_id": ids[str(Path(x["file"]))]} if "file" in x else
-                 {"keyword": x["keyword"], "const_value": x["const_value"]} for x in imp["geo"]["props"]]
+                 {"keyword": x["keyword"], "const_value": x["const_value"]} for x in all_props]
         con.execute("INSERT INTO data_deck(study_id, source_path, source_file_id, folder, headers_json, spec_json, "
                     "props_json, coverage_json, grid_json) VALUES (?,?,?,?,?,?,?,?,?)",
                     (sid, str(deck_path), src_fid, str(folder), _dumps(headers), _dumps(imp["spec"]), _dumps(props),
@@ -132,7 +134,8 @@ def load_deck(con, name: str, deck_path: str | Path, *, write: bool = True) -> d
                            "the schedule is carried verbatim (" + "; ".join(cov["schedule_reasons"][:3]) + "): the "
                            "well model holds wells and completions, the deck keeps the original schedule text"))
         for arr, n in (cov.get("inexact_cells") or {}).items():
-            issues.append(("geo", "warning", arr, f"{n} cell(s) of {arr} can't be written back bit-exactly"))
+            issues.append(("res" if arr in RES_PROPS else "geo", "warning", arr,
+                           f"{n} cell(s) of {arr} can't be written back bit-exactly"))
         spec = imp["spec"]
         sp = st["spec"]
         if sp.get("start_date") and sp["start_date"] != spec["start_date"]:
@@ -290,7 +293,8 @@ def _qc_report(con, path: Path, kind: str, name: str, version: int, info: dict, 
                assumptions: list) -> Path:
     from ..reports.deck_model_report import model_report
     g = info["grid"]
-    arrays = _arrays(con, info) if kind == "geo" else None
+    arrays = ({k: v for k, v in _arrays(con, info).items() if k not in RES_PROPS} if kind == "geo" else
+              _arrays(con, info, RES_PROPS) if kind == "res" else None)
     poro_top = None
     if kind == "well":
         a = _arrays(con, info, {"PORO"}).get("PORO")
@@ -327,6 +331,8 @@ def build_model(cfg, con, study: str, kind: str, model_name: str, *, geo_version
             h["grid_file_id"] = D("register_file", path=str(p), kind="grid")["file_id"]
         props = []
         for x in info["props"]:
+            if x["keyword"] in RES_PROPS:
+                continue
             if "data_file_id" in x:
                 p = store.verified_path(con, x["data_file_id"])
                 props.append({"keyword": x["keyword"],
@@ -334,6 +340,22 @@ def build_model(cfg, con, study: str, kind: str, model_name: str, *, geo_version
             else:
                 props.append({"keyword": x["keyword"], "const_value": x["const_value"]})
         tables = {**tables, "geo_properties": props}
+    if kind == "res":
+        if geo_version_id is None:
+            raise ToolError(INVALID_INPUT, "the res model is defined on the deck's grid: build the geo model first and "
+                                           "give its version (the study does this when geo is done)")
+        h["geo_version_id"] = geo_version_id
+        props = []
+        for x in info["props"]:
+            if x["keyword"] not in RES_PROPS:
+                continue
+            if "data_file_id" in x:
+                p = store.verified_path(con, x["data_file_id"])
+                props.append({"keyword": x["keyword"],
+                              "file_id": D("register_file", path=str(p), kind="property")["file_id"]})
+            else:
+                props.append({"keyword": x["keyword"], "const_value": x["const_value"]})
+        tables = {**tables, "res_properties": props}
     if kind == "well":
         if geo_version_id is None:
             raise ToolError(INVALID_INPUT, "the deck's completions are on its grid: build the geo model first and "

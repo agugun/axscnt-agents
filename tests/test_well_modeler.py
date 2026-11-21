@@ -60,7 +60,9 @@ def test_well_model_to_deck(cfg, tmp_path):
     g = hm.build_geo(cfg, origin="built", name="FieldT_Geo")
     approve(cfg, "fluid", f["version_id"])
     approve(cfg, "geo", g["version_id"])
-    d = build_deck({"name": "FieldT", "fluid": "FieldT_Oil", "geo": "FieldT_Geo", "well": "FieldT_Wells",
+    r_ = hm.build_res(cfg, g["version_id"], origin="built", name="FieldT_Res")
+    approve(cfg, "res", r_["version_id"])
+    d = build_deck({"name": "FieldT", "fluid": "FieldT_Oil", "geo": "FieldT_Geo", "res": "FieldT_Res", "well": "FieldT_Wells",
                     "start_date": "2026-01-01", "end_date": "2027-01-01", "report": "monthly"}, cfg)
     assert d["ok"], d["validation_log"]
     text = open(d["path"]).read()

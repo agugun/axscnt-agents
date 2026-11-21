@@ -1,4 +1,4 @@
-"""A whole study, each step through the profile of the agent that does it: data manager -> fluid, geo, well
+"""A whole study, each step through the profile of the agent that does it: data manager -> fluid, geo, res, well
 modelers (auto-approved) -> deck builder -> run agent -> results viewer."""
 from dataclasses import replace
 
@@ -37,8 +37,9 @@ def test_study_end_to_end(cfg, tmp_path, monkeypatch):
     assert call("data", "complete_task", name="FieldS", result={})["unlocked"] == ["fluid", "geo", "well"]
     assert call("geo", "study_data", name="FieldS")["datasets"]["logs"]["wells"] == ["A", "B", "C", "D"]
 
-    # modelers: geo first so the well model knows the grid
-    for kind in ("geo", "fluid", "well"):
+    # modelers: geo first so the res and well models know the grid
+    unlocked = {}
+    for kind in ("geo", "res", "fluid", "well"):
         call(kind, "start_task", name="FieldS")
         r = _study_build(cfg, con, kind, "FieldS")
         assert r["ok"], r
@@ -49,7 +50,10 @@ def test_study_end_to_end(cfg, tmp_path, monkeypatch):
         assert src, f"{kind} version has no source files"
         done = call(kind, "complete_task", name="FieldS", result={"version_id": vid})
         assert done["ok"], done
-    assert done["unlocked"] == ["deck"]
+        unlocked[kind] = done["unlocked"]
+    assert unlocked == {"geo": ["res"], "res": [], "fluid": [], "well": ["deck"]}   # res waits for geo's grid
+    res = con.execute("SELECT r.geo_version_id, g.id FROM res_model_versions r, geo_model_versions g").fetchone()
+    assert res[0] == res[1]
     assert {r_[0] for r_ in con.execute("SELECT reviewer FROM approvals")} == {"auto (approval disabled)"}
 
     # deck builder

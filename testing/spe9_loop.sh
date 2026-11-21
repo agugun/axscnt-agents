@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPE9 reverse loop, both scenarios, from a terminal (see testing/spe9-reverse-loop.md).
 #
-#   scenario 1 (SPE9_S1): SPE9.DATA -> study input -> fluid, geo, well models -> model views (no simulation)
+#   scenario 1 (SPE9_S1): SPE9.DATA -> study input -> fluid, geo, res, well models -> model views (no simulation)
 #   scenario 2 (SPE9_S2): scenario 1's input -> models -> deck -> Flow run -> ResInsight
 #   success:              the scenario 2 deck is the SPE9 deck again (decks compared, then runs compared)
 #
@@ -47,15 +47,15 @@ opmagent data from-deck "$S1" "$DECK"
 opmagent data verify "$S1"
 opmagent study task "$S1" data complete >/dev/null && pass "data task done: input loaded"
 
-step "Scenario 1.3  modelers build their models from the input (geo before well)"
-for k in fluid geo well; do
+step "Scenario 1.3  modelers build their models from the input (geo before res and well)"
+for k in fluid geo res well; do
   out=$(opmagent study build "$k" "$S1" --complete)
   echo "$out" | python3 -c 'import json,sys; r=json.load(sys.stdin); print(" ", r["spoken_summary"]); print(" ", r.get("task"))'
 done
 
 step "Scenario 1.4  model views (no simulation)"
 if [ -n "${NO_VIEWER:-}" ]; then opmagent study view "$S1"; else opmagent study view "$S1" --open; fi
-pass "scenario 1: input and three models, each with its view"
+pass "scenario 1: input and four models, each with its view"
 
 # ------------------------------------------------------------------ scenario 2
 step "Scenario 2.1  study $S2 takes scenario 1's input"
@@ -65,7 +65,7 @@ opmagent data from-study "$S2" "$S1"
 opmagent study task "$S2" data complete >/dev/null && pass "data task done: input taken from $S1"
 
 step "Scenario 2.2  modelers build again, from that input"
-for k in fluid geo well; do
+for k in fluid geo res well; do
   opmagent study build "$k" "$S2" --complete | python3 -c 'import json,sys; r=json.load(sys.stdin); print(" ", r["spoken_summary"])'
 done
 

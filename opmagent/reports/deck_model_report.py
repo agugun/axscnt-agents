@@ -189,6 +189,12 @@ def _geo(tables: dict, header: dict, arrays: dict, grid: dict) -> tuple[list, li
         ["Unit system", header.get("unit_system")]]
         + [[k, header[k]] for k in ("dx", "dy", "dz", "top_depth") if header.get(k) is not None])))
     sections.append(("Cell arrays (active cells)", _table(["Array", "Cells", "Min", "Mean", "Max", ""], stats)))
+    _tables_and_scal(tables, u, figs, sections)
+    return figs, sections
+
+
+def _tables_and_scal(tables: dict, u: dict, figs: list, sections: list) -> None:
+    """SWOF/SGOF plots and the contacts, rock and fault tables, for whichever of them the model holds."""
     for name, x, a_, b_, pc in (("swof", "sw", "krw", "krow", "pcow"), ("sgof", "sg", "krg", "krog", "pcog")):
         rows = tables.get(name) or []
         if not rows:
@@ -210,6 +216,19 @@ def _geo(tables: dict, header: dict, arrays: dict, grid: dict) -> tuple[list, li
             cols = list(rows[0])
             sections.append((title, _table(cols, [[r.get(c) for c in cols] for r in rows[:100]])
                              + (f"<p>{len(rows) - 100} more rows.</p>" if len(rows) > 100 else "")))
+
+
+def _res(tables: dict, header: dict, arrays: dict, grid: dict) -> tuple[list, list]:
+    """The res model: saturation functions, contacts, rock, and its region arrays (cells per region)."""
+    u = _u(header.get("unit_system"))
+    figs, sections = [], []
+    _tables_and_scal(tables, u, figs, sections)
+    rows = []
+    for kw, a in sorted((arrays or {}).items()):
+        vals, counts = np.unique(np.asarray(a).round(6), return_counts=True)
+        rows.append([kw, len(vals), ", ".join(f"{v:g}: {c:,}" for v, c in list(zip(vals, counts))[:12])])
+    if rows:
+        sections.append(("Region arrays and SWATINIT", _table(["Array", "Distinct values", "Cells per value"], rows)))
     return figs, sections
 
 
@@ -285,9 +304,11 @@ def model_report(path: Path, *, kind: str, name: str, version: int, source: str,
         figs, sections = _fluid(tables, header)
     elif kind == "geo":
         figs, sections = _geo(tables, header, arrays or {}, grid)
+    elif kind == "res":
+        figs, sections = _res(tables, header, arrays or {}, grid)
     else:
         figs, sections = _well(tables, header, grid, poro_top)
-    rows = [[t, len(r)] for t, r in tables.items() if isinstance(r, list) and r and t != "geo_properties"]
+    rows = [[t, len(r)] for t, r in tables.items() if isinstance(r, list) and r and t not in ("geo_properties", "res_properties")]
     sections += [("Source", _list([f"deck: {source}", f"schedule: {coverage.get('schedule_mode')}"])),
                  ("Tables taken from the deck", _table(["table", "rows"], rows)),
                  ("Assumptions", _list(assumptions)), ("Validator warnings", _list(warnings))]

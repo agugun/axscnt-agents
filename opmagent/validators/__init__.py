@@ -7,9 +7,9 @@ from __future__ import annotations
 
 import sqlite3
 
-from . import fluid, geo, well
+from . import fluid, geo, res, well
 
-_RUNNERS = {"fluid": fluid.validate, "geo": geo.validate, "well": well.validate}
+_RUNNERS = {"fluid": fluid.validate, "geo": geo.validate, "res": res.validate, "well": well.validate}
 
 
 def run(kind: str, con: sqlite3.Connection, version_id: int) -> list[dict]:

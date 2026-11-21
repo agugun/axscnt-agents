@@ -23,8 +23,12 @@ KINDS = {
     "geo": {
         "models": "geo_models", "versions": "geo_model_versions", "fk": "geo_model_id",
         "sources": "geo_version_sources",
-        "tables": ["geo_properties", "faults", "fault_multipliers", "rock", "swof", "sgof", "contacts",
-                   "aquifers", "aquifer_connections"],
+        "tables": ["geo_properties", "faults", "fault_multipliers"],
+    },
+    "res": {
+        "models": "res_models", "versions": "res_model_versions", "fk": "res_model_id",
+        "sources": "res_version_sources",
+        "tables": ["res_properties", "swof", "sgof", "rock", "contacts", "aquifers", "aquifer_connections"],
     },
     "well": {
         "models": "well_models", "versions": "well_model_versions", "fk": "well_model_id",
@@ -237,7 +241,7 @@ def decide(con, kind: str, version_id: int, decision: str, reviewer: str, qc_rep
 _NUM = {w: i for i, w in enumerate("zero one two three four five six seven eight nine ten eleven twelve thirteen "
                                    "fourteen fifteen sixteen seventeen eighteen nineteen twenty".split())}
 _KIND_WORDS = {"fluid": "fluid", "pvt": "fluid", "oil": None, "geo": "geo", "grid": "geo", "geological": "geo",
-               "well": "well", "wells": "well"}
+               "well": "well", "wells": "well", "res": "res", "reservoir": "res", "scal": "res"}
 
 
 def resolve_name(con, text: str, kind: str | None = None) -> dict:
@@ -292,11 +296,12 @@ def _latest_per_model(cands):
 
 # ----------------------------------------------------------------- decks
 def create_deck(con, name: str, requirement_text: str, spec: dict, fluid_version_id: int, geo_version_id: int,
-                well_version_id: int, origin: str = "built") -> dict:
+                well_version_id: int, res_version_id: int, origin: str = "built") -> dict:
     cur = _db(con.execute,
-              "INSERT INTO decks(name, requirement_text, spec_json, fluid_version_id, geo_version_id, well_version_id, origin) "
-              "VALUES (?,?,?,?,?,?,?)",
-              (name, requirement_text, json.dumps(spec), fluid_version_id, geo_version_id, well_version_id, origin))
+              "INSERT INTO decks(name, requirement_text, spec_json, fluid_version_id, geo_version_id, well_version_id, "
+              "res_version_id, origin) VALUES (?,?,?,?,?,?,?,?)",
+              (name, requirement_text, json.dumps(spec), fluid_version_id, geo_version_id, well_version_id,
+               res_version_id, origin))
     return get_deck(con, cur.lastrowid)
 
 
@@ -326,7 +331,7 @@ def get_deck(con, deck_id: int) -> dict:
 
 def list_decks(con) -> list[dict]:
     return [dict(r) for r in con.execute("SELECT id, name, status, origin, fluid_version_id, geo_version_id, "
-                                         "well_version_id, created_at FROM decks ORDER BY id")]
+                                         "res_version_id, well_version_id, created_at FROM decks ORDER BY id")]
 
 
 def ambiguous(result: dict) -> None:

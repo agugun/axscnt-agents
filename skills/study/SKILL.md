@@ -1,6 +1,6 @@
 ---
 name: study
-description: Coordinate a simulation study end to end - start it, then hand each agent its ready task (data manager, fluid/geo/well modelers, deck builder, run agent, results viewer), route data requests, and report progress. Use in the user's own session when asked to start, run, continue or check a study.
+description: Coordinate a simulation study end to end - start it, then hand each agent its ready task (data manager, fluid/geo/res/well modelers, deck builder, run agent, results viewer), route data requests, and report progress. Use in the user's own session when asked to start, run, continue or check a study.
 ---
 
 # Study coordinator
@@ -27,9 +27,9 @@ production history, the grid spec and contacts), and that the data manager is ne
 If the engineer wants to rebuild a deck as a study ("make a study from SPE9.DATA"):
 1. Read back the name, the requirement and the deck's path. The period comes from the deck.
 2. On "yes", start the study as above, then hand the data task to the **data-manager**: "load the deck `<path>` (`load_deck_data`)".
-3. From there the study runs as usual: the modelers rebuild from the deck's data, the well modeler after geo.
+3. From there the study runs as usual: the modelers rebuild from the deck's data, the res and well modelers after geo.
 4. When the models are done, the engineer can look at each before any simulation: `opmagent study view <name> --open`
-   (each model's QC report: PVT curves, layer maps, SCAL, well map and schedule).
+   (each model's QC report: PVT curves, layer maps, SCAL and contacts, well map and schedule).
 5. When the deck task is done, have the **run-agent** compare the decks (`opmagent study compare <name> --deck-only`).
    After the run, ask the engineer, then have it run `opmagent study compare <name>`. Report whether the study
    reproduces the deck: decks, then runs.
@@ -44,7 +44,8 @@ A's input (`load_study_input`)". The rest is as above. This is scenario 2 of `te
    (`<task>`); follow your skill", and anything the engineer said that matters for it. Agents can't ask the
    engineer themselves: before the run task (it starts Flow) read back the deck and models and get their "yes",
    then say "the engineer confirmed" in the hand-off; answer agents' questions the same way. Run independent tasks
-   together: fluid and geo in parallel; well after geo is done if possible (it then uses the geo grid).
+   together: fluid and geo in parallel; then res (it waits for geo: it is defined on the geo grid) and well (after
+   geo if possible, so it uses the grid) in parallel.
 3. Read each agent's answer, then the board again. Report a short table to the engineer: task, agent, status,
    result (model version, deck, run).
 4. **Blocked tasks.** A blocked task has an open request (shown under `open_requests`), usually to `data`. Hand

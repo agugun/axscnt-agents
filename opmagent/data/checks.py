@@ -119,14 +119,14 @@ def contacts_vs_logs(con, sid, logs=None) -> list[tuple]:
         pay = d[d["sw"] < PAY_SW]
         water = d[d["sw"] > WATER_SW]
         if len(pay) and pay["tvd"].max() > owc + CONTACT_TOL:
-            issues.append(("geo", "warning", w, f"{w}: hydrocarbon (SW < {PAY_SW}) down to {pay['tvd'].max():.1f} "
+            issues.append(("res", "warning", w, f"{w}: hydrocarbon (SW < {PAY_SW}) down to {pay['tvd'].max():.1f} "
                                                 f"m TVD, below the OWC at {owc:.1f} m"))
         if len(pay) and len(water):
             # the water leg: water below the top of the pay with no pay under it
             below_pay = water[water["tvd"] > pay["tvd"].min()]
             if len(below_pay) and below_pay["tvd"].min() < owc - CONTACT_TOL and \
                     not len(pay[pay["tvd"] > below_pay["tvd"].min()]):
-                issues.append(("geo", "warning", w, f"{w}: water (SW > {WATER_SW}) from "
+                issues.append(("res", "warning", w, f"{w}: water (SW > {WATER_SW}) from "
                                                     f"{below_pay['tvd'].min():.1f} m TVD, above the OWC at {owc:.1f} m"))
     return issues
 

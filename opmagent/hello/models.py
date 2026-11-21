@@ -1,6 +1,6 @@
-"""Hello demo models: a 10x10x3 box, the default oil, one producer and one water injector.
+"""Hello demo models: a 10x10x3 box, the default oil, Corey SCAL and contacts, one producer and one water injector.
 
-All three are created as demo versions (origin 'demo') through the normal data server profiles,
+All four (fluid, geo, res, well) are created as demo versions (origin 'demo') through the normal data server profiles,
 validated, given a QC report and submitted for review. A human still approves them.
 """
 from __future__ import annotations
@@ -12,7 +12,7 @@ from ..servers.data_server import DataService
 from ..servers.data_server import wrap as dwrap
 from ..servers.pvt_server import PVTService
 
-FLUID, GEO, WELLS = "HELLO_FLUID", "HELLO_GEO", "HELLO_WELLS"
+FLUID, GEO, RES, WELLS = "HELLO_FLUID", "HELLO_GEO", "HELLO_RES", "HELLO_WELLS"
 GRID = dict(nx=10, ny=10, nz=3, dx=100.0, dy=100.0, dz=10.0, tops=2000.0)
 DATUM_DEPTH, DATUM_P, OWC = 2000.0, 200.0, 2100.0
 START = "2026-01-01"
@@ -59,29 +59,33 @@ def build_geo(cfg, origin: str = "demo", name: str = GEO) -> dict:
     D = lambda n, **k: _ok(dwrap(svc, n)(**k))  # noqa: E731
     v = D("create_version", kind="geo", model_name=name, origin=origin,
           header={"unit_system": "METRIC", "grid_type": "cartesian", **GRID, "user_description": "hello demo box",
-                  "assumptions_json": ["uniform properties", "Corey relative permeability (Swc 0.2, Sorw 0.2, Sorg 0.1)",
-                                       "OWC below the grid: oil zone with connate water only"]})
+                  "assumptions_json": ["uniform properties"]})
     vid = v["version_id"]
     D("write_tables", kind="geo", version_id=vid, table="geo_properties", rows=[
         dict(keyword="PORO", const_value=0.20), dict(keyword="PERMX", const_value=100.0),
         dict(keyword="PERMY", const_value=100.0), dict(keyword="PERMZ", const_value=10.0), dict(keyword="NTG", const_value=1.0)])
-    D("write_tables", kind="geo", version_id=vid, table="swof", rows=corey_swof())
-    D("write_tables", kind="geo", version_id=vid, table="sgof", rows=corey_sgof())
-    D("write_tables", kind="geo", version_id=vid, table="rock", rows=[dict(p_ref=DATUM_P, cr=4.5e-5)])
-    D("write_tables", kind="geo", version_id=vid, table="contacts",
-      rows=[dict(datum_depth=DATUM_DEPTH, datum_pressure=DATUM_P, owc_depth=OWC)])
     val = D("run_validator", kind="geo", version_id=vid)
     m = svc.get_model(kind="geo", version_id=vid)
     pv = GRID["nx"] * GRID["ny"] * GRID["nz"] * GRID["dx"] * GRID["dy"] * GRID["dz"] * 0.20
     metrics = {"grid": "10 x 10 x 3 cartesian, 100 x 100 x 10 m", "active cells": 300,
-               "pore volume (rm3)": f"{pv:,.0f}", "hydrocarbon pore volume (rm3)": f"{pv * 0.8:,.0f}",
-               "datum": f"{DATUM_DEPTH:g} m at {DATUM_P:g} bar", "OWC": f"{OWC:g} m (below grid)"}
+               "pore volume (rm3)": f"{pv:,.0f}"}
     rep = geo_report(cfg.file_store / "qc" / f"geo_{name}_v{v['version']}.html", model=m["header"], metrics=metrics,
-                     assumptions=m["header"]["assumptions_json"], warnings=val["warnings"],
-                     swof=m["tables"]["swof"], sgof=m["tables"]["sgof"])
+                     assumptions=m["header"]["assumptions_json"], warnings=val["warnings"], swof=[], sgof=[])
     rid = D("register_file", path=str(rep), kind="qc_report")["file_id"]
     D("submit_for_review", kind="geo", version_id=vid, qc_report_file_id=rid, metrics=metrics)
     return {"version_id": vid, "version": v["version"], "qc_report": str(rep)}
+
+
+def build_res(cfg, geo_version_id: int, origin: str = "demo", name: str = RES) -> dict:
+    """Corey SCAL (Swc 0.2, Sorw 0.2, Sorg 0.1), rock and contacts (OWC below the grid) on the hello box."""
+    from ..res.pipeline import build_res_model
+    return build_res_model(cfg, name=name, geo_version_id=geo_version_id, origin=origin,
+                           description="hello demo SCAL, rock and contacts",
+                           spec={"scal": {"swc": 0.2, "sorw": 0.2, "sorg": 0.1, "sgc": 0.05, "nw": 2.0, "now": 2.0,
+                                          "ng": 2.0, "nog": 2.0, "krw_max": 0.4, "krg_max": 0.8,
+                                          "source": "hello demo"},
+                                 "rock": {"p_ref": DATUM_P, "cr": 4.5e-5},
+                                 "contacts": {"datum_depth": DATUM_DEPTH, "datum_pressure": DATUM_P, "owc_depth": OWC}})
 
 
 def build_wells(cfg, geo_version_id: int) -> dict:

@@ -2,6 +2,7 @@
 import pytest
 
 from opmagent.core.errors import ToolError
+from opmagent.deck import build as b
 from opmagent.deck.build import build_deck
 from opmagent.hello.run import clean, hello, latest_demo
 from opmagent.servers.data_server import DataService
@@ -44,16 +45,32 @@ def test_cross_check_pressure_outside_pvt(cfg):
     con = DataService("reviewer", cfg).con
     ids = {k: m["version_id"] for k, m in latest_demo(con).items()}
     # a well BHP far above the PVT table range must be refused before rendering
-    from opmagent.deck import build as b
     fluid = DataService("deck", cfg).get_model(kind="fluid", version_id=ids["fluid"])
-    geo = DataService("deck", cfg).get_model(kind="geo", version_id=ids["geo"])
+    geo = b.combine(DataService("deck", cfg).get_model(kind="geo", version_id=ids["geo"]),
+                    DataService("deck", cfg).get_model(kind="res", version_id=ids["res"]))
     well = DataService("deck", cfg).get_model(kind="well", version_id=ids["well"])
     well["tables"]["well_events"][0]["bhp"] = 900.0
     assert any("outside the PVT range" in p for p in b.cross_checks(fluid, geo, well))
 
 
+def test_deck_needs_the_res_model_of_its_geo(cfg):
+    """A deck takes four approved models; the res version must be defined on the deck's geo version."""
+    from opmagent.hello import models as hm
+    hello(cfg, log=lambda *_: None)
+    approve_hello(cfg)
+    ids = {k: m["version_id"] for k, m in latest_demo(DataService("reviewer", cfg).con).items()}
+    with pytest.raises(ToolError, match="spec.res is missing"):
+        build_deck({"name": "NORES", **{k: v for k, v in ids.items() if k != "res"}}, cfg, origin="demo")
+    g2 = hm.build_geo(cfg)                                   # a second geo version: the res is not defined on it
+    rv = DataService("reviewer", cfg)
+    rid = rv.get_qc_report(kind="geo", version_id=g2["version_id"])["qc_report"]["id"]
+    rv.approve(kind="geo", version_id=g2["version_id"], qc_report_file_id=rid)
+    with pytest.raises(ToolError, match="defined on geo version"):
+        build_deck({"name": "OTHERGEO", **ids, "geo": g2["version_id"]}, cfg, origin="demo")
+
+
 def test_clean_removes_demo_drafts(cfg):
     hello(cfg, log=lambda *_: None)
     r = clean(cfg)
-    assert len(r["removed"]) == 3
+    assert len(r["removed"]) == 4
     assert all(m is None for m in latest_demo(DataService("reviewer", cfg).con).values())

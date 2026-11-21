@@ -173,9 +173,8 @@ CREATE TABLE pbvd (
 );
 
 -- =====================================================================
--- GEO MODELS (Geo modeler)
--- Grid, properties, regions, faults, aquifers, rock compressibility,
--- saturation functions and initial contacts.
+-- GEO MODELS (Geo modeler): the static model
+-- Grid, cell properties, PVTNUM, faults and fault multipliers.
 -- =====================================================================
 CREATE TABLE geo_models (
     id          INTEGER PRIMARY KEY,
@@ -226,9 +225,9 @@ CREATE TABLE geo_properties (
     version_id  INTEGER NOT NULL REFERENCES geo_model_versions(id) ON DELETE CASCADE,
     keyword     TEXT NOT NULL CHECK (keyword IN
                   ('DX','DY','DZ','TOPS',
-                   'PORO','PERMX','PERMY','PERMZ','NTG','ACTNUM','SWATINIT',
+                   'PORO','PERMX','PERMY','PERMZ','NTG','ACTNUM',
                    'MULTX','MULTY','MULTZ','MULTX-','MULTY-','MULTZ-','MULTPV',
-                   'SATNUM','PVTNUM','EQLNUM','FIPNUM','ROCKNUM')),
+                   'PVTNUM')),
     const_value REAL,
     file_id     INTEGER REFERENCES files(id),
     min_value REAL, max_value REAL, mean_value REAL,
@@ -256,9 +255,60 @@ CREATE TABLE fault_multipliers (
     PRIMARY KEY (version_id, fault_name)
 );
 
+-- =====================================================================
+-- RES MODELS (Res modeler / reservoir engineer): the dynamic model on a geo grid
+-- Saturation functions, rock compressibility, initialisation (contacts, EQUIL),
+-- region arrays and SWATINIT, analytical aquifers.
+-- =====================================================================
+CREATE TABLE res_models (
+    id          INTEGER PRIMARY KEY,
+    name        TEXT NOT NULL UNIQUE,
+    description TEXT,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE res_model_versions (
+    id                INTEGER PRIMARY KEY,
+    res_model_id      INTEGER NOT NULL REFERENCES res_models(id),
+    version           INTEGER NOT NULL DEFAULT 0,
+    status            TEXT NOT NULL DEFAULT 'draft'
+                        CHECK (status IN ('draft','qc_ready','approved','rejected')),
+    unit_system       TEXT NOT NULL CHECK (unit_system IN ('METRIC','FIELD')),
+    geo_version_id    INTEGER NOT NULL REFERENCES geo_model_versions(id),   -- the grid it is defined on
+    user_description  TEXT,
+    spec_json         TEXT,
+    assumptions_json  TEXT,
+    qc_json           TEXT,
+    qc_report_file_id INTEGER REFERENCES files(id),
+    origin            TEXT NOT NULL DEFAULT 'built' CHECK (origin IN ('built','imported','demo')),
+    source_deck_file_id INTEGER REFERENCES files(id),   -- set when origin = 'imported'
+    created_by        TEXT NOT NULL DEFAULT 'res_modeler',
+    created_at        TEXT NOT NULL DEFAULT (datetime('now')),
+    qc_ready_at       TEXT,
+    decided_at        TEXT,
+    UNIQUE (res_model_id, version)
+);
+
+CREATE TABLE res_version_sources (
+    version_id INTEGER NOT NULL REFERENCES res_model_versions(id) ON DELETE CASCADE,
+    file_id    INTEGER NOT NULL REFERENCES files(id),
+    PRIMARY KEY (version_id, file_id)
+);
+
+-- Region arrays and SWATINIT on the geo grid: constant value OR array file
+CREATE TABLE res_properties (
+    version_id  INTEGER NOT NULL REFERENCES res_model_versions(id) ON DELETE CASCADE,
+    keyword     TEXT NOT NULL CHECK (keyword IN ('SATNUM','EQLNUM','FIPNUM','ROCKNUM','SWATINIT')),
+    const_value REAL,
+    file_id     INTEGER REFERENCES files(id),
+    min_value REAL, max_value REAL, mean_value REAL,
+    PRIMARY KEY (version_id, keyword),
+    CHECK ((const_value IS NULL) <> (file_id IS NULL))
+);
+
 -- ROCK: compressibility per region
 CREATE TABLE rock (
-    version_id INTEGER NOT NULL REFERENCES geo_model_versions(id) ON DELETE CASCADE,
+    version_id INTEGER NOT NULL REFERENCES res_model_versions(id) ON DELETE CASCADE,
     region     INTEGER NOT NULL DEFAULT 1 CHECK (region >= 1),
     p_ref      REAL NOT NULL CHECK (p_ref > 0),
     cr         REAL NOT NULL CHECK (cr >= 0),
@@ -267,7 +317,7 @@ CREATE TABLE rock (
 
 -- SWOF
 CREATE TABLE swof (
-    version_id INTEGER NOT NULL REFERENCES geo_model_versions(id) ON DELETE CASCADE,
+    version_id INTEGER NOT NULL REFERENCES res_model_versions(id) ON DELETE CASCADE,
     satnum     INTEGER NOT NULL DEFAULT 1 CHECK (satnum >= 1),
     sw         REAL NOT NULL CHECK (sw BETWEEN 0 AND 1),
     krw        REAL NOT NULL CHECK (krw BETWEEN 0 AND 1),
@@ -278,7 +328,7 @@ CREATE TABLE swof (
 
 -- SGOF
 CREATE TABLE sgof (
-    version_id INTEGER NOT NULL REFERENCES geo_model_versions(id) ON DELETE CASCADE,
+    version_id INTEGER NOT NULL REFERENCES res_model_versions(id) ON DELETE CASCADE,
     satnum     INTEGER NOT NULL DEFAULT 1 CHECK (satnum >= 1),
     sg         REAL NOT NULL CHECK (sg BETWEEN 0 AND 1),
     krg        REAL NOT NULL CHECK (krg BETWEEN 0 AND 1),
@@ -289,7 +339,7 @@ CREATE TABLE sgof (
 
 -- Initial contacts per equilibration region (feeds EQUIL)
 CREATE TABLE contacts (
-    version_id     INTEGER NOT NULL REFERENCES geo_model_versions(id) ON DELETE CASCADE,
+    version_id     INTEGER NOT NULL REFERENCES res_model_versions(id) ON DELETE CASCADE,
     eqlnum         INTEGER NOT NULL DEFAULT 1 CHECK (eqlnum >= 1),
     datum_depth    REAL NOT NULL,
     datum_pressure REAL NOT NULL CHECK (datum_pressure > 0),
@@ -303,7 +353,7 @@ CREATE TABLE contacts (
 
 -- Analytical aquifers: Fetkovich (AQUFETP) or Carter-Tracy (AQUCT)
 CREATE TABLE aquifers (
-    version_id      INTEGER NOT NULL REFERENCES geo_model_versions(id) ON DELETE CASCADE,
+    version_id      INTEGER NOT NULL REFERENCES res_model_versions(id) ON DELETE CASCADE,
     aquifer_id      INTEGER NOT NULL CHECK (aquifer_id >= 1),
     aq_type         TEXT NOT NULL CHECK (aq_type IN ('FETKOVICH','CARTER_TRACY')),
     datum_depth     REAL NOT NULL,
@@ -507,7 +557,7 @@ CREATE TABLE vfp_tables (
 -- =====================================================================
 CREATE TABLE approvals (
     id          INTEGER PRIMARY KEY,
-    model_kind  TEXT NOT NULL CHECK (model_kind IN ('fluid','geo','well')),
+    model_kind  TEXT NOT NULL CHECK (model_kind IN ('fluid','geo','res','well')),
     version_id  INTEGER NOT NULL,
     decision    TEXT NOT NULL CHECK (decision IN ('approved','rejected')),
     reviewer    TEXT NOT NULL CHECK (length(trim(reviewer)) > 0),
@@ -528,6 +578,7 @@ CREATE TABLE decks (
     fluid_version_id INTEGER NOT NULL REFERENCES fluid_model_versions(id),
     geo_version_id   INTEGER NOT NULL REFERENCES geo_model_versions(id),
     well_version_id  INTEGER NOT NULL REFERENCES well_model_versions(id),
+    res_version_id   INTEGER NOT NULL REFERENCES res_model_versions(id),
     deck_file_id     INTEGER REFERENCES files(id),
     status           TEXT NOT NULL DEFAULT 'draft'
                        CHECK (status IN ('draft','validated','failed','ready')),
@@ -603,6 +654,7 @@ BEGIN
               WHEN 'fluid' THEN (SELECT status FROM fluid_model_versions WHERE id = NEW.version_id)
               WHEN 'geo'   THEN (SELECT status FROM geo_model_versions   WHERE id = NEW.version_id)
               WHEN 'well'  THEN (SELECT status FROM well_model_versions  WHERE id = NEW.version_id)
+              WHEN 'res'   THEN (SELECT status FROM res_model_versions   WHERE id = NEW.version_id)
             END) IS NOT 'qc_ready';
     SELECT RAISE(ABORT, 'reviewed QC report does not match the version''s current report')
      WHERE NEW.qc_report_file_id IS NOT
@@ -610,6 +662,7 @@ BEGIN
               WHEN 'fluid' THEN (SELECT qc_report_file_id FROM fluid_model_versions WHERE id = NEW.version_id)
               WHEN 'geo'   THEN (SELECT qc_report_file_id FROM geo_model_versions   WHERE id = NEW.version_id)
               WHEN 'well'  THEN (SELECT qc_report_file_id FROM well_model_versions  WHERE id = NEW.version_id)
+              WHEN 'res'   THEN (SELECT qc_report_file_id FROM res_model_versions   WHERE id = NEW.version_id)
             END);
 END;
 
@@ -622,6 +675,8 @@ BEGIN
      WHERE NEW.model_kind = 'geo'   AND id = NEW.version_id;
     UPDATE well_model_versions  SET status = NEW.decision, decided_at = NEW.decided_at
      WHERE NEW.model_kind = 'well'  AND id = NEW.version_id;
+    UPDATE res_model_versions   SET status = NEW.decision, decided_at = NEW.decided_at
+     WHERE NEW.model_kind = 'res'   AND id = NEW.version_id;
 END;
 
 CREATE TRIGGER approvals_no_update BEFORE UPDATE ON approvals
@@ -639,23 +694,31 @@ BEGIN
      WHERE (SELECT status FROM geo_model_versions   WHERE id = NEW.geo_version_id)   IS NOT 'approved';
     SELECT RAISE(ABORT, 'well model version is not approved')
      WHERE (SELECT status FROM well_model_versions  WHERE id = NEW.well_version_id)  IS NOT 'approved';
+    SELECT RAISE(ABORT, 'res model version is not approved')
+     WHERE (SELECT status FROM res_model_versions   WHERE id = NEW.res_version_id)   IS NOT 'approved';
     SELECT RAISE(ABORT, 'demo and non-demo data cannot be mixed in a deck')
      WHERE ((SELECT origin FROM fluid_model_versions WHERE id = NEW.fluid_version_id) = 'demo') <> (NEW.origin = 'demo')
         OR ((SELECT origin FROM geo_model_versions   WHERE id = NEW.geo_version_id)   = 'demo') <> (NEW.origin = 'demo')
-        OR ((SELECT origin FROM well_model_versions  WHERE id = NEW.well_version_id)  = 'demo') <> (NEW.origin = 'demo');
+        OR ((SELECT origin FROM well_model_versions  WHERE id = NEW.well_version_id)  = 'demo') <> (NEW.origin = 'demo')
+        OR ((SELECT origin FROM res_model_versions   WHERE id = NEW.res_version_id)   = 'demo') <> (NEW.origin = 'demo');
     SELECT RAISE(ABORT, 'fluid and geo unit systems differ')
      WHERE (SELECT unit_system FROM fluid_model_versions WHERE id = NEW.fluid_version_id)
         <> (SELECT unit_system FROM geo_model_versions   WHERE id = NEW.geo_version_id);
     SELECT RAISE(ABORT, 'well and geo unit systems differ')
      WHERE (SELECT unit_system FROM well_model_versions WHERE id = NEW.well_version_id)
         <> (SELECT unit_system FROM geo_model_versions  WHERE id = NEW.geo_version_id);
+    SELECT RAISE(ABORT, 'res and geo unit systems differ')
+     WHERE (SELECT unit_system FROM res_model_versions WHERE id = NEW.res_version_id)
+        <> (SELECT unit_system FROM geo_model_versions WHERE id = NEW.geo_version_id);
+    SELECT RAISE(ABORT, 'res model is defined on a different geo model version')
+     WHERE (SELECT geo_version_id FROM res_model_versions WHERE id = NEW.res_version_id) <> NEW.geo_version_id;
     SELECT RAISE(ABORT, 'well model was built against a different geo model version')
      WHERE (SELECT geo_version_id FROM well_model_versions WHERE id = NEW.well_version_id) IS NOT NULL
        AND (SELECT geo_version_id FROM well_model_versions WHERE id = NEW.well_version_id) <> NEW.geo_version_id;
 END;
 
 CREATE TRIGGER decks_models_frozen
-BEFORE UPDATE OF fluid_version_id, geo_version_id, well_version_id ON decks
+BEFORE UPDATE OF fluid_version_id, geo_version_id, well_version_id, res_version_id ON decks
 BEGIN SELECT RAISE(ABORT, 'a deck''s model versions cannot be changed; create a new deck'); END;
 
 -- ---- IJK completions need a geo version
@@ -942,77 +1005,160 @@ CREATE TRIGGER lock_fault_multipliers_delete BEFORE DELETE ON fault_multipliers
 WHEN (SELECT status FROM geo_model_versions WHERE id = OLD.version_id) IN ('qc_ready','approved','rejected')
 BEGIN SELECT RAISE(ABORT, 'fault_multipliers: geo version is not draft; data is frozen'); END;
 
+
+-- ======================= RES lifecycle =======================
+CREATE TRIGGER res_insert_as_draft BEFORE INSERT ON res_model_versions
+WHEN NEW.status <> 'draft'
+BEGIN SELECT RAISE(ABORT, 'new res versions must start as draft'); END;
+
+CREATE TRIGGER res_version_autonumber AFTER INSERT ON res_model_versions
+WHEN NEW.version = 0
+BEGIN
+    UPDATE res_model_versions SET version = (SELECT COALESCE(MAX(version),0) + 1 FROM res_model_versions
+                                WHERE res_model_id = NEW.res_model_id AND id <> NEW.id)
+     WHERE id = NEW.id;
+END;
+
+CREATE TRIGGER res_status_rules BEFORE UPDATE ON res_model_versions
+BEGIN
+    SELECT RAISE(ABORT, 'res version is approved/rejected and immutable; create a new version')
+     WHERE OLD.status IN ('approved','rejected');
+    SELECT RAISE(ABORT, 'res version is qc_ready (frozen for review); move back to draft to edit')
+     WHERE OLD.status = 'qc_ready' AND NEW.status = 'qc_ready'
+       AND NOT (OLD.qc_ready_at IS NULL AND NEW.qc_ready_at IS NOT NULL);  -- allow the timestamp stamp only
+    SELECT RAISE(ABORT, 'invalid status transition for res version')
+     WHERE NOT ((OLD.status = 'draft'    AND NEW.status IN ('draft','qc_ready')) OR
+                (OLD.status = 'qc_ready' AND NEW.status IN ('draft','qc_ready','approved','rejected')));
+    SELECT RAISE(ABORT, 'qc_ready requires qc_json and a QC report file')
+     WHERE NEW.status = 'qc_ready' AND (NEW.qc_json IS NULL OR NEW.qc_report_file_id IS NULL);
+    SELECT RAISE(ABORT, 'approve/reject only through the approvals table (human review)')
+     WHERE NEW.status IN ('approved','rejected')
+       AND NOT EXISTS (SELECT 1 FROM approvals
+                        WHERE model_kind = 'res' AND version_id = NEW.id
+                          AND decision = NEW.status);
+END;
+
+CREATE TRIGGER res_stamp_qc_ready AFTER UPDATE OF status ON res_model_versions
+WHEN NEW.status = 'qc_ready'
+BEGIN UPDATE res_model_versions SET qc_ready_at = datetime('now') WHERE id = NEW.id AND qc_ready_at IS NULL; END;
+
+CREATE TRIGGER res_reset_qc_on_draft AFTER UPDATE OF status ON res_model_versions
+WHEN NEW.status = 'draft' AND OLD.status = 'qc_ready'
+BEGIN UPDATE res_model_versions SET qc_ready_at = NULL WHERE id = NEW.id; END;
+
+CREATE TRIGGER res_no_delete_after_draft BEFORE DELETE ON res_model_versions
+WHEN OLD.status <> 'draft'
+BEGIN SELECT RAISE(ABORT, 'only draft res versions can be deleted'); END;
+
+CREATE VIEW latest_approved_res AS
+SELECT m.name AS model_name, v.*
+  FROM res_model_versions v JOIN res_models m ON m.id = v.res_model_id
+ WHERE v.status = 'approved'
+   AND v.version = (SELECT MAX(version) FROM res_model_versions
+                     WHERE res_model_id = v.res_model_id AND status = 'approved');
+
+CREATE VIEW pending_review_res AS
+SELECT m.name AS model_name, v.id, v.version, v.qc_ready_at, v.qc_report_file_id, v.qc_json
+  FROM res_model_versions v JOIN res_models m ON m.id = v.res_model_id
+ WHERE v.status = 'qc_ready';
+
+CREATE INDEX idx_res_versions ON res_model_versions(res_model_id, status);
+
+CREATE TRIGGER lock_res_version_sources_insert BEFORE INSERT ON res_version_sources
+WHEN (SELECT status FROM res_model_versions WHERE id = NEW.version_id) IN ('qc_ready','approved','rejected')
+BEGIN SELECT RAISE(ABORT, 'res_version_sources: res version is not draft; data is frozen'); END;
+
+CREATE TRIGGER lock_res_version_sources_update BEFORE UPDATE ON res_version_sources
+WHEN (SELECT status FROM res_model_versions WHERE id = NEW.version_id) IN ('qc_ready','approved','rejected')
+BEGIN SELECT RAISE(ABORT, 'res_version_sources: res version is not draft; data is frozen'); END;
+
+CREATE TRIGGER lock_res_version_sources_delete BEFORE DELETE ON res_version_sources
+WHEN (SELECT status FROM res_model_versions WHERE id = OLD.version_id) IN ('qc_ready','approved','rejected')
+BEGIN SELECT RAISE(ABORT, 'res_version_sources: res version is not draft; data is frozen'); END;
+
+CREATE TRIGGER lock_res_properties_insert BEFORE INSERT ON res_properties
+WHEN (SELECT status FROM res_model_versions WHERE id = NEW.version_id) IN ('qc_ready','approved','rejected')
+BEGIN SELECT RAISE(ABORT, 'res_properties: res version is not draft; data is frozen'); END;
+
+CREATE TRIGGER lock_res_properties_update BEFORE UPDATE ON res_properties
+WHEN (SELECT status FROM res_model_versions WHERE id = NEW.version_id) IN ('qc_ready','approved','rejected')
+BEGIN SELECT RAISE(ABORT, 'res_properties: res version is not draft; data is frozen'); END;
+
+CREATE TRIGGER lock_res_properties_delete BEFORE DELETE ON res_properties
+WHEN (SELECT status FROM res_model_versions WHERE id = OLD.version_id) IN ('qc_ready','approved','rejected')
+BEGIN SELECT RAISE(ABORT, 'res_properties: res version is not draft; data is frozen'); END;
+
 CREATE TRIGGER lock_rock_insert BEFORE INSERT ON rock
-WHEN (SELECT status FROM geo_model_versions WHERE id = NEW.version_id) IN ('qc_ready','approved','rejected')
-BEGIN SELECT RAISE(ABORT, 'rock: geo version is not draft; data is frozen'); END;
+WHEN (SELECT status FROM res_model_versions WHERE id = NEW.version_id) IN ('qc_ready','approved','rejected')
+BEGIN SELECT RAISE(ABORT, 'rock: res version is not draft; data is frozen'); END;
 
 CREATE TRIGGER lock_rock_update BEFORE UPDATE ON rock
-WHEN (SELECT status FROM geo_model_versions WHERE id = NEW.version_id) IN ('qc_ready','approved','rejected')
-BEGIN SELECT RAISE(ABORT, 'rock: geo version is not draft; data is frozen'); END;
+WHEN (SELECT status FROM res_model_versions WHERE id = NEW.version_id) IN ('qc_ready','approved','rejected')
+BEGIN SELECT RAISE(ABORT, 'rock: res version is not draft; data is frozen'); END;
 
 CREATE TRIGGER lock_rock_delete BEFORE DELETE ON rock
-WHEN (SELECT status FROM geo_model_versions WHERE id = OLD.version_id) IN ('qc_ready','approved','rejected')
-BEGIN SELECT RAISE(ABORT, 'rock: geo version is not draft; data is frozen'); END;
+WHEN (SELECT status FROM res_model_versions WHERE id = OLD.version_id) IN ('qc_ready','approved','rejected')
+BEGIN SELECT RAISE(ABORT, 'rock: res version is not draft; data is frozen'); END;
 
 CREATE TRIGGER lock_swof_insert BEFORE INSERT ON swof
-WHEN (SELECT status FROM geo_model_versions WHERE id = NEW.version_id) IN ('qc_ready','approved','rejected')
-BEGIN SELECT RAISE(ABORT, 'swof: geo version is not draft; data is frozen'); END;
+WHEN (SELECT status FROM res_model_versions WHERE id = NEW.version_id) IN ('qc_ready','approved','rejected')
+BEGIN SELECT RAISE(ABORT, 'swof: res version is not draft; data is frozen'); END;
 
 CREATE TRIGGER lock_swof_update BEFORE UPDATE ON swof
-WHEN (SELECT status FROM geo_model_versions WHERE id = NEW.version_id) IN ('qc_ready','approved','rejected')
-BEGIN SELECT RAISE(ABORT, 'swof: geo version is not draft; data is frozen'); END;
+WHEN (SELECT status FROM res_model_versions WHERE id = NEW.version_id) IN ('qc_ready','approved','rejected')
+BEGIN SELECT RAISE(ABORT, 'swof: res version is not draft; data is frozen'); END;
 
 CREATE TRIGGER lock_swof_delete BEFORE DELETE ON swof
-WHEN (SELECT status FROM geo_model_versions WHERE id = OLD.version_id) IN ('qc_ready','approved','rejected')
-BEGIN SELECT RAISE(ABORT, 'swof: geo version is not draft; data is frozen'); END;
+WHEN (SELECT status FROM res_model_versions WHERE id = OLD.version_id) IN ('qc_ready','approved','rejected')
+BEGIN SELECT RAISE(ABORT, 'swof: res version is not draft; data is frozen'); END;
 
 CREATE TRIGGER lock_sgof_insert BEFORE INSERT ON sgof
-WHEN (SELECT status FROM geo_model_versions WHERE id = NEW.version_id) IN ('qc_ready','approved','rejected')
-BEGIN SELECT RAISE(ABORT, 'sgof: geo version is not draft; data is frozen'); END;
+WHEN (SELECT status FROM res_model_versions WHERE id = NEW.version_id) IN ('qc_ready','approved','rejected')
+BEGIN SELECT RAISE(ABORT, 'sgof: res version is not draft; data is frozen'); END;
 
 CREATE TRIGGER lock_sgof_update BEFORE UPDATE ON sgof
-WHEN (SELECT status FROM geo_model_versions WHERE id = NEW.version_id) IN ('qc_ready','approved','rejected')
-BEGIN SELECT RAISE(ABORT, 'sgof: geo version is not draft; data is frozen'); END;
+WHEN (SELECT status FROM res_model_versions WHERE id = NEW.version_id) IN ('qc_ready','approved','rejected')
+BEGIN SELECT RAISE(ABORT, 'sgof: res version is not draft; data is frozen'); END;
 
 CREATE TRIGGER lock_sgof_delete BEFORE DELETE ON sgof
-WHEN (SELECT status FROM geo_model_versions WHERE id = OLD.version_id) IN ('qc_ready','approved','rejected')
-BEGIN SELECT RAISE(ABORT, 'sgof: geo version is not draft; data is frozen'); END;
+WHEN (SELECT status FROM res_model_versions WHERE id = OLD.version_id) IN ('qc_ready','approved','rejected')
+BEGIN SELECT RAISE(ABORT, 'sgof: res version is not draft; data is frozen'); END;
 
 CREATE TRIGGER lock_contacts_insert BEFORE INSERT ON contacts
-WHEN (SELECT status FROM geo_model_versions WHERE id = NEW.version_id) IN ('qc_ready','approved','rejected')
-BEGIN SELECT RAISE(ABORT, 'contacts: geo version is not draft; data is frozen'); END;
+WHEN (SELECT status FROM res_model_versions WHERE id = NEW.version_id) IN ('qc_ready','approved','rejected')
+BEGIN SELECT RAISE(ABORT, 'contacts: res version is not draft; data is frozen'); END;
 
 CREATE TRIGGER lock_contacts_update BEFORE UPDATE ON contacts
-WHEN (SELECT status FROM geo_model_versions WHERE id = NEW.version_id) IN ('qc_ready','approved','rejected')
-BEGIN SELECT RAISE(ABORT, 'contacts: geo version is not draft; data is frozen'); END;
+WHEN (SELECT status FROM res_model_versions WHERE id = NEW.version_id) IN ('qc_ready','approved','rejected')
+BEGIN SELECT RAISE(ABORT, 'contacts: res version is not draft; data is frozen'); END;
 
 CREATE TRIGGER lock_contacts_delete BEFORE DELETE ON contacts
-WHEN (SELECT status FROM geo_model_versions WHERE id = OLD.version_id) IN ('qc_ready','approved','rejected')
-BEGIN SELECT RAISE(ABORT, 'contacts: geo version is not draft; data is frozen'); END;
+WHEN (SELECT status FROM res_model_versions WHERE id = OLD.version_id) IN ('qc_ready','approved','rejected')
+BEGIN SELECT RAISE(ABORT, 'contacts: res version is not draft; data is frozen'); END;
 
 CREATE TRIGGER lock_aquifers_insert BEFORE INSERT ON aquifers
-WHEN (SELECT status FROM geo_model_versions WHERE id = NEW.version_id) IN ('qc_ready','approved','rejected')
-BEGIN SELECT RAISE(ABORT, 'aquifers: geo version is not draft; data is frozen'); END;
+WHEN (SELECT status FROM res_model_versions WHERE id = NEW.version_id) IN ('qc_ready','approved','rejected')
+BEGIN SELECT RAISE(ABORT, 'aquifers: res version is not draft; data is frozen'); END;
 
 CREATE TRIGGER lock_aquifers_update BEFORE UPDATE ON aquifers
-WHEN (SELECT status FROM geo_model_versions WHERE id = NEW.version_id) IN ('qc_ready','approved','rejected')
-BEGIN SELECT RAISE(ABORT, 'aquifers: geo version is not draft; data is frozen'); END;
+WHEN (SELECT status FROM res_model_versions WHERE id = NEW.version_id) IN ('qc_ready','approved','rejected')
+BEGIN SELECT RAISE(ABORT, 'aquifers: res version is not draft; data is frozen'); END;
 
 CREATE TRIGGER lock_aquifers_delete BEFORE DELETE ON aquifers
-WHEN (SELECT status FROM geo_model_versions WHERE id = OLD.version_id) IN ('qc_ready','approved','rejected')
-BEGIN SELECT RAISE(ABORT, 'aquifers: geo version is not draft; data is frozen'); END;
+WHEN (SELECT status FROM res_model_versions WHERE id = OLD.version_id) IN ('qc_ready','approved','rejected')
+BEGIN SELECT RAISE(ABORT, 'aquifers: res version is not draft; data is frozen'); END;
 
 CREATE TRIGGER lock_aquifer_connections_insert BEFORE INSERT ON aquifer_connections
-WHEN (SELECT status FROM geo_model_versions WHERE id = NEW.version_id) IN ('qc_ready','approved','rejected')
-BEGIN SELECT RAISE(ABORT, 'aquifer_connections: geo version is not draft; data is frozen'); END;
+WHEN (SELECT status FROM res_model_versions WHERE id = NEW.version_id) IN ('qc_ready','approved','rejected')
+BEGIN SELECT RAISE(ABORT, 'aquifer_connections: res version is not draft; data is frozen'); END;
 
 CREATE TRIGGER lock_aquifer_connections_update BEFORE UPDATE ON aquifer_connections
-WHEN (SELECT status FROM geo_model_versions WHERE id = NEW.version_id) IN ('qc_ready','approved','rejected')
-BEGIN SELECT RAISE(ABORT, 'aquifer_connections: geo version is not draft; data is frozen'); END;
+WHEN (SELECT status FROM res_model_versions WHERE id = NEW.version_id) IN ('qc_ready','approved','rejected')
+BEGIN SELECT RAISE(ABORT, 'aquifer_connections: res version is not draft; data is frozen'); END;
 
 CREATE TRIGGER lock_aquifer_connections_delete BEFORE DELETE ON aquifer_connections
-WHEN (SELECT status FROM geo_model_versions WHERE id = OLD.version_id) IN ('qc_ready','approved','rejected')
-BEGIN SELECT RAISE(ABORT, 'aquifer_connections: geo version is not draft; data is frozen'); END;
+WHEN (SELECT status FROM res_model_versions WHERE id = OLD.version_id) IN ('qc_ready','approved','rejected')
+BEGIN SELECT RAISE(ABORT, 'aquifer_connections: res version is not draft; data is frozen'); END;
 
 
 -- ======================= WELL lifecycle =======================
@@ -1186,4 +1332,4 @@ CREATE INDEX idx_wcomp  ON well_completions(version_id, well_name, event_date);
 CREATE INDEX idx_wevent ON well_events(version_id, well_name, event_date);
 CREATE INDEX idx_gctrl  ON group_controls(version_id, group_name, event_date);
 CREATE INDEX idx_approvals ON approvals(model_kind, version_id);
-CREATE INDEX idx_decks_models ON decks(fluid_version_id, geo_version_id, well_version_id);
+CREATE INDEX idx_decks_models ON decks(fluid_version_id, geo_version_id, well_version_id, res_version_id);

@@ -13,7 +13,7 @@ the rest, check the two together, and say what is missing.
     data_sources                       every file (and sheet) the tables came from, with its row count
     data_pvt_samples / _composition / _tests      the lab report(s): fluid modeler
     data_tops                                     tops picks: geo modeler
-    data_contacts, data_geo_spec                  contacts and the grid spec (engineer's choices): geo modeler
+    data_contacts, data_geo_spec                  contacts and the grid spec (engineer's choices): res and geo modelers
     data_wells, data_surveys, data_perforations,  well modeler (and geo, for the surveys)
     data_controls, data_production
     data_issues                        what is still missing or doubtful, per modeler
@@ -68,7 +68,7 @@ ROLES = [   # checked in this order: the first role whose columns a table has wi
     ("wells", {"well_name", "type", "phase"}),
     ("history", {"well_name", "date"}),
 ]
-GEO_SPEC_KEYS = ("surfaces", "layers", "areal", "contacts")
+GEO_SPEC_KEYS = ("surfaces", "layers", "areal")
 CONTACT_KEYS = ("datum_depth", "datum_pressure", "owc_depth", "goc_depth")
 POROSITY = {"PHIE", "PHIT", "PORO", "PHI", "NPHI_CORR"}
 PERMEABILITY = {"PERM", "KLOGH", "KH", "PERMX"}
@@ -412,6 +412,8 @@ def _load_geo(L: _Loader, f: dict, geo_spec: dict | None) -> None:
         L.issue("geo", "required", "grid spec",
                 "no geo spec (geo.json: surfaces in order, layers per zone, areal grid x0/y0/dx/dy/nx/ny, contacts "
                 "datum_depth/datum_pressure/owc_depth): the engineer gives the grid and contacts")
+        L.issue("res", "required", "contacts", "no contacts (geo.json 'contacts': datum_depth, datum_pressure, "
+                                               "owc_depth, goc_depth): the engineer gives them")
         return
     miss = [k for k in GEO_SPEC_KEYS if k not in spec]
     if miss:
@@ -421,11 +423,14 @@ def _load_geo(L: _Loader, f: dict, geo_spec: dict | None) -> None:
         if unknown:
             L.issue("geo", "required", "grid spec", f"surfaces with no tops picks: {', '.join(unknown)}")
     c = spec.get("contacts") or {}
+    if not c:
+        L.issue("res", "required", "contacts", "geo spec lacks contacts (datum_depth, datum_pressure, owc_depth, "
+                                               "goc_depth): the res modeler needs them for the initial state")
     if c:
         L.con.execute("INSERT INTO data_contacts(study_id, source_id, datum_depth, datum_pressure, owc_depth, "
                       "goc_depth) VALUES (?,?,?,?,?,?)", (L.sid, spec_src, *(c.get(k) for k in CONTACT_KEYS)))
         if c.get("datum_depth") is None or c.get("datum_pressure") is None:
-            L.issue("geo", "required", "contacts", "contacts need datum_depth and datum_pressure")
+            L.issue("res", "required", "contacts", "contacts need datum_depth and datum_pressure")
     L.con.execute("INSERT INTO data_geo_spec(study_id, source_id, spec_json) VALUES (?,?,?)",
                   (L.sid, spec_src, json.dumps({k: v for k, v in spec.items() if k != "contacts"})))
 

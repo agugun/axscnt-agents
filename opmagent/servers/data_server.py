@@ -1,6 +1,6 @@
 """Data MCP server. Start with a profile; it registers only that profile's tools.
 
-    opmagent-data --profile fluid|geo|well|import|deck|run|data|view|reviewer [--config opmagent.toml]
+    opmagent-data --profile fluid|geo|res|well|import|deck|run|data|view|reviewer [--config opmagent.toml]
 
 Every tool returns a dict with "ok", a short "spoken_summary" and its result, or
 {"ok": false, "code", "message", "details"} on failure. Write tools are recorded in audit_log.
@@ -22,9 +22,10 @@ from ..core import db, files, models, review, studies
 from ..core.errors import FORBIDDEN, INVALID_INPUT, ToolError
 from ..notebooks import runner
 
-PROFILES = ("fluid", "geo", "well", "import", "deck", "run", "data", "view", "reviewer")
-MODELER_KIND = {"fluid": "fluid", "geo": "geo", "well": "well"}
-STUDY_TASK = {p: p for p in ("data", "fluid", "geo", "well", "deck", "run", "view")}   # profile -> its study task
+PROFILES = ("fluid", "geo", "res", "well", "import", "deck", "run", "data", "view", "reviewer")
+MODELER_KIND = {"fluid": "fluid", "geo": "geo", "res": "res", "well": "well"}
+READS = {"res": {"res", "geo"}}   # a modeler reads its own kind; the res modeler also reads the geo grid it builds on
+STUDY_TASK = {p: p for p in ("data", "fluid", "geo", "res", "well", "deck", "run", "view")}   # profile -> its study task
 AUTO_REVIEWER = "auto (approval disabled)"
 
 
@@ -76,7 +77,7 @@ class DataService:
         return {"ok": True, "files": hits, "spoken_summary": say}
 
     def list_models(self, kind: str | None = None, status: str | None = None) -> dict:
-        """List model versions, optionally filtered by kind (fluid/geo/well) and status."""
+        """List model versions, optionally filtered by kind (fluid/geo/res/well) and status."""
         rows = models.list_models(self.con, kind, status)
         if self.profile in ("deck", "run"):
             rows = [r for r in rows if r["status"] == "approved"]
@@ -84,8 +85,9 @@ class DataService:
 
     def get_model(self, kind: str, version_id: int, include_tables: bool = True) -> dict:
         """Read one model version: header and all its tables."""
-        if self.profile in MODELER_KIND and MODELER_KIND[self.profile] != kind:
-            raise ToolError(FORBIDDEN, f"profile '{self.profile}' reads only {MODELER_KIND[self.profile]} models")
+        if self.profile in MODELER_KIND and kind not in READS.get(self.profile, {MODELER_KIND[self.profile]}):
+            raise ToolError(FORBIDDEN, f"profile '{self.profile}' reads only "
+                                       f"{' and '.join(sorted(READS.get(self.profile, {MODELER_KIND[self.profile]})))} models")
         m = models.get_model(self.con, kind, version_id, approved_only=self.profile in ("deck", "run"), tables=include_tables)
         h = m["header"]
         return {"ok": True, **m, "spoken_summary": f"{kind} {h['model_name']} version {h['version']}, {h['status']}."}
@@ -152,10 +154,11 @@ class DataService:
 
     # ------------------------------------------------------------ deck builder
     def create_deck(self, name: str, requirement_text: str, spec: dict, fluid_version_id: int,
-                    geo_version_id: int, well_version_id: int, origin: str = "built") -> dict:
-        """Register a deck built from approved fluid, geo and well versions."""
+                    geo_version_id: int, well_version_id: int, res_version_id: int, origin: str = "built") -> dict:
+        """Register a deck built from approved fluid, geo, res and well versions (the res version is defined on
+        the deck's geo version)."""
         d = models.create_deck(self.con, name, requirement_text, spec, fluid_version_id, geo_version_id,
-                               well_version_id, origin)
+                               well_version_id, res_version_id, origin)
         return {"ok": True, "deck": d, "spoken_summary": f"Deck {name} registered as number {d['id']}."}
 
     def add_deck_file(self, deck_id: int, path: str, role: str, kind: str = "include", main: bool = False) -> dict:
@@ -190,7 +193,7 @@ class DataService:
                    start_date: str | None = None, report: str = "monthly", unit_system: str = "METRIC",
                    summary: list[str] | None = None) -> dict:
         """Start a study (deck builder): creates its folder (inbox/, deck/, runs/), study.json and the
-        task chain data -> fluid, geo, well -> deck -> run -> view. The data manager's task is ready first."""
+        task chain data -> fluid, geo -> res, well -> deck -> run -> view. The data manager's task is ready first."""
         if self.profile != "deck":
             raise ToolError(FORBIDDEN, "only the deck builder starts studies")
         st = studies.init_study(self.con, self.cfg.studies_dir, name, requirement, actor=self.profile, years=years,
@@ -275,7 +278,7 @@ class DataService:
 
     def deck_tables(self, name: str, kind: str | None = None, table: str | None = None, limit: int = 200) -> dict:
         """For a study whose data came from a deck: its tables per model (fluid pvto/pvdg/pvtw/density/...,
-        geo swof/sgof/rock/contacts/faults, well wells/well_completions/well_events), first `limit` rows each."""
+        geo faults, res swof/sgof/rock/contacts, well wells/well_completions/well_events), first `limit` rows each."""
         from ..data.deck_source import deck_info, deck_tables
         info = deck_info(self.con, name)
         t = deck_tables(self.con, name, kind, table)
@@ -468,6 +471,7 @@ QC_NOTEBOOKS = ["run_qc_notebook", "create_investigation_notebook", "run_investi
 TOOLS = {
     "fluid": COMMON + WRITER + STUDY + DATA_READ + FEEDBACK + QC_NOTEBOOKS, "geo": COMMON + WRITER + STUDY + DATA_READ + FEEDBACK + QC_NOTEBOOKS,
     "well": COMMON + WRITER + STUDY + DATA_READ + FEEDBACK + QC_NOTEBOOKS,
+    "res": COMMON + WRITER + STUDY + DATA_READ + FEEDBACK,
     "import": COMMON + WRITER,
     "deck": COMMON + ["create_deck", "add_deck_file", "set_deck_status", "list_decks", "get_deck", "init_study"] + STUDY,
     "run": COMMON + ["list_decks", "get_deck"] + STUDY,

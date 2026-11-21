@@ -37,7 +37,7 @@ td,th{{border-bottom:1px solid #eee;padding:4px 8px;text-align:left}}</style></h
 <p>Source: {html.escape(imp['spec']['source_deck'])}<br>Grid {g['nx']} x {g['ny']} x {g['nz']}, {g['nactive']} active cells.
 Generated {datetime.now():%Y-%m-%d %H:%M}.</p>
 <h2>Coverage</h2><p>{counts}. Schedule mode: <b>{cov['schedule_mode']}</b>.</p>
-<p><i>mapped</i>: stored in the fluid, geo or well model. <i>applied</i>: edit operators already applied by OPM to the
+<p><i>mapped</i>: stored in the fluid, geo, res or well model. <i>applied</i>: edit operators already applied by OPM to the
 stored arrays. <i>regenerated</i>: written by the deck builder. <i>passthrough</i>: carried verbatim.</p>
 <h2>Why the schedule is verbatim</h2><ul>{reasons}</ul>
 <h2>All keywords</h2><table><tr><th>Section</th><th>Keyword</th><th>Handling</th></tr>{rows}</table></body></html>"""
@@ -46,7 +46,7 @@ stored arrays. <i>regenerated</i>: written by the deck builder. <i>passthrough</
 
 
 def import_to_drafts(cfg, deck_path: str, name: str) -> dict:
-    """Parse the deck, write fluid/geo/well drafts (origin 'imported'), coverage report, submit for review."""
+    """Parse the deck, write fluid/geo/res/well drafts (origin 'imported'), coverage report, submit for review."""
     if not re.fullmatch(r"[A-Za-z0-9_\-]+", name):
         raise ToolError(INVALID_INPUT, "name must be letters, digits, _ or -")
     out = _new_import_dir(cfg.file_store / "imports" / name)   # never reuse: earlier versions keep their files
@@ -93,7 +93,7 @@ def import_to_drafts(cfg, deck_path: str, name: str) -> dict:
     (out / IMPORT_META).write_text(json.dumps({"name": name, "source_deck": str(Path(deck_path).resolve()),
                                                "versions": result["versions"], "created": datetime.now().isoformat()}))
     result.update(spec=str(spec_path), coverage_report=str(rep), import_dir=str(out),
-                  spoken_summary=(f"Imported {Path(deck_path).name} as {name}: fluid, geo and well models are waiting for "
+                  spoken_summary=(f"Imported {Path(deck_path).name} as {name}: fluid, geo, res and well models are waiting for "
                                   f"your review. {imp['coverage']['counts'].get('passthrough', 0)} keywords are carried "
                                   f"verbatim; schedule is {imp['coverage']['schedule_mode']}."))
     result["ok"] = True
@@ -101,6 +101,7 @@ def import_to_drafts(cfg, deck_path: str, name: str) -> dict:
 
 
 IMPORT_META = "import.json"
+KINDS = ("fluid", "geo", "res", "well")
 
 
 def _new_import_dir(base: Path) -> Path:
@@ -114,9 +115,9 @@ def _new_import_dir(base: Path) -> Path:
 
 
 def _approved_import(cfg, name: str) -> tuple[Path, dict] | None:
-    """The newest import of this name whose fluid, geo and well versions are all approved."""
+    """The newest import of this name whose fluid, geo, res and well versions are all approved."""
     svc = DataService("deck", cfg)   # sees approved models only
-    approved = {k: {m["version_id"] for m in svc.list_models(kind=k)["models"]} for k in ("fluid", "geo", "well")}
+    approved = {k: {m["version_id"] for m in svc.list_models(kind=k)["models"]} for k in KINDS}
     for meta in sorted((cfg.file_store / "imports" / name).glob(f"import-*/{IMPORT_META}"), reverse=True):
         v = json.loads(meta.read_text())["versions"]
         if all(v.get(k) in approved[k] for k in approved):
@@ -126,7 +127,7 @@ def _approved_import(cfg, name: str) -> tuple[Path, dict] | None:
 
 def _rollback(svc, result):
     """Remove the drafts this import created (all-or-nothing)."""
-    for kind in ("well", "geo", "fluid"):
+    for kind in ("well", "res", "geo", "fluid"):   # well and res reference geo
         vid = result["versions"].get(kind) or result.get("_created", {}).get(kind)
         if not vid:
             continue
@@ -148,6 +149,14 @@ def _make_all(make, imp, D, deck_path, name, result):
         else:
             props.append({"keyword": p["keyword"], "const_value": p["const_value"]})
     geo_v = make("geo", gh, {**g["tables"], "geo_properties": props})
+    r = imp["res"]
+    rprops = []
+    for p in r["props"]:
+        if "file" in p:
+            rprops.append({"keyword": p["keyword"], "file_id": D("register_file", path=p["file"], kind="property")["file_id"]})
+        else:
+            rprops.append({"keyword": p["keyword"], "const_value": p["const_value"]})
+    make("res", r["header"], {**r["tables"], "res_properties": rprops}, {"geo_version_id": geo_v["version_id"]})
     w = imp["well"]
     make("well", w["header"], w["tables"], {"geo_version_id": geo_v["version_id"]})
 
@@ -158,13 +167,13 @@ def verify(cfg, name: str, on_progress=None) -> dict:
     found = _approved_import(cfg, name)
     if found:   # rebuild from exactly the versions this import created, with this import's files
         base, versions = found
-        models = {k: int(versions[k]) for k in ("fluid", "geo", "well")}
+        models = {k: int(versions[k]) for k in KINDS}
     else:       # imports made before per-import folders: one shared folder, latest approved models
         base = cfg.file_store / "imports" / name
-        models = {k: f"{name}_{k.upper()}" for k in ("fluid", "geo", "well")}
+        models = {k: f"{name}_{k.upper()}" for k in KINDS}
         if not (base / "deck_spec.json").exists():
             if any(base.glob(f"import-*/{IMPORT_META}")):
-                raise ToolError(INVALID_INPUT, f"no import of {name} has all three models approved yet")
+                raise ToolError(INVALID_INPUT, f"no import of {name} has all four models approved yet")
             raise ToolError(INVALID_INPUT, f"no import named {name}")
     spec = json.loads((base / "deck_spec.json").read_text())
     spec.update(models)

@@ -1,7 +1,7 @@
 """Helpers for the geo QC notebooks (the standard template geo_qc.ipynb and investigation notebooks).
 
 Read only, like the fluid QC: a notebook loads the payload the geo pipeline wrote (tops, the logs it used,
-the upscaled values, the spec) and the model as stored: the header, contacts, SWOF/SGOF and ROCK from the
+the upscaled values, the spec) and the model as stored: the header and faults from the
 database (read-only connection), and every cell array from its registered file, after checking its sha256.
 So it checks what the deck builder will read. Every check returns a finding {area, check, status, detail};
 the display helpers and the summary are shared with the fluid QC (qc_lib).
@@ -22,17 +22,15 @@ from ..core.files import sha256_of
 from ..validators._util import read_array
 from .qc_lib import LAYOUT, finding, overall, show_findings, show_list, write_summary  # noqa: F401  (re-exported)
 
-AREAS = ("surfaces", "wells", "properties", "contacts", "volumes", "scal", "files")
+AREAS = ("surfaces", "wells", "properties", "volumes", "files")   # SCAL, rock, contacts: the res model's QC
 # thresholds (metres, fractions): a build that honours its data sits well inside the pass limits
 TOP_WARN, TOP_FAIL = 2.0, 10.0                 # surface vs well top at the well's column
 # model cell (at the cell centre) vs upscaled log (at the well): the difference grows with the well's offset
 WELL_TOL = {"phi": (0.01, 0.03), "log10_perm": (0.1, 0.3), "ntg": (0.05, 0.15)}
-DATUM_WARN = 50.0                              # datum this far outside the grid (m) is worth a look
 MEAN_PHI_WARN = 0.02                           # model mean porosity vs log mean inside the reservoir
 CLIP_WARN = 0.01                               # share of cells sitting on a build clip limit
 LOO_PHI_WARN = 0.04                            # leave-one-well-out porosity RMSE
 PHI_CLIP, PERM_CLIP = (0.01, 0.45), (0.01, 2e4)   # geo.build clips kriged values to these
-SCAL_TOL = 1e-6
 
 
 # ---------------------------------------------------------------- loading
@@ -53,8 +51,7 @@ def load(payload_path: str | Path, db_path: str | Path | None = None, version_id
         h = dict(con.execute("SELECT * FROM geo_model_versions WHERE id = ?", (version_id,)).fetchone())
         nx, ny, nz = h["nx"], h["ny"], h["nz"]
         tables = {t: [dict(r) for r in con.execute(f"SELECT * FROM {t} WHERE version_id = ? ORDER BY {o}", (version_id,))]
-                  for t, o in (("swof", "satnum, sw"), ("sgof", "satnum, sg"), ("rock", "region"),
-                               ("contacts", "eqlnum"), ("faults", "id"))}
+                  for t, o in (("faults", "id"),)}
         files, arrays = [], {}
         for p in con.execute("SELECT g.keyword, g.const_value, f.path, f.sha256 FROM geo_properties g "
                              "LEFT JOIN files f ON f.id = g.file_id WHERE g.version_id = ? ORDER BY g.keyword",
@@ -74,6 +71,8 @@ def load(payload_path: str | Path, db_path: str | Path | None = None, version_id
     finally:
         con.close()
     spec_json = json.loads(h["spec_json"] or "{}")
+    spec_c = (data.get("spec") or {}).get("contacts")
+    data["contacts"] = [dict(spec_c, eqlnum=1)] if spec_c else []   # the spec's, for HCPV and sections only
     data.update(header=h, nx=nx, ny=ny, nz=nz, tables=tables, arrays=arrays, files=files, tables_from_db=True,
                 areal=spec_json.get("areal") or data.get("areal"))
     lf = spec_json.get("layer_depths_file") or data.get("layer_depths_file")
@@ -290,42 +289,6 @@ def reservoir_logs(data: dict) -> pd.DataFrame:
     return lg[(lg["tvd"] >= top) & (lg["tvd"] < base)]
 
 
-def contact_checks(data: dict) -> list[dict]:
-    area, out = "contacts", []
-    ld = data["layer_depths"]
-    rows = data["tables"]["contacts"]
-    if ld is None or not rows:
-        return [finding(area, "Contacts", "n/a", "no layer depths or contacts")]
-    top, base = float(ld[0].min()), float(ld[-1].max())
-    spec_c = data["spec"].get("contacts", {})
-    for c in rows:
-        where = f"EQLNUM {c['eqlnum']}"
-        diff = []
-        for k in ("datum_depth", "datum_pressure", "owc_depth", "goc_depth"):
-            if k in spec_c and ((spec_c[k] is None) != (c[k] is None)
-                                or (c[k] is not None and abs(float(spec_c[k]) - c[k]) > 1e-9)):
-                diff.append(k)
-        out.append(finding(area, f"Stored contacts are the spec's ({where})", "fail" if diff else "pass",
-                           f"differ: {diff}" if diff else "datum, OWC and GOC as given"))
-        d = c["datum_depth"]
-        off = max(top - d, d - base, 0.0)
-        out.append(finding(area, f"Datum depth at the reservoir ({where})", "pass" if off <= DATUM_WARN else "warn",
-                           f"datum {d:g} m; grid {top:.1f}-{base:.1f} m" + (
-                               f"; {off:.1f} m outside it, which OPM allows (pressure is integrated from the datum)"
-                               if off else "")))
-        owc, goc = c["owc_depth"], c["goc_depth"]
-        if owc is not None:
-            st, det = ("fail", "above the top of the grid: no oil in place") if owc <= top else \
-                      ("warn", "below the base of the grid: no water leg in the model") if owc >= base else ("pass", "inside the grid")
-            out.append(finding(area, f"OWC {owc:g} m ({where})", st, f"{det} ({top:.1f}-{base:.1f} m)"))
-        if goc is not None:
-            if owc is not None and goc >= owc:
-                out.append(finding(area, f"GOC above OWC ({where})", "fail", f"GOC {goc:g} m is not above OWC {owc:g} m"))
-            st, det = ("warn", "above the top of the grid: no gas cap in the model") if goc <= top else \
-                      ("fail", "below the base of the grid: no oil leg") if goc >= base else ("pass", "inside the grid")
-            out.append(finding(area, f"GOC {goc:g} m ({where})", st, det))
-    return out
-
 
 def volumes(data: dict) -> pd.DataFrame:
     """Pore volume and HCPV per zone, recomputed from the stored arrays and layer depths."""
@@ -333,8 +296,8 @@ def volumes(data: dict) -> pd.DataFrame:
     th = ld[1:] - ld[:-1]
     ntg = arr.get("NTG", np.ones_like(arr["PORO"]))
     pv = th * a["dx"] * a["dy"] * arr["PORO"] * ntg
-    c = data["tables"]["contacts"]
-    owc = c[0]["owc_depth"] if c else None
+    c = data["contacts"]
+    owc = c[0].get("owc_depth") if c else None
     centre = 0.5 * (ld[1:] + ld[:-1])
     hc = pv * (centre < owc) if owc is not None else pv
     zone = np.repeat(np.arange(len(data["spec"]["layers"])), data["spec"]["layers"])
@@ -366,35 +329,6 @@ def volume_checks(data: dict) -> list[dict]:
     return out
 
 
-def scal_checks(data: dict) -> list[dict]:
-    area, out = "scal", []
-    c = data["spec"].get("scal", {})
-    swc, sorw, sorg, sgc = c.get("swc", 0.2), c.get("sorw", 0.2), c.get("sorg", 0.1), c.get("sgc", 0.05)
-    krw_max, krg_max = c.get("krw_max", 0.4), c.get("krg_max", 0.8)
-    sw, sg = data["tables"]["swof"], data["tables"]["sgof"]
-    if sw:
-        at = lambda rows, key, x: next((r for r in rows if abs(r[key] - x) < SCAL_TOL), None)  # noqa: E731
-        first, end = sw[0], at(sw, "sw", 1 - sorw)
-        bad = []
-        if abs(first["sw"] - swc) > SCAL_TOL or abs(first["krow"] - 1) > SCAL_TOL:
-            bad.append(f"first row Sw {first['sw']:g}, krow {first['krow']:g} (spec Swc {swc:g}, krow 1)")
-        if end is None or abs(end["krow"]) > SCAL_TOL or abs(end["krw"] - krw_max) > SCAL_TOL:
-            bad.append(f"at Sw = 1 - Sorw = {1 - sorw:g}: " + (f"krw {end['krw']:g}, krow {end['krow']:g} (spec krw {krw_max:g}, krow 0)"
-                                                               if end else "no row"))
-        out.append(finding(area, "SWOF end points are the spec's", "fail" if bad else "pass",
-                           "; ".join(bad) or f"Swc {swc:g}, Sorw {sorw:g}, krw max {krw_max:g}"))
-    if sg:
-        at = lambda rows, key, x: next((r for r in rows if abs(r[key] - x) < SCAL_TOL), None)  # noqa: E731
-        crit, end = at(sg, "sg", sgc), at(sg, "sg", 1 - swc - sorg)
-        bad = []
-        if crit is None or abs(crit["krg"]) > SCAL_TOL:
-            bad.append(f"krg at Sgc {sgc:g} is not 0")
-        if end is None or abs(end["krog"]) > SCAL_TOL or abs(end["krg"] - krg_max) > SCAL_TOL:
-            bad.append(f"at Sg = 1 - Swc - Sorg = {1 - swc - sorg:g}: " + (f"krg {end['krg']:g}, krog {end['krog']:g}" if end else "no row"))
-        out.append(finding(area, "SGOF end points are the spec's", "fail" if bad else "pass",
-                           "; ".join(bad) or f"Sgc {sgc:g}, Sorg {sorg:g}, krg max {krg_max:g}"))
-    return out
-
 
 def file_checks(data: dict) -> list[dict]:
     changed = [f["keyword"] for f in data["files"] if not f["same"]]
@@ -405,7 +339,7 @@ def file_checks(data: dict) -> list[dict]:
 
 def run_all_checks(data: dict) -> list[dict]:
     out = file_checks(data)
-    for fn in (surface_checks, well_checks, property_checks, contact_checks, volume_checks, scal_checks):
+    for fn in (surface_checks, well_checks, property_checks, volume_checks):
         try:
             out += fn(data)
         except Exception as e:  # noqa: BLE001  a check that can't run is a finding, not a crash
@@ -476,10 +410,10 @@ def fig_section(data: dict, kw: str = "PORO", well: str | None = None, along: st
     for w, r in wc.iterrows():
         if (along == "x" and r["j"] == j) or (along == "y" and r["i"] == i):
             fig.add_vline(x=r["x"] if along == "x" else r["y"], line=dict(color="white", dash="dot"), annotation_text=w)
-    cc = data["tables"]["contacts"]
+    cc = data["contacts"]
     for c in cc[:1]:
         for key, colour in (("owc_depth", "#1f77b4"), ("goc_depth", "#d62728")):
-            if c[key] is not None:
+            if c.get(key) is not None:
                 fig.add_hline(y=c[key], line=dict(color=colour, dash="dash"), annotation_text=key.split("_")[0].upper())
     fig.update_yaxes(autorange="reversed", title="TVD (m)")
     fig.update_xaxes(title=f"{along} (m)")
@@ -574,15 +508,4 @@ def fig_at_wells(data: dict):
     fig.update_xaxes(title="upscaled log porosity")
     fig.update_yaxes(title="model porosity", row=1, col=1)
     fig.update_layout(**LAYOUT, title="Porosity at the wells")
-    return fig
-
-
-def fig_scal(data: dict):
-    sw, sg = data["tables"]["swof"], data["tables"]["sgof"]
-    fig = make_subplots(rows=1, cols=2, subplot_titles=("SWOF", "SGOF"))
-    for key, rows, c, xk in (("krw", sw, 1, "sw"), ("krow", sw, 1, "sw"), ("krg", sg, 2, "sg"), ("krog", sg, 2, "sg")):
-        fig.add_trace(go.Scatter(x=[r[xk] for r in rows], y=[r[key] for r in rows], mode="lines+markers", name=key), 1, c)
-    fig.update_xaxes(title="Sw", row=1, col=1)
-    fig.update_xaxes(title="Sg", row=1, col=2)
-    fig.update_layout(**LAYOUT, title="Relative permeability as stored")
     return fig

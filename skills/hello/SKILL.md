@@ -1,6 +1,6 @@
 ---
 name: hello
-description: Run the end-to-end demo ("hello") that builds default fluid, geo and well models, waits for human approval, then builds and runs a demo OPM deck. Use when the user says hello, asks to test the install, or asks for a demo run.
+description: Run the end-to-end demo ("hello") that builds default fluid, geo, res and well models, waits for human approval, then builds and runs a demo OPM deck. Use when the user says hello, asks to test the install, or asks for a demo run.
 ---
 
 # Hello
@@ -8,7 +8,7 @@ description: Run the end-to-end demo ("hello") that builds default fluid, geo an
 Run `opmagent hello` and read its stage lines aloud briefly.
 
 1. **First run** builds `HELLO_FLUID` (NeqSim), `HELLO_GEO` and `HELLO_WELLS` as demo models and submits
-   them for review. It stops at "waiting for your approval". Tell the user the three models are ready and
+   them for review. It stops at "waiting for your approval". Tell the user the four models are ready and
    how to approve: say "approve hello" in their own client (reviewer tools), or run
    `opmagent review approve-hello` in a terminal. **You cannot and must not approve them.**
 2. **After approval**, run `opmagent hello` again. It builds the HELLO deck, parses it with OPM and runs it

@@ -17,8 +17,18 @@ def connect(path: str | Path) -> sqlite3.Connection:
     con.execute("PRAGMA foreign_keys = ON")
     con.execute("PRAGMA busy_timeout = 5000")
     if con.execute("SELECT 1 FROM sqlite_master WHERE name = 'decks'").fetchone():
+        if not con.execute("SELECT 1 FROM sqlite_master WHERE name = 'res_model_versions'").fetchone():
+            con.close()
+            raise OldSchemaError(
+                f"{path} was created before 0.3 (no reservoir-engineering models: SCAL, rock, contacts and regions "
+                "moved from the geo model to the res model). Create a fresh database: move this one aside and run "
+                "`opmagent init-db` (or `opmagent setup <workspace>` for a new workspace), then rebuild the studies.")
         migrate(con)
     return con
+
+
+class OldSchemaError(RuntimeError):
+    """The database predates the current schema and can't be upgraded in place."""
 
 
 files_tbl_sql = """        CREATE TABLE data_files (
@@ -47,7 +57,7 @@ MIGRATIONS = [
         vector TEXT NOT NULL, time_days REAL NOT NULL, value REAL NOT NULL, PRIMARY KEY (run_id, vector, time_days));
         CREATE INDEX IF NOT EXISTS idx_runs_deck ON runs(deck_id);"""),
     # Studies (v0.2): the shared board agents coordinate through. A study's tasks form a fixed chain
-    # data -> fluid, geo, well -> deck -> run -> view; requests carry 'data missing / needs work' back and forth.
+    # data -> fluid, geo -> res, well -> deck -> run -> view; requests carry 'data missing / needs work' back and forth.
     ("studies", """CREATE TABLE studies (
         id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE CHECK (name GLOB '[A-Za-z0-9_-]*' AND length(name) > 0),
         requirement TEXT NOT NULL, spec_json TEXT NOT NULL, folder TEXT NOT NULL,
@@ -55,7 +65,7 @@ MIGRATIONS = [
         created_by TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now')));
         CREATE TABLE study_tasks (
         id INTEGER PRIMARY KEY, study_id INTEGER NOT NULL REFERENCES studies(id) ON DELETE CASCADE,
-        task TEXT NOT NULL CHECK (task IN ('data','fluid','geo','well','deck','run','view')),
+        task TEXT NOT NULL CHECK (task IN ('data','fluid','geo','res','well','deck','run','view')),
         status TEXT NOT NULL DEFAULT 'waiting'
           CHECK (status IN ('waiting','ready','in_progress','blocked','done','failed')),
         depends_on TEXT NOT NULL DEFAULT '', result_json TEXT, note TEXT,
@@ -148,7 +158,7 @@ MIGRATIONS = [
         source_id INTEGER REFERENCES data_sources(id) ON DELETE CASCADE, spec_json TEXT NOT NULL);
         CREATE TABLE data_issues (
         id INTEGER PRIMARY KEY, study_id INTEGER NOT NULL REFERENCES studies(id) ON DELETE CASCADE,
-        modeler TEXT NOT NULL CHECK (modeler IN ('fluid','geo','well','data')),
+        modeler TEXT NOT NULL CHECK (modeler IN ('fluid','geo','res','well','data')),
         severity TEXT NOT NULL CHECK (severity IN ('required','decision','warning')),
         item TEXT NOT NULL, message TEXT NOT NULL);"""),
     # Upgrade for databases that got the first study-data shape (log samples in the database): logs stay files.
@@ -166,13 +176,13 @@ MIGRATIONS = [
         grid_json TEXT, loaded_at TEXT NOT NULL DEFAULT (datetime('now')));
         CREATE TABLE data_deck_rows (
         id INTEGER PRIMARY KEY, study_id INTEGER NOT NULL REFERENCES studies(id) ON DELETE CASCADE,
-        kind TEXT NOT NULL CHECK (kind IN ('fluid','geo','well')), tbl TEXT NOT NULL, seq INTEGER NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('fluid','geo','res','well')), tbl TEXT NOT NULL, seq INTEGER NOT NULL,
         row_json TEXT NOT NULL);
         CREATE INDEX idx_data_deck_rows ON data_deck_rows(study_id, kind, tbl, seq);"""),
     # Review feedback: what a reviewer says about a model version, item by item, and the modeler's answer.
     # Only the reviewer writes comments; the modeler only answers them (with the version that addresses them).
     ("review_feedback", """CREATE TABLE review_feedback (
-        id INTEGER PRIMARY KEY, model_kind TEXT NOT NULL CHECK (model_kind IN ('fluid','geo','well')),
+        id INTEGER PRIMARY KEY, model_kind TEXT NOT NULL CHECK (model_kind IN ('fluid','geo','res','well')),
         version_id INTEGER NOT NULL, model_name TEXT NOT NULL, item TEXT, comment TEXT NOT NULL
           CHECK (length(trim(comment)) > 0),
         severity TEXT NOT NULL DEFAULT 'change' CHECK (severity IN ('change','question','note')),
