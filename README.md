@@ -1,6 +1,6 @@
 # axscnt-agents
 
-Agent system for OPM Flow reservoir simulation (black oil). For each **study**, a data manager prepares the raw data; fluid, geo and well modeler agents build versioned models from it; you approve each one (or turn on auto-approve); a deck builder turns approved models into validated OPM decks; a run agent runs them and stores results; a results viewer opens them in ResInsight. A deck importer reverse-engineers existing decks with a round-trip check.
+Agent system for OPM Flow reservoir simulation (black oil). For each **study**, a data manager prepares the raw data; fluid, geo and well modeler agents build versioned models from it; you approve each one (or turn on auto-approve); a deck builder turns approved models into validated OPM decks; a run agent runs them and stores results; a results viewer opens them in ResInsight. A deck importer reverse-engineers existing decks with a round-trip check, and a study can be started from an existing deck: its data becomes the study input, the agents rebuild it, and the deck comparison checks that the generated deck is the same simulation deck.
 
 Version 0.2.0: see [CHANGELOG.md](CHANGELOG.md).
 
@@ -13,16 +13,20 @@ Design: see the architecture and user-guide docs (links in `docs/README.md`).
 | Database + human approval gate (optional auto-approve) | SQLite, triggers | done, tested |
 | Data server (profiles: fluid, geo, well, import, deck, run, data, view, reviewer) | MCP `opmagent-data` | done, tested |
 | Studies: task board, requests between agents, coordinator skill | `opmagent study`, `study` skill | done, tested |
-| Data manager (study inbox -> modeler input formats) | `opmagent data check / prepare` | done, tested |
+| Data manager (study inbox -> modeler input formats) | `opmagent data check / load / show / verify` | done, tested |
+| Reverse process: a study from an existing deck, or from another study's input | `opmagent data from-deck / from-study` | done, tested |
+| Model views before simulation (fluid, geo, well QC reports from deck data) | `opmagent study view` | done, tested |
+| Deck comparison (same simulation deck, without a run) | `opmagent deck compare`, `study compare --deck-only` | done, tested |
 | Results viewer (ResInsight) | `opmagent results open` | done, tested |
 | Fluid modeler (NeqSim, Excel lab report) | MCP `opmagent-pvt` + `opmagent fluid build` | done, tested |
-| Geo modeler (tops + LAS -> corner-point grid, kriging) | `opmagent geo build` | done, tested |
+| Geo modeler (tops + LAS -> corner-point grid, kriging, QC notebook) | `opmagent geo build / qc / investigate` | done, tested |
 | Well modeler (surveys, perforations, history incl. Volve, controls) | `opmagent well build` | done, tested |
 | Deck builder | `opmagent deck build` | done, tested |
 | Run agent (runs, results, compare, VS Code debug) | MCP `opmagent-sim` | done, tested |
 | Deck importer + round trip (SPE1, SPE9, Norne) | `opmagent import deck / verify` | done, tested |
 | `hello` end-to-end demo | `opmagent hello` | done, tested |
 | Local setup for Claude Code | `opmagent setup` | done |
+| Testing scenarios (SPE9 reverse loop) | `testing/spe9_loop.sh`, [testing/](testing/README.md) | done, run on SPE9 |
 
 ## Laptop setup (Ubuntu)
 
@@ -53,6 +57,9 @@ cd ~/opm-agents
 opmagent hello                       # builds the 3 demo models, waits for you
 opmagent review approve-hello        # you approve (interactive: type 'approve')
 opmagent hello                       # builds the HELLO deck, parses it with OPM, runs it 5 years
+
+# testing scenario: the SPE9 reverse loop in a fresh temporary workspace (about 30 s; see testing/)
+NO_VIEWER=1 testing/spe9_loop.sh     # from the repo; prints PASS SPE9 reverse loop
 ```
 
 Then start Claude Code in `~/opm-agents`: the agents (`.claude/agents/`), skills and MCP servers are picked up
@@ -97,7 +104,8 @@ opmagent study init SPE9_RB --requirement "rebuild SPE9"
 opmagent data from-deck SPE9_RB ~/opmagent/open-data/opm-tests/spe9/SPE9.DATA   # tables -> database, arrays -> files
 opmagent study build geo SPE9_RB --complete   # likewise fluid, then well (after geo), then deck: the deck's data as given
 opmagent study view SPE9_RB --open     # each model's QC report (PVT curves, layer maps, SCAL, wells), no simulation
-opmagent data from-study SPE9_B SPE9_RB   # another study takes that input (tables copied, files copied and checked)
+opmagent study init SPE9_B --requirement "rebuild SPE9 from SPE9_RB's input"
+opmagent data from-study SPE9_B SPE9_RB   # SPE9_B takes that input (tables copied, files copied and checked)
 opmagent study compare SPE9_RB --deck-only   # same simulation deck? (parsed: grid, tables, arrays, schedule; no run)
 opmagent study run SPE9_RB             # run the study's deck, store it, complete the run task
 opmagent study compare SPE9_RB         # decks, then runs: static, initial state, every summary vector
@@ -177,6 +185,30 @@ takes a new build. Set `[qc] report = "html"` to go back to the static report.
 The agent skill is in `skills/fluid-modeler/SKILL.md`. For Claude Code, copy or link `skills/*` into
 `.claude/skills/` of the project you run the agents from.
 
+## Geo modeler
+
+```bash
+opmagent geo build --tops tops.csv --logs *.las --spec geo.json --name FieldX_Geo   # grid, QC notebook, submit
+opmagent geo investigate 7 --purpose "porosity at B in layer 2" --open    # starter notebook in VS Code
+opmagent geo run-notebook data/files/qc/geo_FieldX_Geo_v1/investigations/01_porosity_at_B_in_layer_2.ipynb
+opmagent geo qc 7             # re-run the standard QC for a draft (after return_to_draft), then resubmit
+```
+
+The geo QC report is a notebook too (`opmagent/notebooks/geo_qc.ipynb`), kept per version in
+`data/files/qc/geo_<model>_v<N>/` with `payload.json`, `logs.csv` (the logs the build used), the executed
+notebook, the HTML (the registered report) and `qc_summary.json`. It reads the cell arrays from their
+registered files (sha256 checked) and the tables from the database. It covers:
+- **Surfaces:** gridded surfaces against the well tops; zones pinched where surfaces were stopped from crossing.
+- **Wells:** each well's model column against its logs and upscaled values; layers without log data; porosity
+  predicted from the other wells (leave one well out).
+- **Properties:** layer maps, sections through a well, distributions and poro-perm against the logs;
+  PERMY/PERMZ against the spec; values held at the build's clip limits.
+- **Contacts, volumes, SCAL:** contacts against the spec and the grid's depth range; pore volume and HCPV
+  recomputed from the stored arrays; SWOF/SGOF end points against the spec.
+
+Findings don't block the build; they are listed for the reviewer. The geo profile has the same notebook tools as
+the fluid profile. Models from a deck keep their model view (`opmagent study view`).
+
 ## Deck builder and runs
 
 ```bash
@@ -189,7 +221,6 @@ opmagent review approve fluid 12       # or: reject geo 7 --comment "OWC should 
 opmagent import deck --input FIELD.DATA --name FieldX    # reverse a deck into models for review
 opmagent import verify --name FieldX                    # after approval: rebuild, run both, compare
 opmagent well build --wells w.csv --surveys s.csv --perforations p.csv --history h.xlsx --history-format volve --name FieldX_Wells
-opmagent geo build --tops tops.csv --logs *.las --spec geo.json --name FieldX_Geo
 ```
 
 **Watching a run.** Progress comes from Flow's log: report step, simulated date, percent of simulated time,
@@ -217,7 +248,8 @@ Each agent starts the data server with its own profile. Example MCP client confi
 
 The PVT engine server takes no profile: `opmagent-pvt --config /path/to/opmagent.toml`.
 
-Profiles: `fluid`, `geo`, `well`, `import` (writers), `deck`, `run` (read approved models only), `reviewer` (approve/reject).
+Profiles: `fluid`, `geo`, `well`, `import` (model writers), `data` (study data: inbox, deck or another study's
+input), `deck`, `run`, `view` (read approved models only), `reviewer` (approve/reject).
 Put the `reviewer` profile **only** in your own client, never in an agent's config. Approvals are recorded under
 `$OPMAGENT_REVIEWER` (or your OS user name).
 
@@ -267,17 +299,20 @@ opmagent/
   core/         schema_base.sql, schema.sql (generated), db.py, config.py
   validators/   fluid, geo, well, cross-model rules
   servers/      data_server, pvt_server, sim_server (MCP)
-  reports/      static QC report builder ([qc] report = "html")
-  notebooks/    QC notebook template, qc_lib helpers, headless runner
+  data/         study data: inbox load, checks, store (one read layer, checksums), deck and study input
+  reports/      static QC reports ([qc] report = "html"), model views of deck data
+  notebooks/    QC notebook templates (fluid, geo), qc_lib / geo_qc_lib helpers, headless runner
   pvt/          NeqSim engine, demo oil
   fluid/        Excel lab report, fluid pipeline
   geo/          geo modeler (gridding, kriging)
   well/         well modeler (ingest, Volve adapter)
-  deck/         renderer, builder, importer, round trip
+  deck/         renderer, builder, importer, round trip, deck comparison
   sim/          runner
   hello/        default demo data
 skills/         agent skills (SKILL.md per agent)
-tools/          build_schema.py (regenerates schema.sql), gen_triggers.py
+testing/        testing scenarios to follow by hand or by script (SPE9 reverse loop)
+tools/          build_schema.py (regenerates schema.sql), gen_triggers.py, fetch_open_data.sh
+docs/           links to the design docs
 tests/
 ```
 

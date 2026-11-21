@@ -1,4 +1,8 @@
-"""Geo modeler pipeline: tops + logs + spec -> draft geo model -> validate -> QC report -> submit."""
+"""Geo modeler pipeline: tops + logs + spec -> draft geo model -> validate -> QC report -> submit.
+
+The QC report is the executed standard notebook (opmagent/notebooks/geo_qc.ipynb) exported to HTML, kept per
+version in <file_store>/qc/geo_<model>_v<N>/ with its payload, the logs it used and qc_summary.json. With
+[qc] report = "html" it is the static report below."""
 from __future__ import annotations
 
 import json
@@ -16,6 +20,7 @@ from ..reports.simple_report import _list, _page, _table
 from ..servers.data_server import DataService
 from ..servers.data_server import wrap as dwrap
 from ..core.models import review_state
+from ..notebooks import runner
 from .build import build_grid, corey, read_logs
 
 
@@ -136,13 +141,43 @@ def build_geo_model(cfg, *, tops, logs, spec: dict, name: str, surveys=None, des
     if not val["passed"]:
         return {"ok": False, "status": "draft", "version_id": vid, "validator": val,
                 "spoken_summary": val["spoken_summary"] + " The draft is kept for fixing."}
-    rep = _report(cfg.file_store / "qc" / f"geo_{slug}_v{v['version']}.html", name, v["version"], g, lg, spec,
-                  assumptions, val["warnings"], swof, sgof)
+    qc_extra, findings_say = {}, ""
+    if cfg.qc_report == "notebook":
+        folder = runner.qc_dir(cfg.file_store, name, v["version"], kind="geo")
+        folder.mkdir(parents=True, exist_ok=True)
+        lg[["well_name", "tvd", "phi", "perm", "vsh"]].to_csv(folder / "logs.csv", index=False)
+        tcols = [c for c in ("well_name", "surface", "x", "y", "tvd") if c in t.columns.str.lower()]
+        runner.write_payload(folder, {
+            "model_name": name, "version": v["version"], "version_id": vid, "db_path": str(cfg.database),
+            "spec": spec, "areal": g["areal"], "layer_depths_file": g["layer_depths_file"],
+            "assumptions": assumptions, "validator_warnings": val["warnings"], "zones": g["zones"],
+            "upscaled": g["upscaled"], "logs_file": "logs.csv",
+            "tops": t.rename(columns=str.lower)[tcols].astype({"well_name": str}).to_dict("records")})
+        nb = runner.run_qc("geo", folder, cfg.database, vid, timeout=cfg.qc_timeout_s)
+        if not nb["ok"]:
+            return {"ok": False, "status": "draft", "version_id": vid, "qc_notebook": nb["notebook"],
+                    "error": nb["error"], "spoken_summary": f"The QC notebook failed ({nb['error']}). The draft is "
+                    f"kept; open {nb['notebook']} to see the failing cell."}
+        rep = Path(nb["html"])
+        D("register_file", path=nb["notebook"], kind="qc_report", note=f"executed QC notebook, geo version {vid}")
+        D("register_file", path=nb["payload"], kind="qc_report", note=f"QC payload, geo version {vid}")
+        D("register_file", path=str(folder / "logs.csv"), kind="qc_report", note=f"logs used, geo version {vid}")
+        s = nb["summary"]
+        qc_extra = {"qc_notebook": nb["notebook"], "qc_findings": s["counts"], "qc_overall": s["overall"],
+                    "qc_notebook_sha256": nb["notebook_sha256"]}
+        if s["overall"] != "pass":
+            findings_say = (f" The QC notebook flags {s['counts']['fail']} fail and {s['counts']['warn']} warn "
+                            f"finding(s) for the reviewer.")
+    else:
+        rep = _report(cfg.file_store / "qc" / f"geo_{slug}_v{v['version']}.html", name, v["version"], g, lg, spec,
+                      assumptions, val["warnings"], swof, sgof)
     rid = D("register_file", path=str(rep), kind="qc_report")["file_id"]
     tot = sum(z["hcpv_rm3"] for z in g["zones"])
     sub = D("submit_for_review", kind="geo", version_id=vid, qc_report_file_id=rid,
-            metrics={"cells": g["nx"] * g["ny"] * g["nz"], "hcpv_rm3": round(tot), "zones": len(g["zones"])})
+            metrics={"cells": g["nx"] * g["ny"] * g["nz"], "hcpv_rm3": round(tot), "zones": len(g["zones"]),
+                     **{k: x for k, x in qc_extra.items() if k != "qc_notebook"}})
     return {"ok": True, "status": sub["header"]["status"], "version_id": vid, "version": v["version"], "qc_report": str(rep),
-            "grid": f"{g['nx']} x {g['ny']} x {g['nz']}", "zones": g["zones"], "assumptions": assumptions,
+            **qc_extra, "grid": f"{g['nx']} x {g['ny']} x {g['nz']}", "zones": g["zones"], "assumptions": assumptions,
             "spoken_summary": f"Geo model {name} version {v['version']} {review_state(sub)}: grid {g['nx']} by "
-                              f"{g['ny']} by {g['nz']}, hydrocarbon pore volume {tot / 1e6:.1f} million reservoir cubic metres."}
+                              f"{g['ny']} by {g['nz']}, hydrocarbon pore volume {tot / 1e6:.1f} million reservoir "
+                              f"cubic metres." + findings_say}

@@ -1,12 +1,14 @@
 """Execute QC notebooks headlessly and export them to HTML.
 
-Standard QC: the fixed template (fluid_qc.ipynb, shipped with the package) gets a parameters cell
-injected (papermill style), runs in a fresh kernel of this Python interpreter, and is saved per version:
+Standard QC: the fixed template of the model kind (fluid_qc.ipynb, geo_qc.ipynb, shipped with the package)
+gets a parameters cell injected (papermill style), runs in a fresh kernel of this Python interpreter, and is
+saved per version:
 
-    <file_store>/qc/fluid_<model>_v<N>/
-        payload.json          what the pipeline knew at build time (lab data, simulations, checks, spec)
-        fluid_qc.ipynb        the executed notebook (code + outputs)
-        fluid_qc.html         the reviewer's copy (registered as the version's QC report; its sha256 is
+    <file_store>/qc/<kind>_<model>_v<N>/
+        payload.json          what the pipeline knew at build time (fluid: lab data, simulations, checks,
+                              spec; geo: tops, upscaled logs, zones, spec, and logs.csv next to it)
+        <kind>_qc.ipynb       the executed notebook (code + outputs)
+        <kind>_qc.html        the reviewer's copy (registered as the version's QC report; its sha256 is
                               what an approval is tied to)
         qc_summary.json       pass / warn / fail findings written by the notebook's last cell
         investigations/       free-form notebooks the agent writes to dig into a problem
@@ -28,6 +30,8 @@ from ..core.files import sha256_of
 
 TEMPLATE_DIR = Path(__file__).parent
 FLUID_TEMPLATE = TEMPLATE_DIR / "fluid_qc.ipynb"
+GEO_TEMPLATE = TEMPLATE_DIR / "geo_qc.ipynb"
+KINDS = ("fluid", "geo")
 KERNEL_NAME = "opmagent-qc"
 
 
@@ -35,8 +39,15 @@ def slug(text: str) -> str:
     return re.sub(r"[^A-Za-z0-9_-]+", "_", text).strip("_") or "x"
 
 
-def qc_dir(file_store: Path, model_name: str, version: int) -> Path:
-    return Path(file_store) / "qc" / f"fluid_{slug(model_name)}_v{version}"
+def qc_dir(file_store: Path, model_name: str, version: int, kind: str = "fluid") -> Path:
+    return Path(file_store) / "qc" / f"{kind}_{slug(model_name)}_v{version}"
+
+
+def template(kind: str) -> Path:
+    if kind not in KINDS:
+        raise ToolError(INVALID_INPUT, f"no QC notebook for {kind} models (only {', '.join(KINDS)})")
+    # looked up at call time, so a test can swap a template
+    return FLUID_TEMPLATE if kind == "fluid" else GEO_TEMPLATE
 
 
 def write_payload(folder: Path, payload: dict) -> Path:
@@ -105,15 +116,20 @@ def execute(nb_path: Path, out_path: Path, params: dict | None = None, *, cwd: P
             "notebook_sha256": sha256_of(out_path), "html_sha256": sha256_of(html_path)}
 
 
-# ---------------------------------------------------------------- standard fluid QC
+# ---------------------------------------------------------------- standard QC
 def run_fluid_qc(folder: Path, db_path: Path, version_id: int, *, timeout: int = 600) -> dict:
-    """Execute the standard template for one version folder (payload.json must exist)."""
+    return run_qc("fluid", folder, db_path, version_id, timeout=timeout)
+
+
+def run_qc(kind: str, folder: Path, db_path: Path, version_id: int, *, timeout: int = 600) -> dict:
+    """Execute the kind's standard template for one version folder (payload.json must exist)."""
+    tpl = template(kind)
     payload = folder / "payload.json"
     if not payload.is_file():
         raise ToolError(NOT_FOUND, f"no QC payload in {folder}; rebuild the model to create one")
     summary = folder / "qc_summary.json"
     summary.unlink(missing_ok=True)
-    r = execute(FLUID_TEMPLATE, folder / "fluid_qc.ipynb", {
+    r = execute(tpl, folder / f"{kind}_qc.ipynb", {
         "payload_path": str(payload), "db_path": str(db_path), "version_id": int(version_id),
         "summary_path": str(summary)}, cwd=folder, timeout=timeout)
     r["payload"] = str(payload)
@@ -124,7 +140,18 @@ def run_fluid_qc(folder: Path, db_path: Path, version_id: int, *, timeout: int =
 
 
 # ---------------------------------------------------------------- investigations
-def create_investigation(folder: Path, db_path: Path, version_id: int, purpose: str) -> Path:
+LOADERS = {
+    "fluid": ("from opmagent.pvt import engine\n"
+              "data = qc.load(payload_path, db_path, version_id)\n"
+              "spec = qc.fluid_spec(data)   # tuned EOS fluid; e.g. engine.simulate_dl(spec, [...])\n"),
+    "geo": ("import numpy as np\n"
+            "data = qc.load(payload_path, db_path, version_id)\n"
+            "arr, logs, tops = data['arrays'], data['logs'], data['tops']   # arr['PORO'][k, j, i]; logs per sample\n"
+            "ld = data['layer_depths']   # (nz+1, ny, nx) layer boundaries at cell centres; qc.fig_section, qc.fig_well ...\n"),
+}
+
+
+def create_investigation(folder: Path, db_path: Path, version_id: int, purpose: str, kind: str = "fluid") -> Path:
     """A starter notebook in <folder>/investigations/: purpose, parameters, data loading. Add cells after it."""
     import nbformat
     if not purpose or not purpose.strip():
@@ -145,11 +172,8 @@ def create_investigation(folder: Path, db_path: Path, version_id: int, purpose: 
         nbformat.v4.new_code_cell(
             "import plotly.io as pio\n"
             "pio.renderers.default = 'notebook'\n"
-            "from opmagent.notebooks import qc_lib as qc\n"
-            "from opmagent.pvt import engine\n"
-            "data = qc.load(payload_path, db_path, version_id)\n"
-            "spec = qc.fluid_spec(data)   # tuned EOS fluid; e.g. engine.simulate_dl(spec, [...])\n"
-            "qc.header(data)"),
+            f"from opmagent.notebooks import {'qc_lib' if kind == 'fluid' else 'geo_qc_lib'} as qc\n"
+            + LOADERS[kind] + "qc.header(data)"),
         nbformat.v4.new_markdown_cell("## Analysis"),
         nbformat.v4.new_code_cell("# add the analysis here"),
         nbformat.v4.new_markdown_cell("## Conclusion\n\n_What was found and what it means for the model._"),

@@ -25,7 +25,34 @@ Python only (lasio, numpy, gstools). Inputs:
 2. `opmagent geo build --tops T --logs L1.las L2.las --spec spec.json --name <Name> [--surveys S]`
 3. Report: grid size, hydrocarbon pore volume per zone, QC report path, and the assumptions
    (kriging, layering, poro-perm transform if no perm log, Corey SCAL, no faults).
+   - `qc_overall` is `warn` or `fail` → read `qc_summary.json` next to the report, tell the user each
+     finding in one line, and investigate before they review (see QC notebooks).
+   - `status: draft` with `qc_notebook` → a notebook cell failed; the error names it. Report it; don't
+     work around it.
 4. It's then waiting for review. Never approve.
+
+## QC notebooks
+The QC report is the executed standard notebook (`geo_qc.html` in `qc/geo_<model>_v<N>/`). It reads the
+model as stored (arrays from their registered files, after a sha256 check; tables from the database) and
+checks:
+- surfaces against the well tops, and zones pinched where surfaces were stopped from crossing;
+- the model cell against each well's upscaled logs, layers without log data, and porosity predicted
+  from the other wells (leave one well out);
+- PERMY/PERMZ against the spec, values held at the clip limits, NTG, the mean porosity against the logs;
+- contacts against the spec and the grid, volumes recomputed from the arrays, SWOF/SGOF end points.
+
+Data server tools (geo profile): `run_qc_notebook`, `create_investigation_notebook`,
+`run_investigation_notebook`. To dig into a finding:
+1. `create_investigation_notebook(version_id, "<purpose>")` gives you a notebook with `data`, `arr`
+   (`arr['PORO'][k, j, i]`), `logs`, `tops` and `ld` (layer depths) loaded. `geo_qc_lib` (`qc`) has the
+   checks and plots (`qc.fig_well(data, 'W1')`, `qc.fig_section(data, 'PORO', 'W1', along='y')`).
+2. Write the analysis into the analysis cell(s) and a conclusion in the last markdown cell.
+3. `run_investigation_notebook(path)`. Tell the user what you found and where the HTML is.
+4. If the model should change (another spec, curve choice or cut-off), that's a **new build**. Notebooks
+   only read and plot; never edit the standard template for one model.
+
+After `return_to_draft`, `run_qc_notebook(version_id)` and `submit_for_review` with the returned
+`qc_report_file_id`. Models from a deck get a model view instead (no logs to check against).
 
 Method: surfaces kriged from tops (IDW below 3 wells), layers split proportionally, logs upscaled per layer
 (phi arithmetic, perm geometric, NTG from Vsh cutoff) and kriged per layer. Vertical pillars, no faults yet.

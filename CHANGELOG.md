@@ -15,6 +15,16 @@ QC notebooks for the fluid modeler.
 - DL lab-vs-model errors are compared on the lab's own steps; DL is path dependent.
 - `[qc] report = "notebook" | "html"`, `[qc] timeout_s`. `engine.phase_envelope`, `engine.components`.
 - New dependencies: nbformat, nbclient, nbconvert, ipykernel.
+- **Geo QC notebook** (`opmagent/notebooks/geo_qc.ipynb`, checks in `geo_qc_lib`): the geo QC report is now a
+  notebook as well, kept in `qc/geo_<model>_v<N>/` with the payload and the logs the build used. It reads the
+  cell arrays from their registered files (sha256 checked) and the tables from the database. Findings:
+  surfaces vs well tops and pinched zones; model vs upscaled logs at the wells, layers without logs, leave one
+  well out; PERMY/PERMZ vs the spec, clip limits, NTG, mean porosity vs logs; contacts vs the spec and the grid;
+  volumes recomputed from the arrays; SWOF/SGOF end points. Plots: surfaces with tops, layer maps, sections
+  through a well, each well's logs against its model column, distributions, poro-perm.
+  The notebook tools are on the geo profile too, with `opmagent geo qc | investigate | run-notebook`; the geo
+  agent gets NotebookEdit. With `[qc] report = "html"` the static report is kept. Models from a deck keep
+  their model view.
 
 Studies: the agents work through one simulation question together.
 
