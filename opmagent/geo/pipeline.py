@@ -5,7 +5,6 @@ version in <file_store>/qc/geo_<model>_v<N>/ with its payload, the logs it used 
 [qc] report = "html" it is the static report below."""
 from __future__ import annotations
 
-import json
 import re
 from datetime import datetime
 from pathlib import Path
@@ -21,7 +20,7 @@ from ..servers.data_server import DataService
 from ..servers.data_server import wrap as dwrap
 from ..core.models import review_state
 from ..notebooks import runner
-from .build import build_grid, corey, read_logs
+from .build import build_grid, read_logs
 
 
 def _ok(r):
@@ -30,7 +29,7 @@ def _ok(r):
     return r
 
 
-def _report(path, name, version, g, logs, spec, assumptions, warnings, swof, sgof):
+def _report(path, name, version, g, logs, spec, assumptions, warnings):
     figs = []
     arr = g["arrays"]
     nz = g["nz"]
@@ -53,13 +52,6 @@ def _report(path, name, version, g, logs, spec, assumptions, warnings, swof, sgo
         fig.update_layout(title="Poro-perm crossplot (logs)", xaxis_title="phi", yaxis_title="perm (mD)", yaxis_type="log",
                           template="plotly_white", height=360)
         figs.append(fig)
-    fig = make_subplots(rows=1, cols=2, subplot_titles=("SWOF", "SGOF"))
-    fig.add_trace(go.Scatter(x=[r["sw"] for r in swof], y=[r["krw"] for r in swof], name="krw"), 1, 1)
-    fig.add_trace(go.Scatter(x=[r["sw"] for r in swof], y=[r["krow"] for r in swof], name="krow"), 1, 1)
-    fig.add_trace(go.Scatter(x=[r["sg"] for r in sgof], y=[r["krg"] for r in sgof], name="krg"), 1, 2)
-    fig.add_trace(go.Scatter(x=[r["sg"] for r in sgof], y=[r["krog"] for r in sgof], name="krog"), 1, 2)
-    fig.update_layout(title="Relative permeability", template="plotly_white", height=360)
-    figs.append(fig)
     zones = _table(["Zone", "Layers", "Pore volume (rm3)", "HCPV above OWC (rm3)", "Mean phi", "Mean perm (mD)"],
                    [[z["zone"], z["layers"], f"{z['pore_volume_rm3']:,.0f}", f"{z['hcpv_rm3']:,.0f}", f"{z['mean_phi']:.3f}",
                      f"{z['mean_perm_md']:.1f}"] for z in g["zones"]])
@@ -82,12 +74,9 @@ def build_geo_model(cfg, *, tops, logs, spec: dict, name: str, surveys=None, des
     """tops: CSV path or DataFrame; logs: LAS/CSV paths or a DataFrame (well_name, tvd, phi, perm, vsh); surveys:
     a survey file, or a DataFrame of x, y, tvd stations. From a study (data_source = {"study": name}) the tables
     come from the database and source_file_ids are the inbox files they were loaded from."""
-    for key in ("surfaces", "layers", "contacts"):
+    for key in ("surfaces", "layers"):
         if key not in spec:
             raise ToolError(INVALID_INPUT, f"geo spec needs '{key}'")
-    c = spec["contacts"]
-    if "datum_depth" not in c or "datum_pressure" not in c:
-        raise ToolError(INVALID_INPUT, "contacts need datum_depth and datum_pressure (and owc_depth / goc_depth if present)")
     t = tops if isinstance(tops, pd.DataFrame) else pd.read_csv(tops)
     sv = None
     if isinstance(surveys, pd.DataFrame):
@@ -105,13 +94,11 @@ def build_geo_model(cfg, *, tops, logs, spec: dict, name: str, surveys=None, des
         g = build_grid(t, lg, spec, out)
     except ValueError as e:
         raise ToolError(INVALID_INPUT, str(e)) from e
-    swof, sgof = corey(spec)
     assumptions = [
         "surfaces: ordinary kriging of well tops (inverse-distance weighting below 3 wells); crossing prevented",
         f"layers split proportionally: {dict(zip(spec['surfaces'][:-1], spec['layers']))}",
         "properties: logs upscaled per layer (phi arithmetic, perm geometric), then kriged per layer",
         f"PERMY = PERMX; PERMZ = {spec.get('petro', {}).get('kv_kh', 0.1)} x PERMX",
-        "relative permeability: Corey " + json.dumps(spec.get("scal", {})),
         "no faults (vertical pillars)",
     ]
     if lg["perm"].isna().all():
@@ -130,13 +117,6 @@ def build_geo_model(cfg, *, tops, logs, spec: dict, name: str, surveys=None, des
     vid = v["version_id"]
     props = [{"keyword": k, "file_id": D("register_file", path=p, kind="property")["file_id"]} for k, p in g["files"].items()]
     D("write_tables", kind="geo", version_id=vid, table="geo_properties", rows=props)
-    D("write_tables", kind="geo", version_id=vid, table="swof", rows=swof)
-    D("write_tables", kind="geo", version_id=vid, table="sgof", rows=sgof)
-    rock = spec.get("rock", {"p_ref": c["datum_pressure"], "cr": 4.5e-5})
-    D("write_tables", kind="geo", version_id=vid, table="rock", rows=[{"p_ref": rock["p_ref"], "cr": rock["cr"]}])
-    D("write_tables", kind="geo", version_id=vid, table="contacts", rows=[{
-        "datum_depth": c["datum_depth"], "datum_pressure": c["datum_pressure"], "owc_depth": c.get("owc_depth"),
-        "goc_depth": c.get("goc_depth")}])
     val = D("run_validator", kind="geo", version_id=vid)
     if not val["passed"]:
         return {"ok": False, "status": "draft", "version_id": vid, "validator": val,
@@ -170,7 +150,7 @@ def build_geo_model(cfg, *, tops, logs, spec: dict, name: str, surveys=None, des
                             f"finding(s) for the reviewer.")
     else:
         rep = _report(cfg.file_store / "qc" / f"geo_{slug}_v{v['version']}.html", name, v["version"], g, lg, spec,
-                      assumptions, val["warnings"], swof, sgof)
+                      assumptions, val["warnings"])
     rid = D("register_file", path=str(rep), kind="qc_report")["file_id"]
     tot = sum(z["hcpv_rm3"] for z in g["zones"])
     sub = D("submit_for_review", kind="geo", version_id=vid, qc_report_file_id=rid,

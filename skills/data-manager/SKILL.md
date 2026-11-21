@@ -57,7 +57,7 @@ once they are in the inbox.
    - `required` and `decision` items block a modeler; `warning` items don't.
    - Files it doesn't recognise are listed. Say what they seem to be.
 3. Fix what you can from the files themselves, never by making numbers up. For example: a table with odd headers, a second sheet, a workbook that needs re-saving as the template. For each thing only the engineer has (a lab report, the contacts, logs for a well), ask them in one short list, with where to put the file.
-4. `load_study_data(name)` until `study_data(name)` shows all three modelers ready. Then call `complete_task(name, {})`. It checks the data is loaded and ready, records the row counts, and makes the fluid, geo and well tasks ready.
+4. `load_study_data(name)` until `study_data(name)` shows all four modelers ready. Then call `complete_task(name, {})`. It checks the data is loaded and ready, records the row counts, and makes the fluid, geo and well tasks ready.
 5. If the engineer can't provide something for a long time, `fail_task(name, "<what is missing>")`.
 
 If someone edits a filed file after loading, the modelers' reads refuse it ("changed since it was loaded").
@@ -75,7 +75,7 @@ relative to the study inbox. Run it with `check_only=true` first and read back w
 - the period, which comes from the deck
 
 What it stores:
-- **Tables in the database:** PVT, SCAL, rock, contacts, faults, wells, groups, completions and the schedule, with exact numbers.
+- **Tables in the database:** PVT (fluid), faults (geo), SCAL, rock and contacts (res), wells, groups, completions and the schedule (well), with exact numbers.
 - **Files in `data/deck/load-NNN/`:** the grid and each cell array. Every load gets its own folder, so models built from an earlier load keep their files.
 - **The deck's spec:** dates, schedule mode and passthrough, so the deck builder renders the same deck.
 

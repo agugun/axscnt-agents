@@ -15,9 +15,9 @@ live in the same database.
 
 and a fixed chain of tasks, one per agent:
 
-    data ──► fluid ─┐
-         ├─► geo ───┼─► deck ──► run ──► view
-         └─► well ──┘
+    data ──► fluid ──────────┐
+         ├─► geo ──► res ────┼─► deck ──► run ──► view
+         └─► well ───────────┘
 
 A task is `ready` when everything it depends on is `done`. An agent `start`s its ready task, and `complete`s it with
 its result (a model version, a deck, a run); completing checks the result is real and unlocks the next tasks.
@@ -33,12 +33,13 @@ from pathlib import Path
 
 from .errors import FORBIDDEN, INVALID_INPUT, NOT_FOUND, ToolError
 
-DEPENDS = {"data": [], "fluid": ["data"], "geo": ["data"], "well": ["data"],
-           "deck": ["fluid", "geo", "well"], "run": ["deck"], "view": ["run"]}
+DEPENDS = {"data": [], "fluid": ["data"], "geo": ["data"], "res": ["geo"], "well": ["data"],
+           "deck": ["fluid", "geo", "res", "well"], "run": ["deck"], "view": ["run"]}   # res is defined on geo's grid
 TASKS = list(DEPENDS)
-AGENT = {"data": "data-manager", "fluid": "fluid-modeler", "geo": "geo-modeler", "well": "well-modeler",
+AGENT = {"data": "data-manager", "fluid": "fluid-modeler", "geo": "geo-modeler", "res": "res-modeler",
+         "well": "well-modeler",
          "deck": "deck-builder", "run": "run-agent", "view": "results-viewer"}
-MODEL_TASKS = {"fluid", "geo", "well"}
+MODEL_TASKS = {"fluid", "geo", "res", "well"}
 SUBFOLDERS = ["inbox", "data", "deck", "runs"]
 REPORTS = ("monthly", "quarterly", "yearly")
 
@@ -85,7 +86,8 @@ def _set(con, study_id, task, status, note=None, result=None, actor=None, event=
 def default_spec(name: str, requirement: str, **kw) -> dict:
     spec = {"requirement": requirement, "start_date": kw.get("start_date") or date.today().replace(day=1).isoformat(),
             "report": kw.get("report") or "monthly", "unit_system": kw.get("unit_system") or "METRIC",
-            "models": {"fluid": f"{name}_Oil", "geo": f"{name}_Geo", "well": f"{name}_Wells"}, "deck": name}
+            "models": {"fluid": f"{name}_Oil", "geo": f"{name}_Geo", "res": f"{name}_Res", "well": f"{name}_Wells"},
+            "deck": name}
     if kw.get("end_date"):
         spec["end_date"] = kw["end_date"]
     else:

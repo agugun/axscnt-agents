@@ -7,7 +7,7 @@ Two connected scenarios check that the reverse process loses nothing:
 SPE9.DATA ──► data manager reads the deck ──► input ──────────► data manager takes S1's input
                                               │                     │
                                               ▼                     ▼
-                         fluid, geo, well modelers          fluid, geo, well modelers
+                    fluid, geo, res, well modelers     fluid, geo, res, well modelers
                                               │                     │
                                               ▼                     ▼
                          model views (no simulation)        deck builder ──► generated deck
@@ -112,7 +112,7 @@ Expect:
 - `Read SPE9.DATA: grid 24 by 25 by 15 (9000 active), 26 wells, 198 table rows; schedule verbatim.`
 - tables per model:
   - `fluid  pvto 12, pvdg 11, pvtw 1, density 1, rsvd 2`
-  - `geo  rock 1, swof 30, sgof 10, contacts 1`
+  - `res  rock 1, swof 30, sgof 10, contacts 1`
   - `well  well_groups 1, wells 26, well_completions 26, well_events 76`
 - `All 7 files are as loaded.` These are the source deck and the six cell-array files in `data/deck/load-001/`: PORO, PERMX, PERMY, PERMZ, DZ and TOPS. SPE9's grid is Cartesian, so there is no grid file.
 
@@ -123,10 +123,11 @@ The three warnings are expected:
 
 See what is stored: `opmagent data show SPE9_S1 deck`, `opmagent data show SPE9_S1 files`.
 
-**1.3 Build the models from the input** (fluid, geo and well modelers; geo before well).
+**1.3 Build the models from the input** (fluid, geo, res and well modelers; geo before res and well).
 ```bash
 opmagent study build fluid SPE9_S1 --complete
 opmagent study build geo   SPE9_S1 --complete
+opmagent study build res   SPE9_S1 --complete      # SCAL, rock, contacts: defined on the geo grid, after geo
 opmagent study build well  SPE9_S1 --complete      # its completions are on the geo grid: after geo
 ```
 Each build:
@@ -153,11 +154,12 @@ Each model's QC report opens in the browser. Check:
 | Model | Check in its report |
 | --- | --- |
 | fluid `SPE9_S1_Oil` | Pressure range 14.7 to 5000 psia, max Rs 1.5 Mscf/stb. In the PVTO plots, Bo rises and oil viscosity falls along the saturated curve. PVDG: Bg falls steeply at low pressure. PVTW Bw 1.0034, densities 44.99 / 63.02 / 0.0704 lb/ft3. |
-| geo `SPE9_S1_Geo` | Grid 24 x 25 x 15, 9,000 active cells. PORO from 0.08 to 0.17, constant within each layer. PERMX log-normal in its histogram, from 0.003 to about 10,000 mD (mean 108 mD). TOPS map of the top layer. SWOF and SGOF curves. EQUIL: datum 9035 ft at 3600 psia, OWC 9950 ft, GOC 8800 ft. |
+| geo `SPE9_S1_Geo` | Grid 24 x 25 x 15, 9,000 active cells. PORO from 0.08 to 0.17, constant within each layer. PERMX log-normal in its histogram, from 0.003 to about 10,000 mD (mean 108 mD). TOPS map of the top layer. |
+| res `SPE9_S1_Res` | SWOF and SGOF curves (one SATNUM). EQUIL: datum 9035 ft at 3600 psia, OWC 9950 ft, GOC 8800 ft. ROCK at 3600 psia. |
 | well `SPE9_S1_Wells` | 26 wells: 25 producers and 1 injector (INJE1 at 24,25). In the well map, the producers are spread over the grid and the injector is in the corner. Completions: producers in K 2-4, the injector in K 11-15. Schedule plot: oil targets of 1500 stb/d, with the cut to 100 and back. |
 
 Scenario 1 passes when:
-- the data task and all three model tasks are done (`opmagent study status SPE9_S1`)
+- the data task and all four model tasks are done (`opmagent study status SPE9_S1`)
 - each model has a QC report you could check against the table above
 
 ### Scenario 2: the input to a deck, a run and ResInsight
@@ -180,6 +182,7 @@ The deck is not read again:
 ```bash
 opmagent study build fluid SPE9_S2 --complete
 opmagent study build geo   SPE9_S2 --complete
+opmagent study build res   SPE9_S2 --complete
 opmagent study build well  SPE9_S2 --complete
 opmagent study view SPE9_S2             # optional: the same views as scenario 1
 ```
@@ -250,7 +253,7 @@ Same loop, with the agents doing each step. Start `claude` in your testing works
    The coordinator reads back the name and the deck. After your "yes":
    - the data manager runs `load_deck_data`, a check first
    - the modelers build: fluid and geo, then well
-2. If approval is on, approve the three models when asked (`opmagent review approve ...` in a terminal).
+2. If approval is on, approve the four models when asked (`opmagent review approve ...` in a terminal).
 3. *"Show me the SPE9_S1 models."* The coordinator gives you `opmagent study view SPE9_S1 --open`. Check the reports as in 1.4.
 4. *"Make a study SPE9_S2 from SPE9_S1's input and run it through to ResInsight."*
    - The data manager uses `load_study_input`.

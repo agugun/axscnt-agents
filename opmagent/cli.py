@@ -10,6 +10,8 @@ from . import __version__
 from .core import config as cfgmod
 from .core import db
 
+MODEL_KINDS = ("fluid", "geo", "res", "well")   # res: the dynamic model (SCAL, rock, contacts, regions) on a geo grid
+
 
 def cmd_init_db(args):
     cfg = cfgmod.load(args.config)
@@ -410,6 +412,20 @@ def cmd_geo_build(args):
     raise SystemExit(0 if r.get("ok") else 2)
 
 
+def cmd_res_build(args):
+    import json
+    from .core.errors import ToolError
+    from .res.pipeline import build_res_model
+    cfg = cfgmod.load(args.config)
+    spec = json.loads(open(args.spec).read())
+    try:
+        r = build_res_model(cfg, spec=spec, name=args.name, geo_version_id=args.geo_version, description=args.description)
+    except ToolError as e:
+        r = e.to_dict()
+    print(json.dumps(r, indent=2, default=str)[:6000])
+    raise SystemExit(0 if r.get("ok") else 2)
+
+
 def cmd_study(args):
     """Studies: init / status / list / events, and build a model or the deck from the study's data."""
     import json
@@ -471,7 +487,7 @@ def cmd_study(args):
             print(r["spoken_summary"])
             raise SystemExit(0 if r["ok"] else 2)
         if args.scmd == "view":
-            r = _study_view(con, args.name, args.kinds or ["fluid", "geo", "well"], args.open)
+            r = _study_view(con, args.name, args.kinds or list(MODEL_KINDS), args.open)
             for v in r["views"]:
                 print(f"  {v['kind']:<6} {v.get('model', ''):<20} {v.get('status', ''):<10} {v.get('qc_report') or v['note']}")
             raise SystemExit(0 if r["ok"] else 2)
@@ -567,17 +583,17 @@ def _study_build(cfg, con, what, name):
     src = {"study": name}
     from .data import deck_source
     if deck_source.has_deck(con, name):   # data read from a deck: rebuild it as it was
-        if what in ("fluid", "geo", "well"):
-            geo_v = (res.get("geo") or {}).get("version_id") if what == "well" else None
+        if what in ("fluid", "geo", "res", "well"):
+            geo_v = (res.get("geo") or {}).get("version_id") if what in ("well", "res") else None
             return deck_source.build_model(cfg, con, name, what, spec["models"][what], geo_version_id=geo_v,
                                            description=f"study {name}")
         if what == "deck":
             from .deck.build import build_deck
-            missing = [k for k in ("fluid", "geo", "well") if not (res.get(k) or {}).get("version_id")]
+            missing = [k for k in MODEL_KINDS if not (res.get(k) or {}).get("version_id")]
             if missing:
                 raise ToolError(INVALID_INPUT, f"no finished {', '.join(missing)} model in study {name} yet")
             ds = deck_source.deck_spec(con, name, spec["deck"], spec["requirement"],
-                                       {k: int(res[k]["version_id"]) for k in ("fluid", "geo", "well")})
+                                       {k: int(res[k]["version_id"]) for k in MODEL_KINDS})
             (folder / "deck").mkdir(exist_ok=True)
             (folder / "deck" / "deck_spec.json").write_text(json.dumps(ds, indent=2, default=str))
             return build_deck(ds, cfg)
@@ -595,6 +611,14 @@ def _study_build(cfg, con, what, name):
                                spec=gspec, name=spec["models"]["geo"], surveys=store.survey_xyz(con, name),
                                description=f"study {name}", data_source=src,
                                source_file_ids=store.source_file_ids(con, name, store.FOR["geo"]))
+    if what == "res":
+        from .res.pipeline import build_res_model
+        geo_v = (res.get("geo") or {}).get("version_id")
+        if not geo_v:
+            raise ToolError(INVALID_INPUT, f"study {name} has no finished geo model yet: the res model is defined on it")
+        return build_res_model(cfg, spec=store.res_spec(con, name), name=spec["models"].get("res", f"{name}_Res"),
+                               geo_version_id=int(geo_v), description=f"study {name}", data_source=src,
+                               source_file_ids=store.source_file_ids(con, name, store.FOR["res"]))
     if what == "well":
         from .well.pipeline import build_well_model
         geo_v = (res.get("geo") or {}).get("version_id")
@@ -604,18 +628,18 @@ def _study_build(cfg, con, what, name):
                                 data_source=src, source_file_ids=store.source_file_ids(con, name, store.FOR["well"]))
     if what == "deck":
         from .deck.build import build_deck
-        missing = [k for k in ("fluid", "geo", "well") if not (res.get(k) or {}).get("version_id")]
+        missing = [k for k in MODEL_KINDS if not (res.get(k) or {}).get("version_id")]
         if missing:
             raise ToolError(INVALID_INPUT, f"no finished {', '.join(missing)} model in study {name} yet")
         ds = {"name": spec["deck"], "requirement": spec["requirement"], "start_date": spec["start_date"],
-              "report": spec["report"], **{k: int(res[k]["version_id"]) for k in ("fluid", "geo", "well")}}
+              "report": spec["report"], **{k: int(res[k]["version_id"]) for k in MODEL_KINDS}}
         for k in ("years", "end_date", "summary"):
             if spec.get(k):
                 ds[k] = spec[k]
         (folder / "deck").mkdir(exist_ok=True)
         (folder / "deck" / "deck_spec.json").write_text(json.dumps(ds, indent=2))
         return build_deck(ds, cfg)
-    raise ToolError(INVALID_INPUT, "build fluid, geo, well or deck")
+    raise ToolError(INVALID_INPUT, "build fluid, geo, res, well or deck")
 
 
 def cmd_data(args):
@@ -681,7 +705,7 @@ def cmd_data(args):
             extra = (f"  wells: {', '.join(d['wells'][:10])}" if d.get("wells") else "") + \
                     (f"  curves: {', '.join(d['curves'][:10])}" if d.get("curves") else "")
             print(f"  {k:<13} {d['rows']:>7} {d.get('unit', 'rows')}{extra}"[:200])
-    for kind in ("fluid", "geo", "well"):
+    for kind in MODEL_KINDS:
         print(f"  {kind}: {'ready' if m['ready'][kind] else 'NOT ready'}")
     for i in m["issues"]:
         print(f"    {i['modeler']:<5} [{i['severity']}] {i['item']}: {i['message']}"[:220])
@@ -769,19 +793,19 @@ def main(argv=None):
     rv.add_parser("list", help="what is waiting for review").set_defaults(fn=cmd_review)
     for name in ("approve", "reject"):
         x = rv.add_parser(name)
-        x.add_argument("kind", choices=["fluid", "geo", "well"])
+        x.add_argument("kind", choices=list(MODEL_KINDS))
         x.add_argument("version_id", type=int)
         x.add_argument("--comment", required=name == "reject")
         x.set_defaults(fn=cmd_review)
     x = rv.add_parser("comment", help="comment on a model version; the modeler answers it in its next version")
-    x.add_argument("kind", choices=["fluid", "geo", "well"])
+    x.add_argument("kind", choices=list(MODEL_KINDS))
     x.add_argument("version_id", type=int)
     x.add_argument("text")
     x.add_argument("--item", help="what it is about, e.g. 'PERMX layer 3' or 'Psat'")
     x.add_argument("--severity", choices=["change", "question", "note"], default="change")
     x.set_defaults(fn=cmd_review)
     x = rv.add_parser("feedback", help="review comments and the modelers' answers (open ones unless --all)")
-    x.add_argument("--kind", choices=["fluid", "geo", "well"])
+    x.add_argument("--kind", choices=list(MODEL_KINDS))
     x.add_argument("--model", help="model name")
     x.add_argument("--all", action="store_true")
     x.set_defaults(fn=cmd_review)
@@ -857,7 +881,7 @@ def main(argv=None):
     x.set_defaults(fn=cmd_study)
     x = sd.add_parser("task", help="start or complete a study task from a terminal (agents use start_task/complete_task)")
     x.add_argument("name")
-    x.add_argument("task", choices=["data", "fluid", "geo", "well", "deck", "run", "view"])
+    x.add_argument("task", choices=["data", "fluid", "geo", "res", "well", "deck", "run", "view"])
     x.add_argument("action", choices=["start", "complete"])
     x.add_argument("--result", help='the task result as JSON, e.g. \'{"version_id": 12}\'')
     x.set_defaults(fn=cmd_study)
@@ -867,11 +891,11 @@ def main(argv=None):
     x.set_defaults(fn=cmd_study)
     x = sd.add_parser("view", help="each model's QC report (plots of what it holds), before any simulation")
     x.add_argument("name")
-    x.add_argument("kinds", nargs="*", choices=["fluid", "geo", "well"], metavar="fluid|geo|well")
+    x.add_argument("kinds", nargs="*", choices=list(MODEL_KINDS), metavar="fluid|geo|res|well")
     x.add_argument("--open", action="store_true", help="open the reports in the browser")
     x.set_defaults(fn=cmd_study)
     x = sd.add_parser("build", help="build a model or the deck from the study's data in the database")
-    x.add_argument("what", choices=["fluid", "geo", "well", "deck"])
+    x.add_argument("what", choices=["fluid", "geo", "res", "well", "deck"])
     x.add_argument("name")
     x.add_argument("--complete", action="store_true",
                    help="start the task first and complete it with the result (a model only once it is approved)")
@@ -926,6 +950,14 @@ def main(argv=None):
     x = gm.add_parser("run-notebook", help="execute an investigation notebook and export it to HTML")
     x.add_argument("path")
     x.set_defaults(fn=cmd_model_notebook, nb_kind="geo")
+    rs = sub.add_parser("res", help="res modeler (SCAL, rock, contacts, regions on a geo grid)").add_subparsers(
+        dest="rscmd", required=True)
+    x = rs.add_parser("build", help="build a res model on a geo version from a spec and submit it for review")
+    x.add_argument("--spec", required=True, help="res spec JSON (scal, rock, contacts, regions)")
+    x.add_argument("--geo-version", dest="geo_version", type=int, required=True, help="the geo version id it is defined on")
+    x.add_argument("--name", required=True)
+    x.add_argument("--description")
+    x.set_defaults(fn=cmd_res_build)
     im = sub.add_parser("import", help="deck importer (reverse deck)").add_subparsers(dest="icmd", required=True)
     x = im.add_parser("deck", help="import a deck into fluid/geo/well drafts for review")
     x.add_argument("--input", required=True)

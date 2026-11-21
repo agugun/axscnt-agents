@@ -1,4 +1,4 @@
-"""Geo and well validator rules on a small box model (the hello defaults)."""
+"""Geo, res and well validator rules on a small box model (the hello defaults)."""
 from opmagent.core import models
 from opmagent.core.db import connect
 
@@ -31,10 +31,16 @@ def make_geo(con, **overrides):
     models.write_tables(con, "geo", vid, "geo_properties", [
         dict(keyword="PORO", const_value=0.2), dict(keyword="PERMX", const_value=100),
         dict(keyword="PERMY", const_value=100), dict(keyword="PERMZ", const_value=10)])
-    models.write_tables(con, "geo", vid, "swof", corey_swof())
-    models.write_tables(con, "geo", vid, "sgof", corey_sgof())
-    models.write_tables(con, "geo", vid, "rock", [dict(p_ref=200, cr=4.5e-5)])
-    models.write_tables(con, "geo", vid, "contacts", [dict(datum_depth=2000, datum_pressure=200, owc_depth=2100)])
+    return vid
+
+
+def make_res(con, geo_vid):
+    v = models.create_version(con, "res", "BOX_RES", dict(unit_system="METRIC", geo_version_id=geo_vid))
+    vid = v["version_id"]
+    models.write_tables(con, "res", vid, "swof", corey_swof())
+    models.write_tables(con, "res", vid, "sgof", corey_sgof())
+    models.write_tables(con, "res", vid, "rock", [dict(p_ref=200, cr=4.5e-5)])
+    models.write_tables(con, "res", vid, "contacts", [dict(datum_depth=2000, datum_pressure=200, owc_depth=2100)])
     return vid
 
 
@@ -62,6 +68,7 @@ def test_box_geo_and_wells_pass(cfg):
     con = connect(cfg.database)
     g = make_geo(con)
     assert rules(con, "geo", g) == (True, set())
+    assert rules(con, "res", make_res(con, g)) == (True, set())
     w = make_well(con, g)
     assert rules(con, "well", w) == (True, set())
 
@@ -74,9 +81,21 @@ def test_geo_failures(cfg, tmp_path):
     from opmagent.core.files import register_file
     fid = register_file(con, bad, "property")
     con.execute("UPDATE geo_properties SET const_value=NULL, file_id=? WHERE version_id=? AND keyword='PORO'", (fid, g))
-    con.execute("UPDATE swof SET krow=0.5 WHERE version_id=? AND sw=1.0", (g,))
     ok, r = rules(con, "geo", g)
-    assert not ok and {"range", "swof_end", "swof_krow"} <= r
+    assert not ok and "range" in r
+
+
+def test_res_failures(cfg, tmp_path):
+    con = connect(cfg.database)
+    g = make_geo(con)
+    r_ = make_res(con, g)
+    con.execute("UPDATE swof SET krow=0.5 WHERE version_id=? AND sw=1.0", (r_,))
+    bad = tmp_path / "satnum.inc"
+    bad.write_text("SATNUM\n 200*1 /\n")          # 200 values on a 300-cell grid
+    from opmagent.core.files import register_file
+    models.write_tables(con, "res", r_, "res_properties", [dict(keyword="SATNUM", file_id=register_file(con, bad, "property"))])
+    ok, r = rules(con, "res", r_)
+    assert not ok and {"swof_end", "swof_krow", "array_length"} <= r
 
 
 def test_well_failures(cfg):
@@ -93,14 +112,14 @@ def test_well_failures(cfg):
 def test_extra_saturation_tables_are_a_warning(cfg):
     # Norne: SATNUM is 1 everywhere, table 2 is the imbibition table selected by IMBNUM (passthrough)
     con = connect(cfg.database)
-    vid = make_geo(con)
-    models.write_tables(con, "geo", vid, "swof", [dict(r, satnum=2) for r in corey_swof(swc=0.25)])
-    models.write_tables(con, "geo", vid, "sgof", [dict(r, satnum=2) for r in corey_sgof(swc=0.25)])
-    r = models.run_validator(con, "geo", vid)
+    vid = make_res(con, make_geo(con))
+    models.write_tables(con, "res", vid, "swof", [dict(r, satnum=2) for r in corey_swof(swc=0.25)])
+    models.write_tables(con, "res", vid, "sgof", [dict(r, satnum=2) for r in corey_sgof(swc=0.25)])
+    r = models.run_validator(con, "res", vid)
     assert "regions" not in {e["rule"] for e in r["errors"]}
     assert any(w["rule"] == "regions" and "IMBNUM" in w["message"] for w in r["warnings"])
     # a SATNUM region with no table is still an error
-    vid2 = make_geo(con)
-    models.write_tables(con, "geo", vid2, "geo_properties", [dict(keyword="SATNUM", const_value=2)])
-    errs = models.run_validator(con, "geo", vid2)["errors"]
+    vid2 = make_res(con, make_geo(con))
+    models.write_tables(con, "res", vid2, "res_properties", [dict(keyword="SATNUM", const_value=2)])
+    errs = models.run_validator(con, "res", vid2)["errors"]
     assert any("SWOF has no table for SATNUM [2]" in e["message"] for e in errs), errs

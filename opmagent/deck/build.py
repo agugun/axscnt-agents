@@ -11,7 +11,7 @@ from pathlib import Path
 from ..core.errors import INVALID_INPUT, ToolError
 from ..servers.data_server import DataService
 from ..servers.data_server import wrap as dwrap
-from .render import RenderError, render
+from .render import RenderError, combine, render
 
 
 def _ok(r: dict) -> dict:
@@ -81,16 +81,23 @@ def opm_parse_check(deck_path: Path) -> tuple[bool, str]:
 
 
 def build_deck(spec: dict, cfg, *, origin: str | None = None) -> dict:
-    """spec: name, requirement, fluid, geo, well (version id or model name), start_date, end_date|years,
+    """spec: name, requirement, fluid, geo, res, well (version id or model name), start_date, end_date|years,
     report, summary."""
     svc = DataService("deck", cfg)
     D = lambda n, **k: _ok(dwrap(svc, n)(**k))  # noqa: E731
     name = spec.get("name")
     if not name or not re.fullmatch(r"[A-Za-z0-9_\-]+", name):
         raise ToolError(INVALID_INPUT, "spec.name must be letters, digits, _ or -")
-    ids = {k: _pick(svc, k, spec[k]) for k in ("fluid", "geo", "well")}
-    fluid, geo, well = (D("get_model", kind=k, version_id=ids[k]) for k in ("fluid", "geo", "well"))
-    origins = {m["header"]["origin"] for m in (fluid, geo, well)}
+    if not spec.get("res"):
+        raise ToolError(INVALID_INPUT, "spec.res is missing: a deck needs the res model (SCAL, rock, contacts, regions) "
+                                       "built on its geo version")
+    ids = {k: _pick(svc, k, spec[k]) for k in ("fluid", "geo", "res", "well")}
+    fluid, geo_only, res, well = (D("get_model", kind=k, version_id=ids[k]) for k in ("fluid", "geo", "res", "well"))
+    try:
+        geo = combine(geo_only, res)
+    except RenderError as e:
+        raise ToolError("CROSS_CHECK_FAILED", str(e)) from e
+    origins = {m["header"]["origin"] for m in (fluid, geo_only, res, well)}
     origin = origin or ("demo" if origins == {"demo"} else "built")
     spec = dict(spec)
     spec.setdefault("start_date", well["header"].get("start_date") or "2026-01-01")
@@ -100,7 +107,7 @@ def build_deck(spec: dict, cfg, *, origin: str | None = None) -> dict:
     probs = cross_checks(fluid, geo, well)
     # imported, or rebuilt from a deck's data (a study's reverse process): the data ran in OPM as it is
     imported = any(m["header"]["origin"] == "imported" or m["header"].get("source_deck_file_id")
-                   for m in (fluid, geo, well))
+                   for m in (fluid, geo_only, res, well))
     if probs and not imported:
         raise ToolError("CROSS_CHECK_FAILED", "; ".join(probs), probs)
 
@@ -118,7 +125,8 @@ def build_deck(spec: dict, cfg, *, origin: str | None = None) -> dict:
     deck_path = out / f"{name.upper()}.DATA"
     deck_path.write_text(text)
     deck = D("create_deck", name=name, requirement_text=spec.get("requirement", ""), spec=spec,
-             fluid_version_id=ids["fluid"], geo_version_id=ids["geo"], well_version_id=ids["well"], origin=origin)["deck"]
+             fluid_version_id=ids["fluid"], geo_version_id=ids["geo"], well_version_id=ids["well"],
+             res_version_id=ids["res"], origin=origin)["deck"]
     D("add_deck_file", deck_id=deck["id"], path=str(deck_path), role="DATA", main=True)
     ok, log = opm_parse_check(deck_path)
     status = "validated" if ok else "failed"
@@ -128,4 +136,4 @@ def build_deck(spec: dict, cfg, *, origin: str | None = None) -> dict:
     return {"ok": ok, "deck_id": deck["id"], "path": str(deck_path), "status": status, "validation_log": log,
             "cross_check_warnings": probs if imported else [],
             "models": {k: f"{m['header']['model_name']} v{m['header']['version']}" for k, m in
-                       (("fluid", fluid), ("geo", geo), ("well", well))}, "spoken_summary": say}
+                       (("fluid", fluid), ("geo", geo_only), ("res", res), ("well", well))}, "spoken_summary": say}

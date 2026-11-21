@@ -31,8 +31,8 @@ def reverse_study(cfg, deck: str, name: str) -> dict:
     m = call("data", "load_deck_data", name=name, deck_path=deck)
     assert m["ok"] and m["all_ready"], m.get("issues") or m
     assert call("data", "complete_task", name=name, result={})["unlocked"] == ["fluid", "geo", "well"]
-    assert call("geo", "deck_tables", name=name, kind="geo")["row_counts"]
-    for kind in ("fluid", "geo", "well"):          # geo before well: the completions are on its grid
+    assert call("res", "deck_tables", name=name, kind="res")["row_counts"]   # SCAL, rock, contacts: the res model's
+    for kind in ("fluid", "geo", "res", "well"):   # geo before res and well: both are on its grid
         call(kind, "start_task", name=name)
         r = _study_build(cfg, con, kind, name)
         assert r["ok"] and r["status"] == "approved", r
@@ -74,7 +74,7 @@ def forward_deck(cfg) -> str:
     studies.init_study(con, cfg.studies_dir, "FWD", "forward", years=1, start_date="2026-01-01")
     assert load_raw(con, "FWD")["all_ready"]
     studies.complete_task(con, "FWD", "data", {})
-    for kind in ("geo", "fluid", "well"):
+    for kind in ("geo", "res", "fluid", "well"):
         r = _study_build(cfg, con, kind, "FWD")
         studies.complete_task(con, "FWD", kind, {"version_id": r["version_id"]}, auto_approve=True)
     d = _study_build(cfg, con, "deck", "FWD")
@@ -125,7 +125,7 @@ def test_norne_rebuilt_through_a_study(cfg):
 
 def _models(cfg, con, call, name):
     from opmagent.cli import _study_build
-    for kind in ("fluid", "geo", "well"):
+    for kind in ("fluid", "geo", "res", "well"):
         call(kind, "start_task", name=name)
         r = _study_build(cfg, con, kind, name)
         assert r["ok"] and r["status"] == "approved", r
@@ -146,7 +146,7 @@ def test_two_scenarios_input_reused_and_deck_the_same(cfg):
     assert call("data", "load_deck_data", name="S1", deck_path=deck)["all_ready"]
     call("data", "complete_task", name="S1", result={})
     _models(cfg, con, call, "S1")
-    views = _study_view(con, "S1", ["fluid", "geo", "well"])
+    views = _study_view(con, "S1", ["fluid", "geo", "res", "well"])
     assert views["ok"]
     for v in views["views"]:
         page = Path(v["qc_report"]).read_text()

@@ -31,22 +31,22 @@ def test_geo_notebook_report_rerun_and_investigation(tmp_path, cfg):
     s = json.loads((folder / "qc_summary.json").read_text())
     assert s["counts"]["fail"] == 0 and s["tables_from_db"]
     assert {f["area"] for f in s["findings"]} == set(gq.AREAS)
-    # the test spec puts the OWC below the grid: the only warning, and it reaches the summary
-    assert [f["check"] for f in s["findings"] if f["status"] == "warn"] == ["OWC 2100 m (EQLNUM 1)"]
-    assert g["qc_overall"] == "warn" and "1 warn" in g["spoken_summary"]
+    # a clean build: nothing to flag (contacts and SCAL are checked with the res model, not here)
+    assert s["overall"] == "pass" and g["qc_overall"] == "pass" and "warn" not in g["spoken_summary"], s
+    assert not {"contacts", "scal"} & {f["area"] for f in s["findings"]}
     html = (folder / "geo_qc.html").read_text()
     for text in ("FieldG_Geo version 1", "Surfaces honour the well tops", "leave one well out", "section along x"):
         assert text in html, text
     assert (folder / "logs.csv").is_file()
     qc = DataService("reviewer", cfg).get_qc_report(kind="geo", version_id=g["version_id"])
-    assert qc["qc"]["metrics"]["qc_overall"] == "warn" and len(qc["qc"]["metrics"]["qc_notebook_sha256"]) == 64
+    assert qc["qc"]["metrics"]["qc_overall"] == "pass" and len(qc["qc"]["metrics"]["qc_notebook_sha256"]) == 64
 
     # frozen under review; re-run after return_to_draft, then resubmit with the new report
     geo, vid = DataService("geo", cfg), g["version_id"]
     assert call(geo, "run_qc_notebook", version_id=vid)["code"] == "FORBIDDEN"
     assert call(geo, "return_to_draft", kind="geo", version_id=vid)["ok"]
     rr = call(geo, "run_qc_notebook", version_id=vid)
-    assert rr["ok"] and rr["overall"] == "warn", rr
+    assert rr["ok"] and rr["overall"] == "pass", rr
     assert call(geo, "submit_for_review", kind="geo", version_id=vid, qc_report_file_id=rr["qc_report_file_id"])["ok"]
 
     # investigation: the starter loads the geo data; the agent adds a cell and runs it
@@ -74,18 +74,6 @@ def test_geo_checks_catch_what_is_wrong(tmp_path, cfg):
     data["arrays"]["PORO"] = data["arrays"]["PORO"].copy()
     data["arrays"]["PORO"][0, j, i] += 0.05
     assert status(gq.well_checks(data))["Model phi matches the upscaled logs at the wells"] == "fail"
-
-    # contacts: OWC above the grid, GOC below the OWC; and stored contacts that differ from the spec
-    c = dict(data["tables"]["contacts"][0], owc_depth=1990.0, goc_depth=1995.0)
-    data["tables"]["contacts"] = [c]
-    st = status(gq.contact_checks(data))
-    assert st["OWC 1990 m (EQLNUM 1)"] == "fail" and st["GOC above OWC (EQLNUM 1)"] == "fail"
-    assert st["Stored contacts are the spec's (EQLNUM 1)"] == "fail"
-
-    # SCAL end points that are not the spec's
-    data["tables"]["swof"] = [dict(r) for r in data["tables"]["swof"]]
-    data["tables"]["swof"][0]["sw"] = 0.25
-    assert status(gq.scal_checks(data))["SWOF end points are the spec's"] == "fail"
 
     # an array file changed after it was registered
     poro = next(f["path"] for f in data["files"] if f["keyword"] == "PORO")

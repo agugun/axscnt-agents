@@ -87,7 +87,7 @@ def compare_decks(original: str | Path, generated: str | Path) -> dict:
         sections.append({"section": "grid", "passed": not diffs, "differences": diffs, "grid": A["grid"]})
 
         diffs, counts = [], {}
-        for kind in ("fluid", "geo", "well"):
+        for kind in ("fluid", "geo", "res", "well"):
             ha = {k: v for k, v in A[kind]["header"].items() if k not in _HEADER_SKIP}
             hb = {k: v for k, v in B[kind]["header"].items() if k not in _HEADER_SKIP}
             for k in sorted(set(ha) | set(hb)):
