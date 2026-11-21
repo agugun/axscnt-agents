@@ -45,6 +45,12 @@ def _expand(p: str | None) -> Path | None:
     return Path(os.path.expanduser(p)) if p else None
 
 
+def find_path(path: str | os.PathLike | None = None) -> Path | None:
+    """The config file load() would read, or None."""
+    candidates = [Path(path)] if path else [p for p in DEFAULT_PATHS if str(p)]
+    return next((p.resolve() for p in candidates if p.is_file()), None)
+
+
 def load(path: str | os.PathLike | None = None) -> Config:
     candidates = [Path(path)] if path else [p for p in DEFAULT_PATHS if str(p)]
     for p in candidates:

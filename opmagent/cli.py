@@ -54,6 +54,25 @@ def cmd_doctor(args):
     check("OPM simulator", simulator)
     if cfg:
         check("database", lambda: "exists" if cfg.database.exists() else (_ for _ in ()).throw(FileNotFoundError("run: opmagent init-db")))
+
+    # the agents: the workspace is --workspace, or the folder of the config when setup made it (it has .mcp.json)
+    from .doctor import agents_report, format_report
+    cp = cfgmod.find_path(args.config)
+    ws = Path(args.workspace).expanduser() if args.workspace else (cp.parent if cp else None)
+    if ws is not None and (ws / ".mcp.json").is_file():
+        repo_skills = Path(__file__).resolve().parent.parent / "skills"
+        r = agents_report(ws, cfg, repo_skills, deep=args.deep)
+        if args.json:
+            import json
+            print(json.dumps(r, indent=2, default=str))
+        else:
+            print(format_report(r, verbose=args.verbose))
+        ok = ok and r["status"] != "fail"
+    elif args.workspace:
+        ok = False
+        print(f"[FAIL] agents: {ws} has no .mcp.json (not a workspace made by opmagent setup)")
+    else:
+        print("[info] agents: no workspace found next to the config (run in the workspace, or pass --workspace)")
     raise SystemExit(0 if ok else 1)
 
 
@@ -756,7 +775,12 @@ def main(argv=None):
     p.add_argument("--config", help="path to opmagent.toml")
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("init-db", help="create the SQLite database and file store").set_defaults(fn=cmd_init_db)
-    sub.add_parser("doctor", help="check prerequisites").set_defaults(fn=cmd_doctor)
+    x = sub.add_parser("doctor", help="check prerequisites and the condition of each agent in the workspace")
+    x.add_argument("--workspace", help="the agents workspace (default: the folder of the config, if setup made it)")
+    x.add_argument("--deep", action="store_true", help="also start each MCP server over stdio and list its tools")
+    x.add_argument("-v", "--verbose", action="store_true", help="every check, and each agent's tasks, requests, reviews, runs")
+    x.add_argument("--json", action="store_true", help="the agents report as JSON")
+    x.set_defaults(fn=cmd_doctor)
     x = sub.add_parser("setup", help="create a local agents workspace for Claude Code (MCP servers, agents, skills)")
     x.add_argument("workspace", nargs="?", default="~/opm-agents")
     x.add_argument("--force", action="store_true", help="overwrite .mcp.json instead of merging")

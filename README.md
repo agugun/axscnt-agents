@@ -280,6 +280,30 @@ started, or any run folder (`opmagent runs watch data/files/imports/NORNE/import
 log has had no new output for 2 minutes, and stops with the last log lines if Flow exits without finishing. The run
 agent's `job_status` returns the same progress. The full log is `run.log` in the run folder (`tail -f` works too).
 
+## Agents' condition (doctor)
+
+```bash
+opmagent doctor              # prerequisites, then one line per agent
+opmagent doctor -v           # every check, and each agent's tasks, requests, reviews and runs
+opmagent doctor --deep       # also start each MCP server over stdio and list its tools (about 10 s)
+opmagent doctor --json       # the agents report as JSON
+```
+
+Run it in the workspace (or pass `--workspace`). In Claude Code, the `opm-doctor` skill does the same: type
+`/opm-doctor` or ask "how are the agents?", and it runs the doctor and tells you what needs attention and the fix.
+(Claude Code's own `/doctor` checks Claude Code itself.) For each agent it checks:
+- **installed:** `.claude/agents/<agent>.md` exists and names its MCP servers;
+- **skill:** `.claude/skills/<skill>/SKILL.md` is the repo's current version (if not: `opmagent setup` again);
+- **servers:** each server it uses is in `.mcp.json`, its command exists, and Claude Code has approved it in
+  `.claude/settings.local.json` (a new server, such as `opm-data-res` after an upgrade, stays unused until
+  approved); with `--deep`, each one starts and lists the tools its profile should have;
+- **activity:** its last write through the data server, and failed writes in the last 24 hours (`audit_log`);
+- **work:** study tasks waiting for it, open requests to it, models of its kind waiting for review, runs in
+  progress (and runs whose Flow process is gone).
+
+It also fails if the reviewer server is in the agents' `.mcp.json`. The exit code is 1 when an agent can't work as
+set up; warnings (a skill out of date, a server not approved yet, failed writes) leave it at 0. Read only.
+
 ## Registering the data server
 
 Each agent starts the data server with its own profile. Example MCP client config (Claude Code `.mcp.json` or Claude desktop):
