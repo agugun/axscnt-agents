@@ -86,6 +86,30 @@ def cmd_fluid_build(args):
     raise SystemExit(0 if r.get("ok") else 2)
 
 
+def cmd_fluid_notebook(args):
+    """QC notebooks: re-run the standard QC, start or run an investigation (same rules as the MCP tools)."""
+    import json
+    import subprocess
+
+    from .servers.data_server import DataService, wrap
+
+    cfg = cfgmod.load(args.config)
+    svc = DataService("fluid", cfg)
+    if args.fcmd == "qc":
+        r = wrap(svc, "run_qc_notebook")(version_id=args.version_id)
+    elif args.fcmd == "investigate":
+        r = wrap(svc, "create_investigation_notebook")(version_id=args.version_id, purpose=args.purpose)
+        if r.get("ok") and args.open:
+            try:
+                subprocess.Popen([cfg.vscode_bin, r["path"]])
+            except OSError as e:
+                r["open_error"] = str(e)
+    else:
+        r = wrap(svc, "run_investigation_notebook")(path=args.path)
+    print(json.dumps(r, indent=2, default=str))
+    raise SystemExit(0 if r.get("ok") else 2)
+
+
 def _reviewer(cfg):
     from .servers.data_server import DataService
     return DataService("reviewer", cfg)
@@ -403,6 +427,12 @@ def cmd_study(args):
             for r in st["open_requests"]:
                 print(f"  request {r['id']}: {r['from_task']} -> {r['to_task']} ({r['kind']}): {r['message']}")
             return
+        if args.scmd == "compare":
+            from .data.deck_source import compare_with_source
+            r = compare_with_source(cfg, con, args.name)
+            print(r["spoken_summary"])
+            print(f"  report: {r.get('report')}")
+            raise SystemExit(0 if r["ok"] else 2)
         r = _study_build(cfg, con, args.what, args.name)
     except ToolError as e:
         r = e.to_dict()
@@ -424,6 +454,22 @@ def _study_build(cfg, con, what, name):
                         f"nothing loaded; the data manager runs `opmagent data load {name}`"))
     res = {t["task"]: t["result"] for t in st["tasks"]}
     src = {"study": name}
+    from .data import deck_source
+    if deck_source.has_deck(con, name):   # data read from a deck: rebuild it as it was
+        if what in ("fluid", "geo", "well"):
+            geo_v = (res.get("geo") or {}).get("version_id") if what == "well" else None
+            return deck_source.build_model(cfg, con, name, what, spec["models"][what], geo_version_id=geo_v,
+                                           description=f"study {name}")
+        if what == "deck":
+            from .deck.build import build_deck
+            missing = [k for k in ("fluid", "geo", "well") if not (res.get(k) or {}).get("version_id")]
+            if missing:
+                raise ToolError(INVALID_INPUT, f"no finished {', '.join(missing)} model in study {name} yet")
+            ds = deck_source.deck_spec(con, name, spec["deck"], spec["requirement"],
+                                       {k: int(res[k]["version_id"]) for k in ("fluid", "geo", "well")})
+            (folder / "deck").mkdir(exist_ok=True)
+            (folder / "deck" / "deck_spec.json").write_text(json.dumps(ds, indent=2, default=str))
+            return build_deck(ds, cfg)
     if what == "fluid":
         from .fluid.pipeline import build_fluid_model
         from .servers.data_server import DataService
@@ -471,6 +517,18 @@ def cmd_data(args):
     cfg = cfgmod.load(args.config)
     con = dbmod.connect(cfg.database)
     try:
+        if args.dcmd == "from-deck":
+            from .data.deck_source import load_deck
+            m = load_deck(con, args.name, args.deck, write=not args.check)
+            print(m["spoken_summary"])
+            for kind, tabs in m["deck"]["tables"].items():
+                print(f"  {kind:<6} " + ", ".join(f"{t} {n}" for t, n in tabs.items()))
+            print(f"  coverage: {m['deck']['coverage']}  period {m['deck']['start_date']} to {m['deck']['end_date']}")
+            for i in m["issues"]:
+                print(f"    {i['modeler']:<5} [{i['severity']}] {i['item']}: {i['message']}"[:220])
+            if args.json:
+                print(json.dumps(m, indent=2, default=str))
+            raise SystemExit(0 if m["all_ready"] else 2)
         if args.dcmd == "verify":
             v = store.verify(con, args.name)
             print(v["spoken_summary"])
@@ -479,6 +537,12 @@ def cmd_data(args):
             raise SystemExit(0 if not v["not_ok"] else 2)
         if args.dcmd == "show":
             m = store.inventory(con, args.name)
+            if args.dataset == "deck":
+                from .data.deck_source import deck_info
+                d = deck_info(con, args.name)
+                print(json.dumps({k: d[k] for k in ("source_path", "folder", "grid", "coverage", "spec")},
+                                 indent=2, default=str)[:6000])
+                return
             if args.dataset == "files":
                 for f in store.files(con, args.name, well=args.well):
                     print(f"  {f['category']:<10} {f['format']:<10} {f['status']:<7} {f['original']}"
@@ -572,6 +636,17 @@ def main(argv=None):
     b.add_argument("--accept-tolerance-miss", action="store_true")
     b.add_argument("--check", action="store_true", help="only read the workbook and list gaps")
     b.set_defaults(fn=cmd_fluid_build)
+    x = fl.add_parser("qc", help="re-run the standard QC notebook for a draft version (prints the new report's file id)")
+    x.add_argument("version_id", type=int)
+    x.set_defaults(fn=cmd_fluid_notebook)
+    x = fl.add_parser("investigate", help="start an investigation notebook for a fluid version")
+    x.add_argument("version_id", type=int)
+    x.add_argument("--purpose", required=True, help='what to look into, e.g. "C7+ MW sensitivity on the CVD match"')
+    x.add_argument("--open", action="store_true", help="open it in VS Code ([debug] vscode_bin)")
+    x.set_defaults(fn=cmd_fluid_notebook)
+    x = fl.add_parser("run-notebook", help="execute an investigation notebook and export it to HTML")
+    x.add_argument("path")
+    x.set_defaults(fn=cmd_fluid_notebook)
     rv = sub.add_parser("review", help="human review (approve / reject)").add_subparsers(dest="rcmd", required=True)
     rv.add_parser("list", help="what is waiting for review").set_defaults(fn=cmd_review)
     for name in ("approve", "reject"):
@@ -641,6 +716,9 @@ def main(argv=None):
     x.add_argument("name")
     x.add_argument("--limit", type=int, default=50)
     x.set_defaults(fn=cmd_study)
+    x = sd.add_parser("compare", help="study from a deck: run the source deck and check the study's run reproduces it")
+    x.add_argument("name")
+    x.set_defaults(fn=cmd_study)
     x = sd.add_parser("build", help="build a model or the deck from the study's data in the database")
     x.add_argument("what", choices=["fluid", "geo", "well", "deck"])
     x.add_argument("name")
@@ -650,12 +728,16 @@ def main(argv=None):
     for n_, h_ in (("check", "report what the inbox holds and what is missing (writes nothing)"),
                    ("load", "convert the study inbox into the study data tables for the modelers"),
                    ("show", "what is loaded; with a dataset, its rows (logs: per-curve statistics; files: catalog)"),
-                   ("verify", "check the filed originals are still the files that were loaded")):
+                   ("verify", "check the filed originals are still the files that were loaded"),
+                   ("from-deck", "reverse: read an existing deck into the study's data, so the study rebuilds it")):
         x = da.add_parser(n_, help=h_)
         x.add_argument("name")
+        if n_ == "from-deck":
+            x.add_argument("deck", help="the .DATA file (absolute, or relative to the study inbox)")
+            x.add_argument("--check", action="store_true", help="report only, write nothing")
         if n_ == "show":
             x.add_argument("dataset", nargs="?", help="wells, tops, surveys, perforations, controls, history, logs, "
-                                                      "files, sources, issues, log_curves, pvt_samples")
+                                                      "files, deck, sources, issues, log_curves, pvt_samples")
             x.add_argument("--well")
             x.add_argument("--limit", type=int, default=200)
         x.add_argument("--json", action="store_true")

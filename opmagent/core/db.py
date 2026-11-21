@@ -155,6 +155,20 @@ MIGRATIONS = [
     ("data_files", files_tbl_sql.strip() + """
         DROP TABLE IF EXISTS data_log_samples; DROP TABLE IF EXISTS data_log_curves;
 """ + curves_sql),
+    # Study data from a deck (the reverse process): the data manager reads an existing deck and stores what each
+    # modeler needs to rebuild it exactly. Tables (PVT, SCAL, contacts, wells, completions, schedule) are rows
+    # here, one JSON record per model-table row; the grid and cell arrays stay files (data_files, category 'deck');
+    # data_deck keeps the source, the model headers, the deck spec (dates, passthrough, schedule mode) and coverage.
+    ("data_deck", """CREATE TABLE data_deck (
+        study_id INTEGER PRIMARY KEY REFERENCES studies(id) ON DELETE CASCADE,
+        source_path TEXT NOT NULL, source_file_id INTEGER REFERENCES files(id), folder TEXT NOT NULL,
+        headers_json TEXT NOT NULL, spec_json TEXT NOT NULL, props_json TEXT NOT NULL, coverage_json TEXT,
+        grid_json TEXT, loaded_at TEXT NOT NULL DEFAULT (datetime('now')));
+        CREATE TABLE data_deck_rows (
+        id INTEGER PRIMARY KEY, study_id INTEGER NOT NULL REFERENCES studies(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL CHECK (kind IN ('fluid','geo','well')), tbl TEXT NOT NULL, seq INTEGER NOT NULL,
+        row_json TEXT NOT NULL);
+        CREATE INDEX idx_data_deck_rows ON data_deck_rows(study_id, kind, tbl, seq);"""),
     # Review feedback: what a reviewer says about a model version, item by item, and the modeler's answer.
     # Only the reviewer writes comments; the modeler only answers them (with the version that addresses them).
     ("review_feedback", """CREATE TABLE review_feedback (
