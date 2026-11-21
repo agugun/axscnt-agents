@@ -19,7 +19,6 @@ modelers' validators, QC reports and the approval gate apply as for any other ve
 """
 from __future__ import annotations
 
-import html
 import json
 import re
 import shutil
@@ -166,6 +165,80 @@ def load_deck(con, name: str, deck_path: str | Path, *, write: bool = True) -> d
     return summary
 
 
+def copy_input(con, name: str, source_study: str, *, write: bool = True) -> dict:
+    """Give study `name` the input another study read from a deck (scenario 2 of testing/: rebuild from scenario
+    1's input). Tables and the deck spec are copied row for row; the grid and array files are copied into
+    <name>/data/deck/load-NNN/ after checking each is still the file the source study loaded. The deck itself is
+    not read again."""
+    if not has_deck(con, source_study):
+        raise ToolError(INVALID_INPUT, f"study {source_study} has no input read from a deck; for raw data, copy its "
+                                       f"inbox and run `opmagent data load`")
+    st = studies._study(con, name)
+    sid, src_sid = st["id"], store.study_id(con, source_study)
+    if sid == src_sid:
+        raise ToolError(INVALID_INPUT, "the source study is this study")
+    info = deck_info(con, source_study)
+    files = [dict(r) for r in con.execute("SELECT * FROM data_files WHERE study_id = ? ORDER BY id", (src_sid,))]
+    # every file the input refers to must still be the one that was loaded
+    paths = {f["id"]: (store.verified_path(con, f["id"]) if f["category"] == "deck" else Path(f["path"]))
+             for f in files}
+    folder = _next_folder(Path(st["folder"]) / "data" / "deck") if write else Path(tempfile.mkdtemp())
+    from .load import STUDY_TABLES
+    con.execute("BEGIN IMMEDIATE")
+    try:
+        for t in STUDY_TABLES:
+            con.execute(f"DELETE FROM {t} WHERE study_id = ?", (sid,))
+        ids, copied = {}, 0
+        for f in files:
+            p = paths[f["id"]]
+            if f["category"] == "deck":            # the grid and arrays: this study's own copy
+                dst = folder / p.name
+                shutil.copy2(p, dst)
+                if filesmod.sha256_of(dst) != f["sha256"]:
+                    raise ToolError("INTEGRITY", f"copy of {p.name} doesn't match the loaded file")
+                fid = filesmod.register_file(con, dst, "grid" if p.name == "GRID.GRDECL" else "property")
+                s_ = dst.stat()
+                vals = (fid, str(dst), f["original"], s_.st_size, s_.st_mtime)
+                copied += 1
+            else:                                  # the source deck: the same file, referred to again
+                vals = (f["file_id"], f["path"], f["original"], f["size_bytes"], f["mtime"])
+            ids[f["id"]] = con.execute(
+                "INSERT INTO data_files(study_id, file_id, format, category, path, original, sha256, size_bytes, "
+                "mtime, meta_json) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (sid, vals[0], f["format"], f["category"], vals[1], vals[2], f["sha256"], vals[3], vals[4],
+                 f["meta_json"])).lastrowid
+        n = con.execute("INSERT INTO data_deck_rows(study_id, kind, tbl, seq, row_json) SELECT ?, kind, tbl, seq, "
+                        "row_json FROM data_deck_rows WHERE study_id = ? ORDER BY id", (sid, src_sid)).rowcount
+        con.execute("INSERT INTO data_sources(study_id, file_id, path, label, dataset, rows) SELECT ?, file_id, path, "
+                    "label, dataset, rows FROM data_sources WHERE study_id = ?", (sid, src_sid))
+        con.execute("INSERT INTO data_issues(study_id, modeler, severity, item, message) SELECT ?, modeler, severity, "
+                    "item, message FROM data_issues WHERE study_id = ?", (sid, src_sid))
+        headers = info["headers"]
+        if headers["geo"].get("grid_data_file_id"):
+            headers["geo"]["grid_data_file_id"] = ids[headers["geo"]["grid_data_file_id"]]
+        props = [{**x, "data_file_id": ids[x["data_file_id"]]} if "data_file_id" in x else x for x in info["props"]]
+        con.execute("INSERT INTO data_deck(study_id, source_path, source_file_id, folder, headers_json, spec_json, "
+                    "props_json, coverage_json, grid_json) VALUES (?,?,?,?,?,?,?,?,?)",
+                    (sid, info["source_path"], info["source_file_id"], str(folder), _dumps(headers),
+                     _dumps(info["spec"]), _dumps(props), _dumps(info["coverage"]), _dumps(info["grid"])))
+        summary = store.inventory(con, sid)
+    except BaseException:
+        con.execute("ROLLBACK")
+        shutil.rmtree(folder, ignore_errors=True)
+        raise
+    con.execute("COMMIT" if write else "ROLLBACK")
+    if not write:
+        shutil.rmtree(folder, ignore_errors=True)
+    else:
+        studies._event(con, sid, "data", "loaded", {"from_study": source_study, "rows": n, "files": copied}, "data")
+    g = info["grid"]
+    summary.update(loaded=write, from_study=source_study, rows=n, files=copied, folder=str(folder),
+                   spoken_summary=f"Took study {source_study}'s input ({Path(info['source_path']).name}): {n} table "
+                                  f"rows and {copied} grid and array files, all checked; grid {g['nx']} by "
+                                  f"{g['ny']} by {g['nz']}." + ("" if write else " (check only: nothing was written)"))
+    return summary
+
+
 # ---------------------------------------------------------------- read back (the data layer)
 def has_deck(con, study) -> bool:
     return con.execute("SELECT 1 FROM data_deck WHERE study_id = ?", (store.study_id(con, study),)).fetchone() \
@@ -196,18 +269,36 @@ def deck_tables(con, study, kind: str | None = None, table: str | None = None) -
     return out
 
 
-def _qc_report(path: Path, kind: str, name: str, version: int, info: dict, tables: dict, warnings: list) -> Path:
-    from ..reports.simple_report import _list, _page, _table
+def _arrays(con, info: dict, only: set | None = None) -> dict:
+    """The study's cell arrays as numbers (from the checked files; constants filled), for the model views."""
+    from ..reports.deck_model_report import read_grdecl_array
     g = info["grid"]
-    rows = [[t, len(r)] for t, r in tables.items()]
-    sections = [("Source", _list([f"deck: {info['source_path']}", f"grid {g['nx']} x {g['ny']} x {g['nz']}, "
-                                  f"{g['nactive']} active", f"schedule: {info['coverage']['schedule_mode']}"])),
-                ("Tables taken from the deck", _table(["table", "rows"], rows)),
-                ("Validator warnings", _list(warnings))]
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(_page(f"{kind} model {name} v{version} (from deck)",
-                          f"rebuilt from {html.escape(Path(info['source_path']).name)}", sections, [], False))
-    return path
+    n = g["nx"] * g["ny"] * g["nz"]
+    out = {}
+    for x in info["props"]:
+        if only and x["keyword"] not in only:
+            continue
+        try:
+            out[x["keyword"]] = (read_grdecl_array(store.verified_path(con, x["data_file_id"]), n)
+                                 if "data_file_id" in x else np.full(n, float(x["const_value"])))
+        except (ValueError, OSError):
+            continue   # a view only: an array it can't read is left out of the plots
+    return out
+
+
+def _qc_report(con, path: Path, kind: str, name: str, version: int, info: dict, tables: dict, warnings: list,
+               assumptions: list) -> Path:
+    from ..reports.deck_model_report import model_report
+    g = info["grid"]
+    arrays = _arrays(con, info) if kind == "geo" else None
+    poro_top = None
+    if kind == "well":
+        a = _arrays(con, info, {"PORO"}).get("PORO")
+        if a is not None and a.size == g["nx"] * g["ny"] * g["nz"]:
+            poro_top = a.reshape(g["nz"], g["ny"], g["nx"])[0]
+    return model_report(path, kind=kind, name=name, version=version, source=info["source_path"], tables=tables,
+                        header=info["headers"][kind], grid=g, coverage=info["coverage"], warnings=warnings,
+                        assumptions=assumptions, arrays=arrays, poro_top=poro_top)
 
 
 def build_model(cfg, con, study: str, kind: str, model_name: str, *, geo_version_id: int | None = None,
@@ -266,8 +357,9 @@ def build_model(cfg, con, study: str, kind: str, model_name: str, *, geo_version
         return {"ok": False, "status": "draft", "version_id": vid, "validator": val,
                 "spoken_summary": val["spoken_summary"] + " The draft is kept for fixing."}
     slug = re.sub(r"[^A-Za-z0-9_-]+", "_", model_name)
-    rep = _qc_report(cfg.file_store / "qc" / f"{kind}_{slug}_v{v['version']}.html", kind, model_name, v["version"],
-                     info, tables, [w["message"] if isinstance(w, dict) else str(w) for w in val["warnings"]])
+    rep = _qc_report(con, cfg.file_store / "qc" / f"{kind}_{slug}_v{v['version']}.html", kind, model_name,
+                     v["version"], info, tables, [w["message"] if isinstance(w, dict) else str(w)
+                                                  for w in val["warnings"]], assumptions)
     rid = D("register_file", path=str(rep), kind="qc_report")["file_id"]
     sub = D("submit_for_review", kind=kind, version_id=vid, qc_report_file_id=rid,
             metrics={"from_deck": Path(info["source_path"]).name, "tables": {t: len(r) for t, r in tables.items()}})
@@ -284,40 +376,69 @@ def deck_spec(con, study: str, name: str, requirement: str, ids: dict) -> dict:
     return {**info["spec"], "name": name, "requirement": requirement, **ids}
 
 
-def compare_with_source(cfg, con, study: str, on_progress=None) -> dict:
-    """Run the source deck (once per load) and compare the study's run with it: static, initial, dynamic."""
+def _study_deck_path(con, deck_id: int) -> Path:
+    r = con.execute("SELECT f.path FROM deck_files df JOIN files f ON f.id = df.file_id "
+                    "WHERE df.deck_id = ? AND df.role = 'DATA'", (deck_id,)).fetchone()
+    if not r:
+        raise ToolError(NOT_FOUND, f"deck {deck_id} or its DATA file not found")
+    return Path(r["path"])
+
+
+def compare_with_source(cfg, con, study: str, on_progress=None, deck_only: bool = False) -> dict:
+    """Is the study's deck the source deck again? Two levels:
+
+    1. deck    - both decks read by the OPM parser: grid, every table row, every cell array, the schedule
+                 (opmagent.deck.deck_compare; no simulation)
+    2. results - the source deck is run (once per load) and the study's run compared with it: static, initial
+                 state, every summary vector (opmagent.deck.roundtrip). Skipped with deck_only."""
     from ..deck import roundtrip
+    from ..deck.deck_compare import compare_decks
     from ..sim.runner import run_deck
     st = studies.status(con, study)
     info = deck_info(con, study)
     res = {t["task"]: t["result"] for t in st["tasks"]}
-    run_id = (res.get("run") or {}).get("run_id")
-    if not run_id:
-        raise ToolError(INVALID_INPUT, f"study {study} has no finished run yet")
-    r = con.execute("SELECT r.out_dir, f.path FROM runs r JOIN decks d ON d.id = r.deck_id JOIN deck_files df "
-                    "ON df.deck_id = d.id AND df.role = 'DATA' JOIN files f ON f.id = df.file_id WHERE r.id = ?",
-                    (run_id,)).fetchone()
-    if not r:
-        raise ToolError(NOT_FOUND, f"run {run_id} or its deck not found")
     src = Path(info["source_path"])
-    ref = Path(info["folder"]) / "run_source"
-    if not (ref / f"{src.stem}.SMSPEC").exists():
-        cb = on_progress or (lambda _label: None)
-        out = run_deck(src, ref, cfg.flow_bin, on_progress=cb("source"))
-        if not out["ok"]:
-            return {"ok": False, "stage": "run source", "run": out,
-                    "spoken_summary": "The source deck failed to run; see its log."}
-    cmp = roundtrip.compare(ref, Path(r["out_dir"]), src.stem, Path(r["path"]).stem, src, Path(r["path"]))
-    report = Path(st["study"]["folder"]) / "runs" / "compare_with_source.json"
+    deck_id = (res.get("deck") or {}).get("deck_id")
+    run_id = (res.get("run") or {}).get("run_id")
+    if run_id and not deck_id:
+        r = con.execute("SELECT deck_id FROM runs WHERE id = ?", (run_id,)).fetchone()
+        deck_id = r["deck_id"] if r else None
+    if not deck_id:
+        raise ToolError(INVALID_INPUT, f"study {study} has no deck yet (the deck task isn't done)")
+    gen = _study_deck_path(con, int(deck_id))
+    out = {"source_deck": str(src), "study_deck": str(gen), "deck": compare_decks(src, gen)}
+    if not deck_only:
+        if not run_id:
+            raise ToolError(INVALID_INPUT, f"study {study} has no finished run yet (use deck_only to compare the "
+                                           f"decks without running)")
+        r = con.execute("SELECT out_dir FROM runs WHERE id = ?", (run_id,)).fetchone()
+        if not r:
+            raise ToolError(NOT_FOUND, f"run {run_id} not found")
+        ref = Path(info["folder"]) / "run_source"
+        if not (ref / f"{src.stem}.SMSPEC").exists():
+            cb = on_progress or (lambda _label: None)
+            ran = run_deck(src, ref, cfg.flow_bin, on_progress=cb("source"))
+            if not ran["ok"]:
+                return {"ok": False, "stage": "run source", "run": ran, **out,
+                        "spoken_summary": "The source deck failed to run; see its log."}
+        out["comparison"] = roundtrip.compare(ref, Path(r["out_dir"]), src.stem, gen.stem, src, gen)
+    d = out["deck"]
+    c = out.get("comparison")
+    ok = d["passed"] and (deck_only or c["passed"])
+    name = "compare_with_source_deck.json" if deck_only else "compare_with_source.json"
+    report = Path(st["study"]["folder"]) / ("deck" if deck_only else "runs") / name
     report.parent.mkdir(parents=True, exist_ok=True)
-    report.write_text(json.dumps(cmp, indent=1, default=str))
-    if cmp["passed"]:
-        say = (f"The study reproduces {src.name}: static, initial state and "
-               f"{cmp['levels'][2]['vectors_compared']} summary vectors match within tolerance.")
-    else:
-        last = cmp["levels"][-1]
-        say = f"The study differs from {src.name} at the {last.get('level')} level: " + (
-            ", ".join(last.get("failed", [])[:5]) or last.get("error", "see the report")) + "."
-    studies._event(con, st["study"]["id"], "run", "compared", {"passed": cmp["passed"], "report": str(report)},
-                   "compare")
-    return {"ok": cmp["passed"], "comparison": cmp, "report": str(report), "spoken_summary": say}
+    report.write_text(json.dumps({"passed": ok, **out}, indent=1, default=str))
+    say = d["spoken_summary"]
+    if c is not None:
+        if c["passed"]:
+            say += (f" The runs match too: static, initial state and {c['levels'][2]['vectors_compared']} summary "
+                    f"vectors within tolerance.")
+        else:
+            last = c["levels"][-1]
+            say += f" The runs differ at the {last.get('level')} level: " + (
+                ", ".join(last.get("failed", [])[:5]) or last.get("error", "see the report")) + "."
+    studies._event(con, st["study"]["id"], "deck" if deck_only else "run", "compared",
+                   {"passed": ok, "deck_passed": d["passed"], "results_passed": None if c is None else c["passed"],
+                    "report": str(report)}, "compare")
+    return {"ok": ok, **out, "report": str(report), "spoken_summary": say}

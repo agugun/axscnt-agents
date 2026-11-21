@@ -84,6 +84,14 @@ source deck. It replaces any data loaded from the inbox (and the other way round
 modelers' results, not raw lab data, logs or tops, so a study from a deck rebuilds that deck; it can't be
 re-derived from measurements.
 
+### From another study's input
+To rebuild a study from the input another study read from a deck (testing/spe9-reverse-loop.md, scenario 2):
+`load_study_input(name, "<source study>")` (or `opmagent data from-study <name> <source study>`), `check_only=true`
+first. It copies the tables row for row and the grid and array files into this study's own `data/deck/load-NNN/`,
+after checking each file is still the one the source study loaded; the deck is not read again. A changed file stops
+it: tell the engineer which, and that the source study needs its deck reloaded. Only deck input can be copied; for
+raw data, the engineer copies the inbox and you load it.
+
 ## Requests from modelers
 A modeler that finds data missing or poor raises a request to `data`. Your task is then reopened (ready) and the
 request shows in `study_status` under `open_requests`. To deal with it:

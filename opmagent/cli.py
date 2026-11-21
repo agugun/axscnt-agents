@@ -198,6 +198,23 @@ def cmd_deck_build(args):
     raise SystemExit(0 if r.get("ok") else 2)
 
 
+def cmd_deck_compare(args):
+    """Are two decks the same simulation deck? Grid, tables, cell arrays and schedule, without running either."""
+    import json
+    from .deck.deck_compare import compare_decks
+    r = compare_decks(args.original, args.generated)
+    print(r["spoken_summary"])
+    for s_ in r["sections"]:
+        print(f"  {s_['section']:<9} {'same' if s_['passed'] else 'DIFFERENT'}")
+        for d in s_["differences"][:10]:
+            print(f"      {d}"[:220])
+        if s_.get("output_only_differences"):
+            print(f"      output-only keywords differ (not compared): {', '.join(s_['output_only_differences'])}")
+    if args.json:
+        print(json.dumps(r, indent=2, default=str))
+    raise SystemExit(0 if r["passed"] else 2)
+
+
 def _progress_printer(label: str = ""):
     """on_progress callback for runner.run_deck: one refreshing line on a terminal, a line per report step otherwise.
     Writes to stderr, so JSON on stdout stays clean."""
@@ -429,15 +446,105 @@ def cmd_study(args):
             return
         if args.scmd == "compare":
             from .data.deck_source import compare_with_source
-            r = compare_with_source(cfg, con, args.name)
+            r = compare_with_source(cfg, con, args.name, deck_only=args.deck_only)
             print(r["spoken_summary"])
+            for s_ in r["deck"]["sections"]:
+                print(f"  deck {s_['section']:<9} {'same' if s_['passed'] else 'DIFFERENT'}"
+                      + ("" if s_["passed"] else "  " + "; ".join(s_["differences"][:3]))[:200])
+            for lv in (r.get("comparison") or {}).get("levels", []):
+                print(f"  run  {lv.get('level', '?'):<9} {'same' if lv['passed'] else 'DIFFERENT'}")
             print(f"  report: {r.get('report')}")
             raise SystemExit(0 if r["ok"] else 2)
+        if args.scmd == "task":
+            res = json.loads(args.result) if args.result else {}
+            t = (studies.start_task(con, args.name, args.task, actor=getpass.getuser()) if args.action == "start" else
+                 studies.complete_task(con, args.name, args.task, res, actor=getpass.getuser(),
+                                       auto_approve=cfg.auto_approve))
+            print(json.dumps(t, indent=2, default=str)[:3000])
+            return
+        if args.scmd == "run":
+            r = _study_run(cfg, con, args.name, args.timeout)
+            print(r["spoken_summary"])
+            raise SystemExit(0 if r["ok"] else 2)
+        if args.scmd == "view":
+            r = _study_view(con, args.name, args.kinds or ["fluid", "geo", "well"], args.open)
+            for v in r["views"]:
+                print(f"  {v['kind']:<6} {v.get('model', ''):<20} {v.get('status', ''):<10} {v.get('qc_report') or v['note']}")
+            raise SystemExit(0 if r["ok"] else 2)
+        if args.complete:
+            studies.start_task(con, args.name, args.what, actor=getpass.getuser())
         r = _study_build(cfg, con, args.what, args.name)
+        if args.complete and r.get("ok"):
+            key = "deck_id" if args.what == "deck" else "version_id"
+            if args.what != "deck" and r.get("status") != "approved":
+                r["task"] = (f"not completed: version {r['version_id']} is {r.get('status')}; approve it "
+                             f"(`opmagent review approve {args.what} {r['version_id']}`), then "
+                             f"`opmagent study task {args.name} {args.what} complete --result "
+                             f"'{{\"version_id\": {r['version_id']}}}'`")
+            else:
+                studies.complete_task(con, args.name, args.what, {key: r[key]}, actor=getpass.getuser(),
+                                      auto_approve=cfg.auto_approve)
+                r["task"] = f"{args.what} task completed"
     except ToolError as e:
         r = e.to_dict()
     print(json.dumps(r, indent=2, default=str)[:8000])
     raise SystemExit(0 if r.get("ok") else 2)
+
+
+def _study_run(cfg, con, name, timeout_s=3600):
+    """The run agent's step from a terminal: start the run task, run the study's deck in Flow (registered in runs),
+    store its results and complete the task with the run id."""
+    import getpass
+    import sys
+    from .core import studies
+    from .servers.sim_server import SimService
+    from .servers.sim_server import wrap as swrap
+    st = studies.status(con, name)
+    deck_id = ({t["task"]: t["result"] for t in st["tasks"]}.get("deck") or {}).get("deck_id")
+    if not deck_id:
+        return {"ok": False, "spoken_summary": f"Study {name} has no deck yet: the deck task isn't done."}
+    studies.start_task(con, name, "run", actor=getpass.getuser())
+    sim = SimService(cfg)
+    r = swrap(sim, "run_simulation")(deck_id=int(deck_id), note=f"study {name}")
+    if not r.get("ok", True) or "run_id" not in r:
+        return {"ok": False, "spoken_summary": r.get("message", "the run didn't start")}
+    print(f"run {r['run_id']} started (deck {deck_id}); follow it with `opmagent runs watch {r['run_id']}`",
+          file=sys.stderr)
+    w = swrap(sim, "wait")(run_id=r["run_id"], timeout_s=int(timeout_s))
+    if not w.get("ok"):
+        return {"ok": False, "spoken_summary": w.get("spoken_summary") or w.get("message", "the run failed")}
+    studies.complete_task(con, name, "run", {"run_id": r["run_id"]}, actor=getpass.getuser())
+    return {"ok": True, "run_id": r["run_id"],
+            "spoken_summary": f"Run {r['run_id']} finished and stored; the run task is done. "
+                              + (w.get("spoken_summary") or "")}
+
+
+def _study_view(con, name, kinds, open_=False):
+    """Each model of the study as its QC report (plots and tables of what the model holds), before any simulation:
+    the version the modeler completed its task with, or the study's latest version while it waits for review."""
+    import webbrowser
+    from .core import models, studies
+    st = studies.status(con, name)
+    res = {t["task"]: t["result"] for t in st["tasks"]}
+    views = []
+    for kind in kinds:
+        vid = (res.get(kind) or {}).get("version_id")
+        if not vid:
+            k = models.KINDS[kind]
+            r = con.execute(f"SELECT v.id FROM {k['versions']} v JOIN {k['models']} m ON m.id = v.{k['fk']} "
+                            f"WHERE m.name = ? ORDER BY v.version DESC LIMIT 1",
+                            (st["study"]["spec"]["models"][kind],)).fetchone()
+            vid = r["id"] if r else None
+        if not vid:
+            views.append({"kind": kind, "note": "not built yet"})
+            continue
+        q = models.get_qc_report(con, kind, int(vid))
+        path = (q["qc_report"] or {}).get("path")
+        views.append({"kind": kind, "version_id": int(vid), "model": f"{q['model_name']} v{q['version']}",
+                      "status": q["status"], "qc_report": path, "note": "" if path else "no QC report"})
+        if open_ and path:
+            webbrowser.open(Path(path).as_uri())
+    return {"ok": all(v.get("qc_report") for v in views), "views": views}
 
 
 def _study_build(cfg, con, what, name):
@@ -529,6 +636,13 @@ def cmd_data(args):
             if args.json:
                 print(json.dumps(m, indent=2, default=str))
             raise SystemExit(0 if m["all_ready"] else 2)
+        if args.dcmd == "from-study":
+            from .data.deck_source import copy_input
+            m = copy_input(con, args.name, args.source, write=not args.check)
+            print(m["spoken_summary"])
+            if args.json:
+                print(json.dumps(m, indent=2, default=str))
+            raise SystemExit(0 if m["all_ready"] else 2)
         if args.dcmd == "verify":
             v = store.verify(con, args.name)
             print(v["spoken_summary"])
@@ -580,7 +694,7 @@ def cmd_results(args):
     cfg = cfgmod.load(args.config)
     r = open_in_resinsight(cfg, run_id=args.run, study=args.study, case=args.case, dry_run=args.dry_run)
     print(r["spoken_summary"])
-    if args.dry_run:
+    if args.dry_run and r.get("command"):
         print(" ".join(r["command"]))
     raise SystemExit(0 if r["ok"] else 2)
 
@@ -673,6 +787,11 @@ def main(argv=None):
     x = dk.add_parser("build", help="build a deck from a JSON spec")
     x.add_argument("--spec", required=True)
     x.set_defaults(fn=cmd_deck_build)
+    x = dk.add_parser("compare", help="are two decks the same simulation deck? (parsed: grid, tables, arrays, schedule)")
+    x.add_argument("original")
+    x.add_argument("generated")
+    x.add_argument("--json", action="store_true")
+    x.set_defaults(fn=cmd_deck_compare)
     x = sub.add_parser("run", help="run a validated deck (shows live progress)")
     x.add_argument("--deck", required=True)
     x.set_defaults(fn=cmd_run)
@@ -716,12 +835,31 @@ def main(argv=None):
     x.add_argument("name")
     x.add_argument("--limit", type=int, default=50)
     x.set_defaults(fn=cmd_study)
-    x = sd.add_parser("compare", help="study from a deck: run the source deck and check the study's run reproduces it")
+    x = sd.add_parser("compare", help="study from a deck: is the study's deck the source deck again (decks, then runs)?")
     x.add_argument("name")
+    x.add_argument("--deck-only", dest="deck_only", action="store_true",
+                   help="compare the two decks only (no simulation; needs the deck task, not the run)")
+    x.set_defaults(fn=cmd_study)
+    x = sd.add_parser("task", help="start or complete a study task from a terminal (agents use start_task/complete_task)")
+    x.add_argument("name")
+    x.add_argument("task", choices=["data", "fluid", "geo", "well", "deck", "run", "view"])
+    x.add_argument("action", choices=["start", "complete"])
+    x.add_argument("--result", help='the task result as JSON, e.g. \'{"version_id": 12}\'')
+    x.set_defaults(fn=cmd_study)
+    x = sd.add_parser("run", help="run the study's deck in Flow, store the results, complete the run task")
+    x.add_argument("name")
+    x.add_argument("--timeout", type=int, default=3600, help="seconds to wait for the run")
+    x.set_defaults(fn=cmd_study)
+    x = sd.add_parser("view", help="each model's QC report (plots of what it holds), before any simulation")
+    x.add_argument("name")
+    x.add_argument("kinds", nargs="*", choices=["fluid", "geo", "well"], metavar="fluid|geo|well")
+    x.add_argument("--open", action="store_true", help="open the reports in the browser")
     x.set_defaults(fn=cmd_study)
     x = sd.add_parser("build", help="build a model or the deck from the study's data in the database")
     x.add_argument("what", choices=["fluid", "geo", "well", "deck"])
     x.add_argument("name")
+    x.add_argument("--complete", action="store_true",
+                   help="start the task first and complete it with the result (a model only once it is approved)")
     x.set_defaults(fn=cmd_study)
     da = sub.add_parser("data", help="data manager: load a study's raw data into the database").add_subparsers(
         dest="dcmd", required=True)
@@ -729,11 +867,15 @@ def main(argv=None):
                    ("load", "convert the study inbox into the study data tables for the modelers"),
                    ("show", "what is loaded; with a dataset, its rows (logs: per-curve statistics; files: catalog)"),
                    ("verify", "check the filed originals are still the files that were loaded"),
-                   ("from-deck", "reverse: read an existing deck into the study's data, so the study rebuilds it")):
+                   ("from-deck", "reverse: read an existing deck into the study's data, so the study rebuilds it"),
+                   ("from-study", "take the input another study read from a deck (no new read of the deck)")):
         x = da.add_parser(n_, help=h_)
         x.add_argument("name")
         if n_ == "from-deck":
             x.add_argument("deck", help="the .DATA file (absolute, or relative to the study inbox)")
+            x.add_argument("--check", action="store_true", help="report only, write nothing")
+        if n_ == "from-study":
+            x.add_argument("source", help="the study whose input to take")
             x.add_argument("--check", action="store_true", help="report only, write nothing")
         if n_ == "show":
             x.add_argument("dataset", nargs="?", help="wells, tops, surveys, perforations, controls, history, logs, "

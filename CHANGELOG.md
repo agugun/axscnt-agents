@@ -49,6 +49,12 @@ Studies: the agents work through one simulation question together.
   - The modelers build normal versions from it with `opmagent study build`, going through their validators and the approval gate. The deck builder renders the source deck's dates, schedule and passthrough keywords.
   - `opmagent study compare <study>` runs the source deck and checks the study's run reproduces it: static, initial state and every summary vector.
   - Tested through whole studies on the hello deck, a deck built forward from raw data, SPE1, SPE9 and Norne.
+  - **Deck comparison** (`opmagent/deck/deck_compare.py`, `opmagent deck compare A B`): are two decks the same simulation deck? Both are read by the OPM parser: grid, every table row, every cell array as OPM processes it, the schedule (dates, report steps, verbatim keywords). Output-only keywords (RPTRST, ...) are listed, not failed. `opmagent study compare` now compares the decks first, then the runs; `--deck-only` needs no run.
+  - **Model views before simulation:** a deck-sourced model's QC report now plots what it holds: PVTO/PVDG curves and the water and density tables; per-layer maps, histograms and layer means of each cell array, SWOF/SGOF, contacts and rock; the well map on the grid, completion intervals and the schedule's controls over time. `opmagent study view <study> [--open]` lists or opens them.
+  - **Input from another study:** `opmagent data from-study <study> <source>`, MCP `load_study_input` (data manager). Tables are copied row for row; the grid and array files are copied into the study's own folder after an integrity check. The deck is not read again.
+  - **The board from a terminal:** `opmagent study task <study> <task> start|complete`, `opmagent study build ... --complete`, `opmagent study run <study>` (runs the study's deck through the simulation service and completes the run task).
+  - **Testing scenarios** in `testing/`: the SPE9 reverse loop (two connected scenarios, success criteria, troubleshooting) and `testing/spe9_loop.sh`.
+  - Fixed: `opmagent results open --dry-run` crashed when ResInsight wasn't found.
   - A deck holds the modelers' results, not their raw data. So a study from a deck rebuilds that deck as given; it doesn't re-derive lab data, logs or tops.
 - **Modelers read through the data layer.** New read tools: `study_data`, `study_data_rows`, `log_stats` (catalog), `log_samples` (from the files), `fluid_sample`, `study_files`, `check_study_data`.
   - The modelers use them for their analysis and interpretation.

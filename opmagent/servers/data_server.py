@@ -265,6 +265,14 @@ class DataService:
         from ..data.deck_source import load_deck
         return {"ok": True, **load_deck(self.con, name, deck_path, write=not check_only)}
 
+    def load_study_input(self, name: str, source_study: str, check_only: bool = False) -> dict:
+        """Data manager: give study `name` the input another study read from a deck, without reading the deck again
+        (tables row for row; the grid and array files copied after an integrity check). Replaces the study's data."""
+        if self.profile != "data":
+            raise ToolError(FORBIDDEN, "only the data manager loads study data")
+        from ..data.deck_source import copy_input
+        return {"ok": True, **copy_input(self.con, name, source_study, write=not check_only)}
+
     def deck_tables(self, name: str, kind: str | None = None, table: str | None = None, limit: int = 200) -> dict:
         """For a study whose data came from a deck: its tables per model (fluid pvto/pvdg/pvtw/density/...,
         geo swof/sgof/rock/contacts/faults, well wells/well_completions/well_events), first `limit` rows each."""
@@ -461,14 +469,14 @@ TOOLS = {
     "import": COMMON + WRITER,
     "deck": COMMON + ["create_deck", "add_deck_file", "set_deck_status", "list_decks", "get_deck", "init_study"] + STUDY,
     "run": COMMON + ["list_decks", "get_deck"] + STUDY,
-    "data": COMMON + ["register_file", "load_study_data", "load_deck_data"] + DATA_READ + STUDY,
+    "data": COMMON + ["register_file", "load_study_data", "load_deck_data", "load_study_input"] + DATA_READ + STUDY,
     "view": COMMON + ["list_decks", "get_deck"] + STUDY,
     "reviewer": COMMON + ["list_pending_reviews", "get_qc_report", "approve", "reject", "add_review_comment",
                           "get_review_feedback", "list_decks", "get_deck", "study_status", "list_studies",
                           "study_data", "study_data_rows", "log_stats"],
 }
 WRITE_TOOLS = (set(WRITER) | {"create_deck", "add_deck_file", "set_deck_status", "approve", "reject", "init_study",
-                               "load_study_data", "load_deck_data", "answer_review_feedback", "add_review_comment"}
+                               "load_study_data", "load_deck_data", "load_study_input", "answer_review_feedback", "add_review_comment"}
                | set(STUDY) | set(QC_NOTEBOOKS)) - {"run_validator", "study_status", "list_studies"}
 
 
