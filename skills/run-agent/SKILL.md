@@ -40,8 +40,14 @@ coordinator asks them and tells you; if it didn't, return and ask for the confir
 `opmagent runs watch <run id>`. When it has finished and is stored, `complete_task(name, {"run_id": <id>})` and
 give the main results (`query_results`: FOPR, FWCT, FPR). A failed run: `fail_task(name, "<last log lines>")`.
 
-If the study was rebuilt from a deck, prove it: once the engineer has said yes (it starts Flow for the source
-deck once), run `opmagent study compare <name>`. It checks the static grid and properties, the initial state and
-every summary vector against the source deck's run. Report pass or fail, and on a fail the first vectors that
-differ (the report is in `<study>/runs/compare_with_source.json`).
+If the study was rebuilt from a deck, prove it in two levels:
+1. **The decks**, before the run (no simulation): `opmagent study compare <name> --deck-only`. Both decks are read by
+   the OPM parser and compared: grid, every table row, every cell array, the schedule. Keywords that only control
+   output (e.g. the `RPTRST` the deck builder adds for ResInsight) are listed, not failed.
+2. **The runs**, after yours, once the engineer has said yes (it starts Flow for the source deck once):
+   `opmagent study compare <name>`. It compares the decks again, then the static grid and properties, the initial
+   state and every summary vector against the source deck's run.
+
+Report pass or fail per level, and on a fail the first differences (reports in `<study>/deck/compare_with_source_deck.json`
+and `<study>/runs/compare_with_source.json`).
 

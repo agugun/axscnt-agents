@@ -95,8 +95,14 @@ opmagent review feedback --all         # comments and answers
 # the reverse process: a study that rebuilds an existing deck
 opmagent study init SPE9_RB --requirement "rebuild SPE9"
 opmagent data from-deck SPE9_RB ~/opmagent/open-data/opm-tests/spe9/SPE9.DATA   # tables -> database, arrays -> files
-opmagent study build geo SPE9_RB       # likewise fluid, then well (after geo), then deck: the deck's data as given
-opmagent study compare SPE9_RB         # after the run: the study reproduces the source deck (static, initial, dynamic)
+opmagent study build geo SPE9_RB --complete   # likewise fluid, then well (after geo), then deck: the deck's data as given
+opmagent study view SPE9_RB --open     # each model's QC report (PVT curves, layer maps, SCAL, wells), no simulation
+opmagent data from-study SPE9_B SPE9_RB   # another study takes that input (tables copied, files copied and checked)
+opmagent study compare SPE9_RB --deck-only   # same simulation deck? (parsed: grid, tables, arrays, schedule; no run)
+opmagent study run SPE9_RB             # run the study's deck, store it, complete the run task
+opmagent study compare SPE9_RB         # decks, then runs: static, initial state, every summary vector
+opmagent deck compare A.DATA B.DATA    # any two decks
+opmagent study task SPE9_RB data start|complete [--result JSON]   # the board from a terminal
 opmagent study status FieldA_WF        # the board: tasks, open requests, what is next
 opmagent study events FieldA_WF        # its history
 opmagent results open --study FieldA_WF   # open the study's run in ResInsight
@@ -108,6 +114,11 @@ start and complete only their own task, through their data-server profile. A mod
 request to the data manager and is blocked until it is resolved. Completing a task checks its result (an approved
 model version, a validated deck, a finished run) before the next tasks become ready. The board is in the
 database (`studies`, `study_tasks`, `study_requests`, `study_events`), so DBeaver shows it too.
+
+**Testing scenarios.** [testing/](testing/README.md) has scenarios anyone can follow to check the logic end to
+end. The first is the SPE9 reverse loop: read SPE9 into study input and build the models (scenario 1), then
+rebuild from that input, render the deck, run it and view it in ResInsight (scenario 2); the generated deck must be
+the SPE9 deck again. `testing/spe9_loop.sh` runs both from a terminal.
 
 **Approval.** `[study] auto_approve = true` in `opmagent.toml` approves a model as soon as it passes its
 validator, recorded in `approvals` as `auto (approval disabled)`; models with validator errors still stop.

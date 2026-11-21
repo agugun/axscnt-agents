@@ -1,6 +1,7 @@
 """The reverse process: the data manager reads a deck into a study's data; the modelers, deck builder and run agent
 rebuild it through their usual steps; the study's run reproduces the source deck's results."""
 import json
+import shutil
 import os
 from dataclasses import replace
 from pathlib import Path
@@ -120,3 +121,92 @@ def test_open_decks_rebuilt_through_a_study(cfg, deck, name):
 def test_norne_rebuilt_through_a_study(cfg):
     c = reverse_study(cfg, str(Path(OPM_TESTS) / "norne/NORNE_ATW2013.DATA"), "RNORNE")
     assert c["ok"], c["spoken_summary"]
+
+
+def _models(cfg, con, call, name):
+    from opmagent.cli import _study_build
+    for kind in ("fluid", "geo", "well"):
+        call(kind, "start_task", name=name)
+        r = _study_build(cfg, con, kind, name)
+        assert r["ok"] and r["status"] == "approved", r
+        assert call(kind, "complete_task", name=name, result={"version_id": r["version_id"]})["ok"]
+
+
+def test_two_scenarios_input_reused_and_deck_the_same(cfg):
+    """testing/spe9-reverse-loop.md on the hello deck: scenario 1 reads the deck and builds the models (views, no
+    run); scenario 2 takes scenario 1's input, builds again, renders the deck, runs it. Same deck, same results."""
+    from opmagent.cli import _study_build, _study_view
+    deck = hello_deck(cfg)                       # approves the demo models itself: before auto-approve
+    cfg = replace(cfg, auto_approve=True)
+    call = lambda prof, tool, **k: wrap(DataService(prof, cfg), tool)(**k)  # noqa: E731
+    con = db.connect(cfg.database)
+    # scenario 1
+    call("deck", "init_study", name="S1", requirement="reverse")
+    call("data", "start_task", name="S1")
+    assert call("data", "load_deck_data", name="S1", deck_path=deck)["all_ready"]
+    call("data", "complete_task", name="S1", result={})
+    _models(cfg, con, call, "S1")
+    views = _study_view(con, "S1", ["fluid", "geo", "well"])
+    assert views["ok"]
+    for v in views["views"]:
+        page = Path(v["qc_report"]).read_text()
+        assert "plotly" in page.lower() and "(from deck)" in page
+    # scenario 2: the input, not the deck
+    call("deck", "init_study", name="S2", requirement="rebuild from S1")
+    call("data", "start_task", name="S2")
+    assert not call("geo", "load_study_input", name="S2", source_study="S1")["ok"]    # only the data manager
+    m = call("data", "load_study_input", name="S2", source_study="S1")
+    assert m["ok"] and m["all_ready"] and m["rows"] > 0, m
+    assert deck_source.deck_tables(con, "S2") == deck_source.deck_tables(con, "S1")
+    f1, f2 = (deck_source.deck_info(con, s)["folder"] for s in ("S1", "S2"))
+    assert f1 != f2 and "/S2/" in f2                                                  # S2 has its own files
+    call("data", "complete_task", name="S2", result={})
+    _models(cfg, con, call, "S2")
+    call("deck", "start_task", name="S2")
+    d = _study_build(cfg, con, "deck", "S2")
+    assert d["ok"], d.get("validation_log")
+    call("deck", "complete_task", name="S2", result={"deck_id": d["deck_id"]})
+    c = deck_source.compare_with_source(cfg, con, "S2", deck_only=True)                 # criterion 1: no run
+    assert c["ok"] and c["deck"]["passed"] and "comparison" not in c, c["spoken_summary"]
+    call("run", "start_task", name="S2")
+    sim = SimService(cfg)
+    rid = swrap(sim, "run_simulation")(deck_id=d["deck_id"])["run_id"]
+    assert swrap(sim, "wait")(run_id=rid, timeout_s=600)["ok"]
+    call("run", "complete_task", name="S2", result={"run_id": rid})
+    c = deck_source.compare_with_source(cfg, con, "S2")                                 # criterion 2: the runs
+    assert c["ok"] and c["comparison"]["passed"], c["spoken_summary"]
+
+
+def test_deck_compare_finds_a_changed_number(cfg, tmp_path):
+    from opmagent.deck.deck_compare import compare_decks
+    deck = Path(hello_deck(cfg))
+    assert compare_decks(deck, deck)["passed"]
+    work = tmp_path / "changed"
+    shutil.copytree(deck.parent, work)
+    changed = work / deck.name
+    text = changed.read_text()
+    i = text.index("PVTW")
+    j = text.index("/", i)
+    rec = text[i:j].split()
+    rec[2] = repr(float(rec[2]) * 1.01)                       # water Bw +1 %
+    changed.write_text(text[:i] + " ".join(rec[:1]) + "\n " + " ".join(rec[1:]) + " " + text[j:])
+    r = compare_decks(deck, changed)
+    assert not r["passed"]
+    tab = next(s for s in r["sections"] if s["section"] == "tables")
+    assert not tab["passed"] and any("pvtw" in d for d in tab["differences"])
+
+
+def test_input_copy_refuses_changed_files(cfg):
+    pytest.importorskip("lasio")
+    con = db.connect(cfg.database)
+    deck = forward_deck(cfg)
+    for s in ("C1", "C2"):
+        studies.init_study(con, cfg.studies_dir, s, "x")
+    deck_source.load_deck(con, "C1", deck)
+    arr = next(x["data_file_id"] for x in deck_source.deck_info(con, "C1")["props"] if "data_file_id" in x)
+    path = Path(con.execute("SELECT path FROM data_files WHERE id = ?", (arr,)).fetchone()[0])
+    path.write_text(path.read_text() + "\n")
+    from opmagent.core.errors import ToolError
+    with pytest.raises(ToolError, match="changed since it was loaded"):
+        deck_source.copy_input(con, "C2", "C1")
+    assert not deck_source.has_deck(con, "C2")

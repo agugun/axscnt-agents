@@ -28,7 +28,15 @@ If the engineer wants to rebuild a deck as a study ("make a study from SPE9.DATA
 1. Read back the name, the requirement and the deck's path. The period comes from the deck.
 2. On "yes", start the study as above, then hand the data task to the **data-manager**: "load the deck `<path>` (`load_deck_data`)".
 3. From there the study runs as usual: the modelers rebuild from the deck's data, the well modeler after geo.
-4. After the run, ask the engineer, then have the **run-agent** run `opmagent study compare <name>`. Report whether the study reproduces the deck.
+4. When the models are done, the engineer can look at each before any simulation: `opmagent study view <name> --open`
+   (each model's QC report: PVT curves, layer maps, SCAL, well map and schedule).
+5. When the deck task is done, have the **run-agent** compare the decks (`opmagent study compare <name> --deck-only`).
+   After the run, ask the engineer, then have it run `opmagent study compare <name>`. Report whether the study
+   reproduces the deck: decks, then runs.
+
+### A study from another study's input
+"Rebuild study B from study A's input": start study B, then hand its data task to the **data-manager**: "take study
+A's input (`load_study_input`)". The rest is as above. This is scenario 2 of `testing/spe9-reverse-loop.md`.
 
 ## Run a study (repeat until complete)
 1. `opmagent study status <name> --json`. The `next` list is the ready tasks and their agents.
