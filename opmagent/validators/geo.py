@@ -1,13 +1,12 @@
-"""Geo model rules."""
+"""Geo model rules: grid, cell properties, PVTNUM, faults (the static model)."""
 from __future__ import annotations
 
-from collections import defaultdict
 
-from ._util import Issues, contiguous_regions, non_decreasing, non_increasing, read_array, rows, strictly_increasing
+from ._util import Issues, contiguous_regions, read_array, rows
 
-FRACTION = {"PORO", "NTG", "SWATINIT"}
+FRACTION = {"PORO", "NTG"}
 NONNEG = {"PERMX", "PERMY", "PERMZ", "MULTX", "MULTY", "MULTZ", "MULTX-", "MULTY-", "MULTZ-", "MULTPV", "DX", "DY", "DZ"}
-REGION = {"SATNUM", "PVTNUM", "EQLNUM", "FIPNUM", "ROCKNUM"}
+REGION = {"PVTNUM"}
 
 
 def _prop_values(con, p) -> list[float] | None:
@@ -67,81 +66,7 @@ def validate(con, vid: int) -> list[dict]:
         if not contiguous_regions(int(x) for x in values[kw]):
             iss.error("regions", f"{kw} values must run 1..N without gaps")
 
-    # --- saturation functions per SATNUM
-    swof = rows(con, "SELECT * FROM swof WHERE version_id=? ORDER BY satnum, sw", vid)
-    sgof = rows(con, "SELECT * FROM sgof WHERE version_id=? ORDER BY satnum, sg", vid)
-    nsat = int(max(values.get("SATNUM", [1])))
-    for name, tab in (("SWOF", swof), ("SGOF", sgof)):
-        regs = {r["satnum"] for r in tab}
-        missing = set(range(1, nsat + 1)) - regs
-        if tab and missing:
-            iss.error("regions", f"{name} has no table for SATNUM {sorted(missing)}, grid uses 1..{nsat}")
-        elif tab and max(regs) > nsat:
-            # extra tables are valid: IMBNUM (hysteresis), KRNUM and similar region arrays select them
-            iss.warn("regions", f"{name} tables {sorted(regs - set(range(1, nsat + 1)))} are not used by SATNUM "
-                                f"(1..{nsat}); fine if IMBNUM or another region array selects them")
-    if not swof:
-        iss.error("required", "SWOF is empty")
-    bysat = defaultdict(list)
-    for r in swof:
-        bysat[r["satnum"]].append(r)
-    for s, rr in bysat.items():
-        where = f"SWOF satnum {s}"
-        if len(rr) < 2:
-            iss.error("table_size", "SWOF needs at least 2 rows", where)
-            continue
-        if not strictly_increasing([r["sw"] for r in rr]):
-            iss.error("swof_sw", "Sw must increase", where)
-        if not non_decreasing([r["krw"] for r in rr]):
-            iss.error("swof_krw", "krw must not fall as Sw rises", where)
-        if not non_increasing([r["krow"] for r in rr]):
-            iss.error("swof_krow", "krow must not rise as Sw rises", where)
-        if rr[0]["krw"] != 0:
-            iss.error("swof_end", "krw must be 0 at the first row (connate water)", where)
-        if rr[-1]["krow"] != 0:
-            iss.error("swof_end", "krow must be 0 at the last row", where)
-        if not non_increasing([r["pcow"] for r in rr]):
-            iss.warn("swof_pc", "Pcow usually falls as Sw rises", where)
-    bysg = defaultdict(list)
-    for r in sgof:
-        bysg[r["satnum"]].append(r)
-    for s, rr in bysg.items():
-        where = f"SGOF satnum {s}"
-        if len(rr) < 2:
-            iss.error("table_size", "SGOF needs at least 2 rows", where)
-            continue
-        if rr[0]["sg"] != 0:
-            iss.error("sgof_sg", "SGOF must start at Sg = 0", where)
-        if not strictly_increasing([r["sg"] for r in rr]):
-            iss.error("sgof_sg", "Sg must increase", where)
-        if not non_decreasing([r["krg"] for r in rr]):
-            iss.error("sgof_krg", "krg must not fall as Sg rises", where)
-        if not non_increasing([r["krog"] for r in rr]):
-            iss.error("sgof_krog", "krog must not rise as Sg rises", where)
-        if rr[0]["krg"] != 0:
-            iss.error("sgof_end", "krg must be 0 at Sg = 0", where)
-        if rr[-1]["krog"] != 0:
-            iss.error("sgof_end", "krog must be 0 at the last row", where)
-        if s in bysat and abs(bysat[s][0]["krow"] - rr[0]["krog"]) > 1e-6:
-            iss.warn("endpoint_consistency", "kro at connate water differs between SWOF and SGOF", where)
-
-    # --- rock and contacts
-    rock = rows(con, "SELECT * FROM rock WHERE version_id=?", vid)
-    if not rock:
-        iss.error("required", "ROCK is empty")
-    contacts = rows(con, "SELECT * FROM contacts WHERE version_id=?", vid)
-    neql = int(max(values.get("EQLNUM", [1])))
-    if {c["eqlnum"] for c in contacts} != set(range(1, neql + 1)):
-        iss.error("regions", f"contacts must cover EQLNUM 1..{neql}")
-    if h["grid_type"] == "cartesian" and h["tops"] is not None and h["dz"] is not None:
-        z0, z1 = h["tops"], h["tops"] + nz * h["dz"]
-        for c in contacts:
-            if not z0 <= c["datum_depth"] <= z1:
-                iss.warn("datum_depth", f"datum {c['datum_depth']:g} is outside the grid ({z0:g}-{z1:g})", f"EQLNUM {c['eqlnum']}")
-            if c["goc_depth"] is not None and c["goc_depth"] > z1:
-                iss.warn("contacts", "GOC is below the grid", f"EQLNUM {c['eqlnum']}")
-
-    # --- faults and aquifer connections inside the grid
+    # --- faults inside the grid
     for f in rows(con, "SELECT * FROM faults WHERE version_id=?", vid):
         if f["i2"] > nx or f["j2"] > ny or f["k2"] > nz:
             iss.error("fault_range", "fault segment outside the grid", f"fault {f['fault_name']}")
@@ -149,7 +74,4 @@ def validate(con, vid: int) -> list[dict]:
     for m in rows(con, "SELECT * FROM fault_multipliers WHERE version_id=?", vid):
         if m["fault_name"] not in names:
             iss.error("fault_name", f"MULTFLT for unknown fault {m['fault_name']}")
-    for a in rows(con, "SELECT * FROM aquifer_connections WHERE version_id=?", vid):
-        if a["i2"] > nx or a["j2"] > ny or a["k2"] > nz:
-            iss.error("aquifer_range", "aquifer connection outside the grid", f"aquifer {a['aquifer_id']}")
     return iss

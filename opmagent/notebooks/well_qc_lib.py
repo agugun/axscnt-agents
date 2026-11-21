@@ -80,8 +80,14 @@ def load_geo(con, gid: int) -> dict | None:
     nx, ny, nz = h["nx"], h["ny"], h["nz"]
     geo = {"version_id": gid, "model_name": h["model_name"], "version": h["version"], "nx": nx, "ny": ny, "nz": nz,
            "areal": spec.get("areal"), "layer_depths": None, "arrays": {}, "changed": [],
-           "contacts": _rows(con, "SELECT * FROM contacts WHERE version_id = ? ORDER BY eqlnum", gid),
-           "surfaces": None}
+           "contacts": [], "res": None, "surfaces": None}
+    # contacts belong to the res model on this grid: the approved one if there is one, else the latest
+    res = _rows(con, "SELECT r.id, r.version, r.status, m.name AS model_name FROM res_model_versions r "
+                     "JOIN res_models m ON m.id = r.res_model_id WHERE r.geo_version_id = ? "
+                     "ORDER BY (r.status = 'approved') DESC, r.id DESC LIMIT 1", gid)
+    if res:
+        geo["res"] = res[0]
+        geo["contacts"] = _rows(con, "SELECT * FROM contacts WHERE version_id = ? ORDER BY eqlnum", res[0]["id"])
     if h["grid_type"] == "cartesian" and h["dx"] and h["dy"] and h["dz"] and h["tops"] is not None:
         geo["areal"] = geo["areal"] or {"x0": 0.0, "y0": 0.0, "dx": h["dx"], "dy": h["dy"]}
         z = h["tops"] + h["dz"] * np.arange(nz + 1)
@@ -285,6 +291,9 @@ def completion_checks(data: dict) -> list[dict]:
                            f"{len(tight)} perforated cell(s) below: {sorted(set(tight['well_name']))}" if len(tight) else
                            f"lowest {p.loc[p['k'] > 0, 'PERMX'].min():.3g} mD"))
     c = g["contacts"][0] if g["contacts"] else {}
+    if not c:
+        out.append(finding(area, "Producers against the contacts", "n/a",
+                           "no res model on this geo version yet: contacts unknown"))
     wt = data["wells"].set_index("well_name")["well_type"]
     for key, label, typ in (("owc_depth", "below the OWC", "PRODUCER"), ("goc_depth", "above the GOC", "PRODUCER")):
         if c.get(key) is None:
@@ -292,9 +301,11 @@ def completion_checks(data: dict) -> list[dict]:
         pr = p[p["well_name"].map(wt) == typ]
         hit = pr[pr["tvd_base"] > c[key]] if key == "owc_depth" else pr[pr["tvd_top"] < c[key]]
         hit = hit[hit["k"] > 0]
+        src = f" (res {g['res']['model_name']} v{g['res']['version']}, {g['res']['status']})"
         out.append(finding(area, f"Producers not perforated {label}", "warn" if len(hit) else "pass",
-                           f"{sorted(set(hit['well_name']))} perforated {label} ({c[key]:g} m): early "
-                           f"{'water' if key == 'owc_depth' else 'gas'}" if len(hit) else f"{key.split('_')[0].upper()} {c[key]:g} m"))
+                           (f"{sorted(set(hit['well_name']))} perforated {label} ({c[key]:g} m): early "
+                            f"{'water' if key == 'owc_depth' else 'gas'}" if len(hit) else
+                            f"{key.split('_')[0].upper()} {c[key]:g} m") + src))
     return out
 
 

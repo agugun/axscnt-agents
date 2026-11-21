@@ -1,4 +1,4 @@
-"""Geo modeler: tops + LAS logs -> corner-point model -> review; then a full deck with all three modelers, run."""
+"""Geo modeler: tops + LAS logs -> corner-point model -> review; then res on that grid and a full deck, run."""
 import numpy as np
 import pandas as pd
 import pytest
@@ -62,6 +62,12 @@ def test_geo_to_running_deck(cfg, tmp_path):
     assert g["ok"] and g["status"] == "qc_ready", g
     assert g["grid"] == "10 x 10 x 5" and g["zones"][0]["hcpv_rm3"] > 0
     approve(cfg, "geo", g["version_id"])
+    from opmagent.res.pipeline import build_res_model
+    r = build_res_model(cfg, spec={"scal": {"swc": 0.2, "sorw": 0.2}, "contacts": SPEC["contacts"],
+                                   "regions": {"SATNUM": {"by": "zone", "values": {"TopRes": 1, "MidRes": 1}}}},
+                        name="FieldG_Res", geo_version_id=g["version_id"])
+    assert r["ok"] and r["status"] == "qc_ready", r
+    approve(cfg, "res", r["version_id"])
     pytest.importorskip("opm.simulators")
     f = hm.build_fluid(cfg, origin="built", name="FieldG_Oil")
     approve(cfg, "fluid", f["version_id"])
@@ -81,7 +87,7 @@ def test_geo_to_running_deck(cfg, tmp_path):
                          "FieldG_Wells", start_date="2026-01-01")
     assert w["ok"], w
     approve(cfg, "well", w["version_id"])
-    d = build_deck({"name": "FieldG", "fluid": "FieldG_Oil", "geo": "FieldG_Geo", "well": "FieldG_Wells",
+    d = build_deck({"name": "FieldG", "fluid": "FieldG_Oil", "geo": "FieldG_Geo", "res": "FieldG_Res", "well": "FieldG_Wells",
                     "start_date": "2026-01-01", "years": 2, "report": "quarterly"}, cfg)
     assert d["ok"], d["validation_log"]
     text = open(d["path"]).read()

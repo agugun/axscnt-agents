@@ -68,9 +68,11 @@ def test_load_converts_every_source_into_the_database(cfg, con):
 def test_missing_items_are_reported_not_invented(cfg, con):
     study(cfg, con, "S2", with_logs=False, with_spec=False)
     m = load(con, "S2", write=False)
-    assert not m["all_ready"] and m["ready"] == {"fluid": True, "geo": False, "well": True}
+    assert not m["all_ready"] and m["ready"] == {"fluid": True, "geo": False, "res": False, "well": True}
     geo = {i["item"]: i["severity"] for i in m["issues"] if i["modeler"] == "geo"}
     assert geo["logs"] == "required" and geo["grid spec"] == "required"
+    res = {i["item"]: i["severity"] for i in m["issues"] if i["modeler"] == "res"}
+    assert res["contacts"] == "required"          # contacts initialise the model: the res modeler's input
     assert con.execute("SELECT COUNT(*) FROM data_sources").fetchone()[0] == 0   # check only: rolled back
     assert not (cfg.studies_dir / "S2" / "data" / "tables").exists()              # and nothing filed
     assert "item(s) still needed" in m["spoken_summary"] and not m["loaded"]
@@ -138,7 +140,7 @@ def test_checks_combine_tables_and_files(cfg, con):
     m = load(con, "S5")
     msgs = {(i["modeler"], i["item"]): i["message"] for i in m["issues"]}
     assert "porosity covers" in msgs[("geo", "C")]
-    assert "below the OWC" in msgs[("geo", "D")]
+    assert "below the OWC" in msgs[("res", "D")]   # contacts vs SW logs: the res modeler's concern
     assert "outside its survey" in msgs[("well", "P1")] and not m["ready"]["well"]
     assert "injector but reports oil" in msgs[("well", "I1")]
     assert ("geo", "A") not in msgs and ("geo", "B") not in msgs

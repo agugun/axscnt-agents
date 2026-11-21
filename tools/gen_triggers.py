@@ -4,8 +4,10 @@ kinds = {
   "fluid": ("fluid_model_versions","fluid_model_id",
             ["fluid_version_sources","pvto","pvdo","pvdg","pvtg","pvtw","density","rsvd","pbvd"]),
   "geo":   ("geo_model_versions","geo_model_id",
-            ["geo_version_sources","geo_properties","faults","fault_multipliers","rock",
-             "swof","sgof","contacts","aquifers","aquifer_connections"]),
+            ["geo_version_sources","geo_properties","faults","fault_multipliers"]),
+  "res":   ("res_model_versions","res_model_id",
+            ["res_version_sources","res_properties","rock","swof","sgof","contacts","aquifers",
+             "aquifer_connections"]),
   "well":  ("well_model_versions","well_model_id",
             ["well_version_sources","well_groups","wells","well_trajectory","well_completions",
              "well_events","well_econ_limits","group_controls","vfp_tables"]),
@@ -82,6 +84,6 @@ CREATE INDEX idx_wcomp  ON well_completions(version_id, well_name, event_date);
 CREATE INDEX idx_wevent ON well_events(version_id, well_name, event_date);
 CREATE INDEX idx_gctrl  ON group_controls(version_id, group_name, event_date);
 CREATE INDEX idx_approvals ON approvals(model_kind, version_id);
-CREATE INDEX idx_decks_models ON decks(fluid_version_id, geo_version_id, well_version_id);
+CREATE INDEX idx_decks_models ON decks(fluid_version_id, geo_version_id, well_version_id, res_version_id);
 """)
 open(sys.argv[1],"a").write("\n".join(out))

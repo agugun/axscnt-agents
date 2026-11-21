@@ -33,7 +33,7 @@ TABLES = {"wells": "data_wells", "tops": "data_tops", "surveys": "data_surveys",
           "issues": "data_issues", "log_curves": "data_log_curves", "pvt_samples": "data_pvt_samples",
           "files": "data_files"}
 DATASETS = ["pvt", "tops", "logs", "geo_spec", "contacts", "wells", "surveys", "perforations", "controls", "history"]
-FOR = {"fluid": ["pvt"], "geo": ["tops", "logs", "geo_spec", "contacts", "surveys"],
+FOR = {"fluid": ["pvt"], "geo": ["tops", "logs", "geo_spec", "surveys"], "res": ["contacts", "geo_spec"],
        "well": ["wells", "surveys", "perforations", "controls", "history"]}
 
 
@@ -235,8 +235,22 @@ def logs(con, study, curves: dict | None = None) -> pd.DataFrame:
     return clean_logs([pick_curves(log_table(con, study, w), w, sv, cm) for w in log_wells(con, study)])
 
 
+def res_spec(con, study) -> dict | None:
+    """The res modeler's spec from the study data: contacts, and the SCAL, rock and region choices the engineer put in
+    the geo spec (geo.json 'scal', 'rock', 'regions'). None when no contacts are loaded."""
+    sid = study_id(con, study)
+    c = con.execute("SELECT datum_depth, datum_pressure, owc_depth, goc_depth FROM data_contacts WHERE study_id = ?",
+                    (sid,)).fetchone()
+    if not c:
+        return None
+    g = con.execute("SELECT spec_json FROM data_geo_spec WHERE study_id = ?", (sid,)).fetchone()
+    g = json.loads(g[0]) if g else {}
+    return {"contacts": {k: c[k] for k in c.keys() if c[k] is not None},
+            **{k: g[k] for k in ("scal", "rock", "regions") if k in g}}
+
+
 def geo_spec(con, study) -> dict | None:
-    """The grid spec with the contacts, as the geo modeler takes it."""
+    """The grid spec as the geo modeler takes it (with the contacts, used only for its volume summary)."""
     sid = study_id(con, study)
     r = con.execute("SELECT spec_json FROM data_geo_spec WHERE study_id = ?", (sid,)).fetchone()
     if not r:
@@ -319,10 +333,10 @@ def inventory(con, study) -> dict:
             ds[r["dataset"]]["sources"].append(f"{r['label']} ({r['rows']} rows)" if r["rows"] is not None
                                                else r["label"])
     iss = issues(con, sid)
-    rd = {m: ready(con, sid, m) for m in ("fluid", "geo", "well")}
+    rd = {m: ready(con, sid, m) for m in ("fluid", "geo", "res", "well")}
     todo = [f"{i['modeler']}: {i['message']}" for i in iss if i["severity"] in ("required", "decision")]
     say = ("Nothing is loaded yet." if not one("SELECT COUNT(*) FROM data_sources WHERE study_id = ?") else
-           "All three modelers have what they need." if all(rd.values()) else
+           "All four modelers have what they need." if all(rd.values()) else
            f"{len(todo)} item(s) still needed. First: {todo[0]}")
     return {"datasets": ds, "issues": iss, "ready": rd, "all_ready": all(rd.values()), "spoken_summary": say}
 

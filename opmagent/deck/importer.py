@@ -38,6 +38,7 @@ REGENERATED = {"RUNSPEC", "GRID", "EDIT", "PROPS", "REGIONS", "SOLUTION", "SUMMA
 # array keywords the importer rewrites from final field properties when they appear in passthrough form
 GRID_PROPS = ["PORO", "PERMX", "PERMY", "PERMZ", "NTG", "MULTX", "MULTY", "MULTZ", "MULTX-", "MULTY-", "MULTZ-", "MULTPV"]
 REGION_PROPS = ["SATNUM", "PVTNUM", "EQLNUM", "FIPNUM"]
+RES_PROPS = {"SATNUM", "EQLNUM", "FIPNUM", "ROCKNUM", "SWATINIT"}   # the res model's arrays; the rest are geo's
 UNSUPPORTED = {"TEMP", "THERMAL", "SOLVENT", "POLYMER", "FOAM", "BRINE", "COMPS", "CO2STORE", "H2STORE", "BIOFILM"}
 # end-point scaling arrays: a cell the deck never assigns takes its value from the saturation table, so it must stay
 # unset in the rebuilt deck (written as N*); OPM's field props fill such cells with placeholders
@@ -687,9 +688,11 @@ def import_deck(deck_path: str | Path, out_dir: str | Path) -> dict:
     return {
         "fluid": {"header": fluid_header, "tables": {"pvto": pvto, "pvdo": pvdo, "pvdg": pvdg, "pvtg": pvtg_raw,
                                                      "pvtw": pvtw, "density": density, "rsvd": rsvd, "pbvd": pbvd}},
-        "geo": {"header": geo_header, "props": props, "tables": {"faults": faults,
-                "fault_multipliers": [{"fault_name": k, "mult": v} for k, v in multflt.items()], "rock": rock,
-                "swof": swof, "sgof": sgof, "contacts": contacts}},
+        "geo": {"header": geo_header, "props": [p for p in props if p["keyword"] not in RES_PROPS],
+                "tables": {"faults": faults,
+                           "fault_multipliers": [{"fault_name": k, "mult": v} for k, v in multflt.items()]}},
+        "res": {"header": {"unit_system": unit}, "props": [p for p in props if p["keyword"] in RES_PROPS],
+                "tables": {"rock": rock, "swof": swof, "sgof": sgof, "contacts": contacts}},
         "well": {"header": {"unit_system": unit, "start_date": start.isoformat()},
                  "tables": {"well_groups": [g for g in groups.values() if g["group_name"] != "FIELD"],
                             "wells": list(wells.values()), "well_completions": comps, "well_events": events}},

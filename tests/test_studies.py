@@ -26,7 +26,7 @@ def test_init_creates_folder_tasks_and_spec(cfg, con):
     assert all((folder / sub).is_dir() for sub in studies.SUBFOLDERS)
     spec = json.loads((folder / "study.json").read_text())
     assert spec["years"] == 20 and spec["report"] == "quarterly" and spec["models"]["geo"] == "FieldA_WF_Geo"
-    assert by_task(st) == {"data": "ready", "fluid": "waiting", "geo": "waiting", "well": "waiting",
+    assert by_task(st) == {"data": "ready", "fluid": "waiting", "geo": "waiting", "res": "waiting", "well": "waiting",
                            "deck": "waiting", "run": "waiting", "view": "waiting"}
     assert st["next"] == [{"task": "data", "agent": "data-manager"}]
     with pytest.raises(ToolError, match="already exists"):

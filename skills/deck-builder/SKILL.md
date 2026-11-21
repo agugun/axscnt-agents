@@ -1,6 +1,6 @@
 ---
 name: deck-builder
-description: Build a validated OPM Flow deck from the user's simulation requirement and approved fluid, geo and well models. Use when asked to build, make or prepare a simulation deck.
+description: Build a validated OPM Flow deck from the user's simulation requirement and approved fluid, geo, res and well models. Use when asked to build, make or prepare a simulation deck.
 ---
 
 # Deck builder
@@ -21,11 +21,12 @@ spec plus approved models into an OPM deck. You never write deck keywords yourse
 2. **Write the spec** (JSON):
    ```json
    {"name": "FieldA_WF20", "requirement": "<the user's words>",
-    "fluid": "FieldA_Oil", "geo": "FieldA_Base", "well": "FieldA_Wells",
+    "fluid": "FieldA_Oil", "geo": "FieldA_Base", "res": "FieldA_Res", "well": "FieldA_Wells",
     "start_date": "2026-01-01", "years": 20, "report": "monthly",
     "summary": ["FOPR", "FWCT", "FGOR", "FPR", "WBHP"]}
    ```
-   `fluid`/`geo`/`well` take a model name (latest approved) or a version id. Use `end_date` instead of
+   `fluid`/`geo`/`res`/`well` take a model name (latest approved) or a version id; the res version must be defined on
+   the geo version. Use `end_date` instead of
    `years` when the user gives one. `report` is monthly, quarterly or yearly. Omit `summary` for the default set.
    Ask for anything you can't infer: the period, report frequency if it matters to them.
 3. **Build.** `opmagent deck build --spec spec.json`. It runs the cross-model checks (unit systems,
@@ -45,12 +46,12 @@ spec plus approved models into an OPM deck. You never write deck keywords yourse
 `init_study(name, requirement, years | end_date, start_date, report, summary)`. It creates the study folder
 (`inbox/`, `deck/`, `runs/`), `study.json` and the task chain; tell the engineer the inbox path.
 
-**Build the study's deck** when its deck task is ready (all three models done):
+**Build the study's deck** when its deck task is ready (all four models done):
 1. `study_status(name)`, then `start_task(name)`.
 2. `opmagent study build deck <name>`: uses exactly the model versions the modelers completed, and the study's
    period, report frequency and summary vectors (written to `<study>/deck/deck_spec.json`).
 3. `ok: true` -> `complete_task(name, {"deck_id": <id>})`. A cross-check failure names the model to fix:
-   `raise_request(name, "<fluid|geo|well>", "improve_data", "<the problem>")`.
+   `raise_request(name, "<fluid|geo|res|well>", "improve_data", "<the problem>")`.
 
 For a study whose data came from a deck (the data manager's reverse process), `opmagent study build deck <name>`
 uses the source deck's own dates, report steps, schedule and verbatim keywords rather than the study's period,

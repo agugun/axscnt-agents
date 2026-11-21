@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "opmagent"
-version = "0.2.0"
-description = "Agent system for OPM Flow reservoir simulation: fluid, geo and well modelers, deck builder, run agent, deck importer"
+version = "0.3.0"
+description = "Agent system for OPM Flow reservoir simulation: fluid, geo, res and well modelers, deck builder, run agent, deck importer"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

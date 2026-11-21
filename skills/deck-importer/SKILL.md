@@ -1,6 +1,6 @@
 ---
 name: deck-importer
-description: Import (reverse-engineer) an existing OPM/Eclipse deck into fluid, geo and well models for review, then prove the split is faithful by rebuilding the deck and comparing results. Use when asked to import, reverse or read an existing simulation deck.
+description: Import (reverse-engineer) an existing OPM/Eclipse deck into fluid, geo, res and well models for review, then prove the split is faithful by rebuilding the deck and comparing results. Use when asked to import, reverse or read an existing simulation deck.
 ---
 
 # Deck importer
@@ -15,7 +15,7 @@ description: Import (reverse-engineer) an existing OPM/Eclipse deck into fluid, 
    - validator findings per model. Imported data is stored as it ran in OPM; findings go to the reviewer,
      they don't block. Explain them plainly (e.g. "several wells switch from producer to injector").
    - `IMPORT_UNSUPPORTED` → explain the feature (e.g. thermal, compositional) and stop.
-4. Tell the user the three models (`<Name>_FLUID`, `<Name>_GEO`, `<Name>_WELL`) are waiting for review,
+4. Tell the user the four models (`<Name>_FLUID`, `<Name>_GEO`, `<Name>_RES`, `<Name>_WELL`) are waiting for review,
    with the coverage report path. You cannot approve them.
 
 ## Verify (after approval)

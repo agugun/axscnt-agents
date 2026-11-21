@@ -13,11 +13,12 @@ def con(tmp_path):
     c = db.connect(path)
     c.execute("insert into files(path,sha256,kind) values('qc1','a','qc_report')")
     c.execute("insert into files(path,sha256,kind) values('qc2','b','qc_report')")
-    for k in ("fluid", "geo", "well"):
+    for k in ("fluid", "geo", "res", "well"):
         c.execute(f"insert into {k}_models(name) values('{k}A')")
     c.execute("insert into fluid_model_versions(fluid_model_id,unit_system,phases) values(1,'METRIC','OIL,WATER,GAS')")
     c.execute("insert into geo_model_versions(geo_model_id,unit_system,grid_type,nx,ny,nz,dx,dy,dz,tops) values(1,'METRIC','cartesian',10,10,3,100,100,10,2000)")
     c.execute("insert into well_model_versions(well_model_id,unit_system,geo_version_id) values(1,'METRIC',1)")
+    c.execute("insert into res_model_versions(res_model_id,unit_system,geo_version_id) values(1,'METRIC',1)")
     return c
 
 
@@ -84,11 +85,11 @@ def test_approved_is_immutable_and_log_append_only(con):
 
 
 def _approve_all(con):
-    for k in ("fluid", "geo", "well"):
+    for k in ("fluid", "geo", "res", "well"):
         submit(con, k); approve(con, k)
 
 
-DECK = "insert into decks(name,requirement_text,spec_json,fluid_version_id,geo_version_id,well_version_id{extra}) values('d','r','{{}}',1,1,1{val})"
+DECK = "insert into decks(name,requirement_text,spec_json,fluid_version_id,geo_version_id,well_version_id,res_version_id{extra}) values('d','r','{{}}',1,1,1,1{val})"
 
 
 def test_deck_requires_approved(con):
@@ -101,6 +102,25 @@ def test_deck_requires_approved(con):
 def test_demo_isolation(con):
     _approve_all(con)
     blocked(con, DECK.format(extra=",origin", val=",'demo'"), "demo and non-demo")
+
+
+def test_res_on_its_geo_only(con):
+    _approve_all(con)
+    con.execute("insert into geo_model_versions(geo_model_id,unit_system,grid_type,nx,ny,nz,dx,dy,dz,tops) values(1,'METRIC','cartesian',10,10,3,100,100,10,2000)")
+    submit(con, "geo", vid=2)
+    approve(con, "geo", vid=2)
+    blocked(con, "insert into decks(name,requirement_text,spec_json,fluid_version_id,geo_version_id,well_version_id,"
+                 "res_version_id) values('d','r','{}',1,2,1,1)", "res model is defined on a different geo")
+    blocked(con, "insert into swof(version_id,satnum,sw,krw,krow) values(1,1,0.2,0,1)", "frozen")   # res approved
+
+
+def test_old_database_is_refused(tmp_path):
+    path = tmp_path / "old.db"
+    c = sqlite3.connect(path)
+    c.execute("create table decks(id integer)")
+    c.close()
+    with pytest.raises(db.OldSchemaError, match="before 0.3"):
+        db.connect(path)
 
 
 def test_revise_path(con):

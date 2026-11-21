@@ -1,7 +1,7 @@
 """`opmagent hello`: end-to-end smoke test with demo data.
 
 Idempotent stages, each run continues where the last one stopped:
-  1. build HELLO_FLUID / HELLO_GEO / HELLO_WELLS (demo) and submit them for review
+  1. build HELLO_FLUID / HELLO_GEO / HELLO_RES / HELLO_WELLS (demo) and submit them for review
   2. wait for a human: `opmagent review approve-hello`
   3. build the HELLO deck from the approved demo models, parse it with OPM
   4. run it and report field oil rate and pressure
@@ -14,7 +14,7 @@ from ..servers.data_server import DataService
 from ..sim.runner import run_deck, summary_values
 from . import models as hm
 
-KINDS = (("fluid", hm.FLUID), ("geo", hm.GEO), ("well", hm.WELLS))
+KINDS = (("fluid", hm.FLUID), ("geo", hm.GEO), ("res", hm.RES), ("well", hm.WELLS))
 
 
 def latest_demo(con) -> dict:
@@ -29,7 +29,7 @@ def clean(cfg) -> dict:
     """Delete demo versions still in draft or under review. Approved demo versions stay (never deleted)."""
     con = DataService("reviewer", cfg).con
     removed = []
-    for kind, name in sorted(KINDS, key=lambda k: ("well", "fluid", "geo").index(k[0])):  # wells reference geo
+    for kind, name in sorted(KINDS, key=lambda k: ("well", "res", "fluid", "geo").index(k[0])):  # well, res reference geo
         vt = f"{kind}_model_versions"
         for m in list_models(con, kind):
             if m["model_name"] == name and m["origin"] == "demo" and m["status"] in ("draft", "qc_ready"):
@@ -65,6 +65,13 @@ def hello(cfg, *, log=print) -> dict:
         else:
             stage("geo model", True, f"{hm.GEO} v{cur['geo']['version']} ({cur['geo']['status']})")
         cur = latest_demo(con)
+        if geo_rebuilt or not usable(cur["res"]):
+            r = hm.build_res(cfg, cur["geo"]["version_id"])
+            if not r["ok"]:
+                raise RuntimeError(r["spoken_summary"])
+            stage("res model", True, f"{hm.RES} v{r['version']}")
+        else:
+            stage("res model", True, f"{hm.RES} v{cur['res']['version']} ({cur['res']['status']})")
         if geo_rebuilt or not usable(cur["well"]):
             r = hm.build_wells(cfg, cur["geo"]["version_id"])
             stage("well model", True, f"{hm.WELLS} v{r['version']}")
@@ -79,14 +86,14 @@ def hello(cfg, *, log=print) -> dict:
     if waiting:
         stage("your approval", None, "waiting for " + ", ".join(waiting))
         return {"ok": True, "stage": "waiting_for_approval", "stages": stages,
-                "spoken_summary": "The three hello models are waiting for your review. Say approve hello, "
+                "spoken_summary": "The four hello models are waiting for your review. Say approve hello, "
                                   "or run: opmagent review approve-hello. Then run hello again."}
-    stage("your approval", True, "all three demo models approved")
+    stage("your approval", True, "all four demo models approved")
 
     try:
         d = build_deck({"name": "HELLO", "requirement": "hello demo: 5-year waterflood prediction",
                         "fluid": cur["fluid"]["version_id"], "geo": cur["geo"]["version_id"],
-                        "well": cur["well"]["version_id"], "years": 5, "report": "monthly"}, cfg, origin="demo")
+                        "res": cur["res"]["version_id"], "well": cur["well"]["version_id"], "years": 5, "report": "monthly"}, cfg, origin="demo")
     except Exception as e:  # noqa: BLE001
         stage("deck build", False, str(e))
         return {"ok": False, "stages": stages, "spoken_summary": f"Hello failed building the deck: {e}"}

@@ -173,9 +173,8 @@ CREATE TABLE pbvd (
 );
 
 -- =====================================================================
--- GEO MODELS (Geo modeler)
--- Grid, properties, regions, faults, aquifers, rock compressibility,
--- saturation functions and initial contacts.
+-- GEO MODELS (Geo modeler): the static model
+-- Grid, cell properties, PVTNUM, faults and fault multipliers.
 -- =====================================================================
 CREATE TABLE geo_models (
     id          INTEGER PRIMARY KEY,
@@ -226,9 +225,9 @@ CREATE TABLE geo_properties (
     version_id  INTEGER NOT NULL REFERENCES geo_model_versions(id) ON DELETE CASCADE,
     keyword     TEXT NOT NULL CHECK (keyword IN
                   ('DX','DY','DZ','TOPS',
-                   'PORO','PERMX','PERMY','PERMZ','NTG','ACTNUM','SWATINIT',
+                   'PORO','PERMX','PERMY','PERMZ','NTG','ACTNUM',
                    'MULTX','MULTY','MULTZ','MULTX-','MULTY-','MULTZ-','MULTPV',
-                   'SATNUM','PVTNUM','EQLNUM','FIPNUM','ROCKNUM')),
+                   'PVTNUM')),
     const_value REAL,
     file_id     INTEGER REFERENCES files(id),
     min_value REAL, max_value REAL, mean_value REAL,
@@ -256,9 +255,60 @@ CREATE TABLE fault_multipliers (
     PRIMARY KEY (version_id, fault_name)
 );
 
+-- =====================================================================
+-- RES MODELS (Res modeler / reservoir engineer): the dynamic model on a geo grid
+-- Saturation functions, rock compressibility, initialisation (contacts, EQUIL),
+-- region arrays and SWATINIT, analytical aquifers.
+-- =====================================================================
+CREATE TABLE res_models (
+    id          INTEGER PRIMARY KEY,
+    name        TEXT NOT NULL UNIQUE,
+    description TEXT,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE res_model_versions (
+    id                INTEGER PRIMARY KEY,
+    res_model_id      INTEGER NOT NULL REFERENCES res_models(id),
+    version           INTEGER NOT NULL DEFAULT 0,
+    status            TEXT NOT NULL DEFAULT 'draft'
+                        CHECK (status IN ('draft','qc_ready','approved','rejected')),
+    unit_system       TEXT NOT NULL CHECK (unit_system IN ('METRIC','FIELD')),
+    geo_version_id    INTEGER NOT NULL REFERENCES geo_model_versions(id),   -- the grid it is defined on
+    user_description  TEXT,
+    spec_json         TEXT,
+    assumptions_json  TEXT,
+    qc_json           TEXT,
+    qc_report_file_id INTEGER REFERENCES files(id),
+    origin            TEXT NOT NULL DEFAULT 'built' CHECK (origin IN ('built','imported','demo')),
+    source_deck_file_id INTEGER REFERENCES files(id),   -- set when origin = 'imported'
+    created_by        TEXT NOT NULL DEFAULT 'res_modeler',
+    created_at        TEXT NOT NULL DEFAULT (datetime('now')),
+    qc_ready_at       TEXT,
+    decided_at        TEXT,
+    UNIQUE (res_model_id, version)
+);
+
+CREATE TABLE res_version_sources (
+    version_id INTEGER NOT NULL REFERENCES res_model_versions(id) ON DELETE CASCADE,
+    file_id    INTEGER NOT NULL REFERENCES files(id),
+    PRIMARY KEY (version_id, file_id)
+);
+
+-- Region arrays and SWATINIT on the geo grid: constant value OR array file
+CREATE TABLE res_properties (
+    version_id  INTEGER NOT NULL REFERENCES res_model_versions(id) ON DELETE CASCADE,
+    keyword     TEXT NOT NULL CHECK (keyword IN ('SATNUM','EQLNUM','FIPNUM','ROCKNUM','SWATINIT')),
+    const_value REAL,
+    file_id     INTEGER REFERENCES files(id),
+    min_value REAL, max_value REAL, mean_value REAL,
+    PRIMARY KEY (version_id, keyword),
+    CHECK ((const_value IS NULL) <> (file_id IS NULL))
+);
+
 -- ROCK: compressibility per region
 CREATE TABLE rock (
-    version_id INTEGER NOT NULL REFERENCES geo_model_versions(id) ON DELETE CASCADE,
+    version_id INTEGER NOT NULL REFERENCES res_model_versions(id) ON DELETE CASCADE,
     region     INTEGER NOT NULL DEFAULT 1 CHECK (region >= 1),
     p_ref      REAL NOT NULL CHECK (p_ref > 0),
     cr         REAL NOT NULL CHECK (cr >= 0),
@@ -267,7 +317,7 @@ CREATE TABLE rock (
 
 -- SWOF
 CREATE TABLE swof (
-    version_id INTEGER NOT NULL REFERENCES geo_model_versions(id) ON DELETE CASCADE,
+    version_id INTEGER NOT NULL REFERENCES res_model_versions(id) ON DELETE CASCADE,
     satnum     INTEGER NOT NULL DEFAULT 1 CHECK (satnum >= 1),
     sw         REAL NOT NULL CHECK (sw BETWEEN 0 AND 1),
     krw        REAL NOT NULL CHECK (krw BETWEEN 0 AND 1),
@@ -278,7 +328,7 @@ CREATE TABLE swof (
 
 -- SGOF
 CREATE TABLE sgof (
-    version_id INTEGER NOT NULL REFERENCES geo_model_versions(id) ON DELETE CASCADE,
+    version_id INTEGER NOT NULL REFERENCES res_model_versions(id) ON DELETE CASCADE,
     satnum     INTEGER NOT NULL DEFAULT 1 CHECK (satnum >= 1),
     sg         REAL NOT NULL CHECK (sg BETWEEN 0 AND 1),
     krg        REAL NOT NULL CHECK (krg BETWEEN 0 AND 1),
@@ -289,7 +339,7 @@ CREATE TABLE sgof (
 
 -- Initial contacts per equilibration region (feeds EQUIL)
 CREATE TABLE contacts (
-    version_id     INTEGER NOT NULL REFERENCES geo_model_versions(id) ON DELETE CASCADE,
+    version_id     INTEGER NOT NULL REFERENCES res_model_versions(id) ON DELETE CASCADE,
     eqlnum         INTEGER NOT NULL DEFAULT 1 CHECK (eqlnum >= 1),
     datum_depth    REAL NOT NULL,
     datum_pressure REAL NOT NULL CHECK (datum_pressure > 0),
@@ -303,7 +353,7 @@ CREATE TABLE contacts (
 
 -- Analytical aquifers: Fetkovich (AQUFETP) or Carter-Tracy (AQUCT)
 CREATE TABLE aquifers (
-    version_id      INTEGER NOT NULL REFERENCES geo_model_versions(id) ON DELETE CASCADE,
+    version_id      INTEGER NOT NULL REFERENCES res_model_versions(id) ON DELETE CASCADE,
     aquifer_id      INTEGER NOT NULL CHECK (aquifer_id >= 1),
     aq_type         TEXT NOT NULL CHECK (aq_type IN ('FETKOVICH','CARTER_TRACY')),
     datum_depth     REAL NOT NULL,
@@ -507,7 +557,7 @@ CREATE TABLE vfp_tables (
 -- =====================================================================
 CREATE TABLE approvals (
     id          INTEGER PRIMARY KEY,
-    model_kind  TEXT NOT NULL CHECK (model_kind IN ('fluid','geo','well')),
+    model_kind  TEXT NOT NULL CHECK (model_kind IN ('fluid','geo','res','well')),
     version_id  INTEGER NOT NULL,
     decision    TEXT NOT NULL CHECK (decision IN ('approved','rejected')),
     reviewer    TEXT NOT NULL CHECK (length(trim(reviewer)) > 0),
@@ -528,6 +578,7 @@ CREATE TABLE decks (
     fluid_version_id INTEGER NOT NULL REFERENCES fluid_model_versions(id),
     geo_version_id   INTEGER NOT NULL REFERENCES geo_model_versions(id),
     well_version_id  INTEGER NOT NULL REFERENCES well_model_versions(id),
+    res_version_id   INTEGER NOT NULL REFERENCES res_model_versions(id),
     deck_file_id     INTEGER REFERENCES files(id),
     status           TEXT NOT NULL DEFAULT 'draft'
                        CHECK (status IN ('draft','validated','failed','ready')),
@@ -603,6 +654,7 @@ BEGIN
               WHEN 'fluid' THEN (SELECT status FROM fluid_model_versions WHERE id = NEW.version_id)
               WHEN 'geo'   THEN (SELECT status FROM geo_model_versions   WHERE id = NEW.version_id)
               WHEN 'well'  THEN (SELECT status FROM well_model_versions  WHERE id = NEW.version_id)
+              WHEN 'res'   THEN (SELECT status FROM res_model_versions   WHERE id = NEW.version_id)
             END) IS NOT 'qc_ready';
     SELECT RAISE(ABORT, 'reviewed QC report does not match the version''s current report')
      WHERE NEW.qc_report_file_id IS NOT
@@ -610,6 +662,7 @@ BEGIN
               WHEN 'fluid' THEN (SELECT qc_report_file_id FROM fluid_model_versions WHERE id = NEW.version_id)
               WHEN 'geo'   THEN (SELECT qc_report_file_id FROM geo_model_versions   WHERE id = NEW.version_id)
               WHEN 'well'  THEN (SELECT qc_report_file_id FROM well_model_versions  WHERE id = NEW.version_id)
+              WHEN 'res'   THEN (SELECT qc_report_file_id FROM res_model_versions   WHERE id = NEW.version_id)
             END);
 END;
 
@@ -622,6 +675,8 @@ BEGIN
      WHERE NEW.model_kind = 'geo'   AND id = NEW.version_id;
     UPDATE well_model_versions  SET status = NEW.decision, decided_at = NEW.decided_at
      WHERE NEW.model_kind = 'well'  AND id = NEW.version_id;
+    UPDATE res_model_versions   SET status = NEW.decision, decided_at = NEW.decided_at
+     WHERE NEW.model_kind = 'res'   AND id = NEW.version_id;
 END;
 
 CREATE TRIGGER approvals_no_update BEFORE UPDATE ON approvals
@@ -639,23 +694,31 @@ BEGIN
      WHERE (SELECT status FROM geo_model_versions   WHERE id = NEW.geo_version_id)   IS NOT 'approved';
     SELECT RAISE(ABORT, 'well model version is not approved')
      WHERE (SELECT status FROM well_model_versions  WHERE id = NEW.well_version_id)  IS NOT 'approved';
+    SELECT RAISE(ABORT, 'res model version is not approved')
+     WHERE (SELECT status FROM res_model_versions   WHERE id = NEW.res_version_id)   IS NOT 'approved';
     SELECT RAISE(ABORT, 'demo and non-demo data cannot be mixed in a deck')
      WHERE ((SELECT origin FROM fluid_model_versions WHERE id = NEW.fluid_version_id) = 'demo') <> (NEW.origin = 'demo')
         OR ((SELECT origin FROM geo_model_versions   WHERE id = NEW.geo_version_id)   = 'demo') <> (NEW.origin = 'demo')
-        OR ((SELECT origin FROM well_model_versions  WHERE id = NEW.well_version_id)  = 'demo') <> (NEW.origin = 'demo');
+        OR ((SELECT origin FROM well_model_versions  WHERE id = NEW.well_version_id)  = 'demo') <> (NEW.origin = 'demo')
+        OR ((SELECT origin FROM res_model_versions   WHERE id = NEW.res_version_id)   = 'demo') <> (NEW.origin = 'demo');
     SELECT RAISE(ABORT, 'fluid and geo unit systems differ')
      WHERE (SELECT unit_system FROM fluid_model_versions WHERE id = NEW.fluid_version_id)
         <> (SELECT unit_system FROM geo_model_versions   WHERE id = NEW.geo_version_id);
     SELECT RAISE(ABORT, 'well and geo unit systems differ')
      WHERE (SELECT unit_system FROM well_model_versions WHERE id = NEW.well_version_id)
         <> (SELECT unit_system FROM geo_model_versions  WHERE id = NEW.geo_version_id);
+    SELECT RAISE(ABORT, 'res and geo unit systems differ')
+     WHERE (SELECT unit_system FROM res_model_versions WHERE id = NEW.res_version_id)
+        <> (SELECT unit_system FROM geo_model_versions WHERE id = NEW.geo_version_id);
+    SELECT RAISE(ABORT, 'res model is defined on a different geo model version')
+     WHERE (SELECT geo_version_id FROM res_model_versions WHERE id = NEW.res_version_id) <> NEW.geo_version_id;
     SELECT RAISE(ABORT, 'well model was built against a different geo model version')
      WHERE (SELECT geo_version_id FROM well_model_versions WHERE id = NEW.well_version_id) IS NOT NULL
        AND (SELECT geo_version_id FROM well_model_versions WHERE id = NEW.well_version_id) <> NEW.geo_version_id;
 END;
 
 CREATE TRIGGER decks_models_frozen
-BEFORE UPDATE OF fluid_version_id, geo_version_id, well_version_id ON decks
+BEFORE UPDATE OF fluid_version_id, geo_version_id, well_version_id, res_version_id ON decks
 BEGIN SELECT RAISE(ABORT, 'a deck''s model versions cannot be changed; create a new deck'); END;
 
 -- ---- IJK completions need a geo version

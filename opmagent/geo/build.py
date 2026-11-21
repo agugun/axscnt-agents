@@ -3,7 +3,8 @@
 Inputs
   tops     CSV: well_name, surface, x, y, tvd         (one row per well and surface)
   logs     LAS files (DEPT = TVD, or MD with a survey) or CSV: well_name, tvd, phi[, perm][, vsh]
-  spec     dict (JSON): surfaces (ordered, top to base), layers per zone, areal grid, contacts, SCAL, rock.
+  spec     dict (JSON): surfaces (ordered, top to base), layers per zone, areal grid; contacts (optional) only for
+           the HCPV in the volume summary. SCAL, rock and contacts as model data belong to the res model.
 
 Method
   1. each surface: ordinary kriging of the well tops onto the grid nodes (IDW below 3 wells); surfaces
@@ -11,7 +12,6 @@ Method
   2. layers split each zone proportionally; vertical pillars -> COORD/ZCORN;
   3. logs upscaled per well per layer (porosity arithmetic, permeability geometric, NTG from Vsh cutoff),
      then kriged per layer across the grid; permeability from a poro-perm transform when not logged;
-  4. Corey relative permeability (or a SCAL table), ROCK, contacts from the spec.
 """
 from __future__ import annotations
 
@@ -243,11 +243,3 @@ def build_grid(tops: pd.DataFrame, logs: pd.DataFrame, spec: dict, out_dir: Path
             "areal": {"x0": x0, "y0": y0, "dx": dx, "dy": dy}, "files": files, "zones": zones,
             "upscaled": upscaled, "arrays": {"phi": phi, "perm": perm, "ntg": ntg}, "top": float(ln.min()),
             "base": float(ln.max())}
-
-
-def corey(spec: dict) -> tuple[list[dict], list[dict]]:
-    c = spec.get("scal", {})
-    swc, sorw, sorg, sgc = c.get("swc", 0.2), c.get("sorw", 0.2), c.get("sorg", 0.1), c.get("sgc", 0.05)
-    from ..hello.models import corey_sgof, corey_swof
-    return (corey_swof(swc, sorw, c.get("nw", 2.0), c.get("now", 2.0), c.get("krw_max", 0.4)),
-            corey_sgof(swc, sgc, sorg, c.get("ng", 2.0), c.get("nog", 2.0), c.get("krg_max", 0.8)))

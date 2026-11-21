@@ -19,6 +19,7 @@ from pathlib import Path
 AGENTS = {
     "fluid-modeler": ("fluid", ["opm-pvt"], "Builds black-oil fluid models from Excel PVT lab reports (NeqSim) and submits them for review."),
     "geo-modeler": ("geo", [], "Builds corner-point geo models from tops, LAS logs and a spec, and submits them for review."),
+    "res-modeler": ("res", [], "Builds reservoir-engineering models on a geo grid (SCAL, rock compressibility, contacts and initial pressure, region arrays) and submits them for review."),
     "well-modeler": ("well", [], "Builds well models (wells, surveys, perforations, history, controls) and submits them for review."),
     "deck-importer": ("import", ["opm-sim"], "Imports existing OPM/Eclipse decks into models for review and verifies the round trip."),
     "deck-builder": ("deck", [], "Builds validated OPM decks from a simulation requirement and approved models."),
@@ -35,7 +36,7 @@ talk to each other directly. Each agent uses only its own data-server profile.
 
 ## Studies
 Work for one simulation question is a **study** (`opmagent study status <name>`): a folder with an inbox and
-a task chain data -> fluid, geo, well -> deck -> run -> view on a shared board. Each agent starts and completes
+a task chain data -> fluid, geo -> res, well -> deck -> run -> view on a shared board. Each agent starts and completes
 only its own task (`start_task`, `complete_task`), and asks another task for missing or poor data with
 `raise_request` (to `data`, the data manager), which blocks it until the request is resolved. In your own
 session, the `study` skill coordinates: it hands each agent its ready task. Outside a study, work as before.
