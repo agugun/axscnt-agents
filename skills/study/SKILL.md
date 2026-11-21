@@ -68,3 +68,9 @@ A's input (`load_study_input`)". The rest is as above. This is scenario 2 of `te
    agent reported (field oil rate, water cut, pressure) and where the files are.
 
 Keep each message to the engineer short: what just finished, what is next, and anything you need from them.
+
+## When an agent doesn't respond or can't use its tools
+Follow the `opm-doctor` skill (it runs `opmagent doctor`): it says per agent whether it is installed, its skill is
+current, its MCP servers are approved and start, what it last did and what is waiting for it. Tell the engineer what
+it reports; fixes such as `opmagent setup` again, approving a server or restarting Claude Code are theirs to do.
+

@@ -27,6 +27,13 @@ No approvals are carried over. Design: [docs/design/res-model.md](docs/design/re
 - **Reverse process and importer** produce four models; the deck comparison compares the res tables too. SPE1,
   SPE9 and Norne (reverse study and importer round trip) pass unchanged. `hello` builds four demo models.
 - The well QC notebook takes the contacts from the res model on its geo version.
+- **`opmagent doctor` shows each agent's condition** (`opmagent/doctor.py`): installed, skill current, its MCP
+  servers in `.mcp.json` and approved by Claude Code (`--deep`: started over stdio, tools listed), its profile,
+  last activity and failed writes (`audit_log`), and its work (study tasks, open requests, models waiting for
+  review, runs, runs whose process is gone). Fails if the reviewer server is in the agents' workspace.
+  `-v`, `--json`, `--workspace`. The `opm-doctor` skill runs it from Claude Code (`/opm-doctor`, or "how are the
+  agents?") and reports what needs attention with the fix.
+- Runs always use the release Flow: a `flow_bin` pointing at the Debug build (`opm_debug_flow`) is refused.
 
 ## 0.2.0 (unreleased)
 
