@@ -4,7 +4,10 @@ ResInsight reads Flow's output directly: the grid (.EGRID), static properties (.
 (.UNRST) and summary vectors (.SMSPEC/.UNSMRY) next to it. Set the launcher in opmagent.toml:
 
     [viewer]
-    resinsight_bin = "~/opm-agents/ResInsight/bin/resinsight"
+    resinsight_bin = "/opt/ResInsight/bin/resinsight"
+
+Without it, ResInsight is looked for on PATH (`resinsight`, `ResInsight`) and then in /opt/ResInsight and
+~/.local/opt/ResInsight, so an install there (or a link in /usr/local/bin) needs no setting.
 
 The prebuilt Linux ResInsight bundles Qt with the X11 platform plugin only, so on a Wayland desktop it runs
 through XWayland: QT_QPA_PLATFORM=xcb is set unless you set it yourself.
@@ -74,9 +77,22 @@ def find_case(cfg, run_id: int | None = None, study: str | None = None, case: st
     return _egrid(Path(r["out_dir"])), f"run {run_id} of deck {r['name']}"
 
 
+STANDARD_PLACES = (Path("/opt/ResInsight/bin/resinsight"), Path.home() / ".local/opt/ResInsight/bin/resinsight")
+
+
+def find_resinsight(configured: str | None = None) -> str | None:
+    """The ResInsight launcher: the configured path, else on PATH, else the standard install places."""
+    if configured:
+        p = Path(configured).expanduser()
+        return str(p) if p.exists() else None
+    for name in ("resinsight", "ResInsight"):
+        if shutil.which(name):
+            return shutil.which(name)
+    return next((str(p) for p in STANDARD_PLACES if p.exists()), None)
+
+
 def resinsight_bin(cfg) -> str | None:
-    cand = cfg.resinsight_bin or shutil.which("ResInsight") or shutil.which("resinsight")
-    return cand if cand and Path(cand).exists() else None
+    return find_resinsight(cfg.resinsight_bin)
 
 
 def open_in_resinsight(cfg, *, run_id: int | None = None, study: str | None = None, case: str | None = None,
@@ -87,7 +103,10 @@ def open_in_resinsight(cfg, *, run_id: int | None = None, study: str | None = No
         return {"ok": False, "spoken_summary": f"Nothing to open: {where}."}
     exe = resinsight_bin(cfg)
     if not exe:
-        return {"ok": False, "spoken_summary": "ResInsight not found: set [viewer] resinsight_bin in opmagent.toml."}
+        where = (f"[viewer] resinsight_bin = {cfg.resinsight_bin} doesn't exist" if cfg.resinsight_bin else
+                 "not on PATH, not in /opt/ResInsight or ~/.local/opt/ResInsight")
+        return {"ok": False, "spoken_summary": f"ResInsight not found ({where}): install it in /opt/ResInsight, or set "
+                                               "[viewer] resinsight_bin in opmagent.toml."}
     cmd = [exe, "--case", str(egrid)]
     env = dict(os.environ)
     if not env.get("DISPLAY") and not env.get("WAYLAND_DISPLAY"):

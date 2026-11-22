@@ -40,4 +40,4 @@ timeout_s = 600
 
 [viewer]
 # ResInsight launcher, for the results viewer (opmagent results open)
-# resinsight_bin = "~/opm-agents/ResInsight/bin/resinsight"
+# resinsight_bin = "/opt/ResInsight/bin/resinsight"   # only if ResInsight isn't on PATH or in /opt/ResInsight

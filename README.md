@@ -135,8 +135,18 @@ ResInsight and gives SPE9's and Norne's own INIT.
 validator, recorded in `approvals` as `auto (approval disabled)`; models with validator errors still stop.
 With `false` (the default) you approve each model as before, and the study waits for it.
 
-**ResInsight.** Set `[viewer] resinsight_bin` to the ResInsight launcher (`bin/resinsight` of the Linux
-release). On a Wayland desktop the viewer runs it with `QT_QPA_PLATFORM=xcb` (the bundled Qt has only the X11
+**ResInsight.** Install the Linux release in `/opt/ResInsight`, outside any workspace; opmagent then finds it
+without a setting (`opmagent doctor` shows where). To start it as `resinsight` from anywhere, add a small wrapper:
+the release's launcher finds its files from its own folder, so a symlink to it would not work.
+
+```bash
+sudo tar -xzf ResInsight-<version>_Ubuntu_<release>.tar.gz -C /opt && sudo mv /opt/ResInsight-* /opt/ResInsight
+printf '#!/bin/sh\nexec /opt/ResInsight/bin/resinsight "$@"\n' | sudo tee /usr/local/bin/resinsight >/dev/null
+sudo chmod 755 /usr/local/bin/resinsight
+```
+
+Elsewhere, set `[viewer] resinsight_bin` to the launcher (`bin/resinsight` of the release); without `sudo`,
+`~/.local/opt/ResInsight` is looked at too. On a Wayland desktop the viewer runs it with `QT_QPA_PLATFORM=xcb` (the bundled Qt has only the X11
 plugin).
 
 ## Fluid modeler

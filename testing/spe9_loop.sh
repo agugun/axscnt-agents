@@ -7,7 +7,7 @@
 #
 # Usage: testing/spe9_loop.sh [path/to/SPE9.DATA]
 #   WS=<dir>       workspace to create (default: a new temporary folder); must not exist yet
-#   RESINSIGHT=<path>  the ResInsight launcher (default: ~/opm-agents/ResInsight/bin/resinsight if it exists)
+#   RESINSIGHT=<path>  the ResInsight launcher (default: found on PATH or in /opt/ResInsight)
 #   NO_VIEWER=1    don't start ResInsight or the browser (print what would open)
 set -euo pipefail
 
@@ -29,8 +29,8 @@ step "Workspace: $WS"
 opmagent setup "$WS" >/dev/null
 # no human reviewer in an automated run: models that pass their validator are approved (recorded as such)
 sed -i 's/^auto_approve = false/auto_approve = true/' "$WS/opmagent.toml"
-RESINSIGHT="${RESINSIGHT:-$HOME/opm-agents/ResInsight/bin/resinsight}"
-if [ -x "$RESINSIGHT" ]; then
+RESINSIGHT="${RESINSIGHT:-}"        # empty: opmagent finds it on PATH or in /opt/ResInsight
+if [ -n "$RESINSIGHT" ] && [ -x "$RESINSIGHT" ]; then
   sed -i "s|^# resinsight_bin = .*|resinsight_bin = \"$RESINSIGHT\"|" "$WS/opmagent.toml"
 fi
 export OPMAGENT_CONFIG="$WS/opmagent.toml"

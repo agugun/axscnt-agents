@@ -51,6 +51,10 @@ No approvals are carried over. Design: [docs/design/res-model.md](docs/design/re
   (deck, run, view, reviewer); `study view` lists it. Testing scenario `testing/init-view.md` (+ `init_view.sh`,
   `init_view_check.py`): hello, then SPE9 and Norne rebuilt through studies, whose initial state equals their own
   decks' (Norne: all 16 regions).
+- **ResInsight outside the workspace**: without `[viewer] resinsight_bin`, the viewer looks on PATH (`resinsight`,
+  `ResInsight`), then in `/opt/ResInsight` and `~/.local/opt/ResInsight`; `opmagent setup` no longer looks inside the
+  workspace, and `opmagent doctor` shows where ResInsight is. README: install it in `/opt/ResInsight`, with a wrapper in
+  `/usr/local/bin` (the launcher can't be symlinked). The testing scripts rely on the same lookup (`RESINSIGHT=` overrides).
 - Runs always use the release Flow: a `flow_bin` pointing at the Debug build (`opm_debug_flow`) is refused.
 
 ## 0.2.0 (unreleased)
