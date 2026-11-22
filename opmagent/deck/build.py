@@ -133,7 +133,12 @@ def build_deck(spec: dict, cfg, *, origin: str | None = None) -> dict:
     D("set_deck_status", deck_id=deck["id"], status=status, validation_log=log)
     say = (f"Deck {name} is built and passed the OPM parser." if ok else
            f"Deck {name} was written but failed the OPM check: {log.splitlines()[-1] if log else 'no output'}")
-    return {"ok": ok, "deck_id": deck["id"], "path": str(deck_path), "status": status, "validation_log": log,
+    iv = {}
+    if ok:   # the dynamic model at time zero: initial state and fluids in place, for ResInsight (never fails the build)
+        from .init_view import after_build
+        iv = after_build(cfg, svc.con, deck["id"])
+        say += iv.pop("init_view_say")
+    return {"ok": ok, "deck_id": deck["id"], "path": str(deck_path), "status": status, "validation_log": log, **iv,
             "cross_check_warnings": probs if imported else [],
             "models": {k: f"{m['header']['model_name']} v{m['header']['version']}" for k, m in
                        (("fluid", fluid), ("geo", geo_only), ("res", res), ("well", well))}, "spoken_summary": say}

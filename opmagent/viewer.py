@@ -31,7 +31,7 @@ def _egrid(path: Path) -> Path | None:
 
 
 def find_case(cfg, run_id: int | None = None, study: str | None = None, case: str | None = None,
-              geo: int | None = None) -> tuple[Path | None, str]:
+              geo: int | None = None, deck: int | None = None) -> tuple[Path | None, str]:
     """The EGRID to open, and a short description of where it came from. geo: a geo version's static view (an
     OPM Flow dry run of its static model), made now if it isn't there yet."""
     if case:
@@ -45,6 +45,16 @@ def find_case(cfg, run_id: int | None = None, study: str | None = None, case: st
         except ToolError as e:
             return None, f"geo version {geo}: {e} (database {cfg.database}; is OPMAGENT_CONFIG or --config the workspace you mean?)"
         return egrid, f"static view of geo version {geo}"
+    if deck is not None:
+        from .core.errors import ToolError
+        from .deck.init_view import build_init_view, init_case
+        egrid = init_case(cfg, con, deck)
+        if egrid is None:
+            try:
+                egrid = Path(build_init_view(cfg, con, deck)["egrid"])
+            except ToolError as e:
+                return None, f"deck {deck}: {e} (database {cfg.database})"
+        return egrid, f"initialisation view of deck {deck} (time zero)"
     if study and run_id is None:
         res = {t["task"]: t["result"] for t in studies.status(con, study)["tasks"]}
         run_id = (res.get("run") or {}).get("run_id")
@@ -70,9 +80,9 @@ def resinsight_bin(cfg) -> str | None:
 
 
 def open_in_resinsight(cfg, *, run_id: int | None = None, study: str | None = None, case: str | None = None,
-                       geo: int | None = None,
+                       geo: int | None = None, deck: int | None = None,
                        dry_run: bool = False) -> dict:
-    egrid, where = find_case(cfg, run_id, study, case, geo)
+    egrid, where = find_case(cfg, run_id, study, case, geo, deck)
     if egrid is None:
         return {"ok": False, "spoken_summary": f"Nothing to open: {where}."}
     exe = resinsight_bin(cfg)

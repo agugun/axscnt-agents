@@ -38,7 +38,7 @@ def prepare(deck_path: str | Path, out_dir: str | Path) -> Path:
     shutil.copy2(src, dst)
     for sib in src.parent.iterdir():
         link = out_dir / sib.name
-        if sib == src or link.exists() or link.is_symlink() or sib.suffix.upper() in (
+        if sib == src or sib.resolve() == out_dir.resolve() or link.exists() or link.is_symlink() or sib.suffix.upper() in (
                 ".SMSPEC", ".UNSMRY", ".UNRST", ".INIT", ".EGRID", ".PRT", ".DBG", ".ESMRY", ".RFT"):
             continue
         try:

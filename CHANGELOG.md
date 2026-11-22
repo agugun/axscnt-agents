@@ -42,6 +42,15 @@ No approvals are carried over. Design: [docs/design/res-model.md](docs/design/re
   A res build remakes its geo's static view with the region arrays; `results open --geo` remakes it when the res
   model changed. Testing scenario `testing/geo-static-view.md` (+ `geo_static_view.sh`, `geo_static_check.py`):
   raw data, SPE9 and Norne, compared with each deck's own INIT, then opened in ResInsight.
+- **Initialisation view of a deck** (`opmagent/deck/init_view.py`): the dynamic model at time zero. The deck is
+  copied with one 1e-4 day step and no wells (SUMMARY: FOIP, FGIP, FWIP, FPR and their region vectors) and run in
+  OPM Flow; report step 0 is the initial state for ResInsight. Made after every deck build (never fails it); fluids in
+  place per field and FIPNUM region, initial pressure range, hydrocarbon pore-volume fraction, and checks against the
+  res model's contacts per EQLNUM (cells below the OWC at the table's maximum Sw, n/a with capillary pressure at
+  maximum Sw; no free gas below the GOC). `opmagent deck init`, `results open --deck <id> --init`, MCP `init_view`
+  (deck, run, view, reviewer); `study view` lists it. Testing scenario `testing/init-view.md` (+ `init_view.sh`,
+  `init_view_check.py`): hello, then SPE9 and Norne rebuilt through studies, whose initial state equals their own
+  decks' (Norne: all 16 regions).
 - Runs always use the release Flow: a `flow_bin` pointing at the Debug build (`opm_debug_flow`) is refused.
 
 ## 0.2.0 (unreleased)
