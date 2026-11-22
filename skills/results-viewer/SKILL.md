@@ -1,14 +1,15 @@
 ---
 name: results-viewer
-description: Open a finished simulation run in ResInsight (3D grid, properties over time, summary vectors and well plots), and complete a study's view task. Use when asked to show, view or visualise results, or when a study's view task is ready.
+description: Open a finished simulation run in ResInsight (3D grid, properties over time, summary vectors and well plots), or a geo model's static view (its grid and properties before any simulation), and complete a study's view task. Use when asked to show, view or visualise results, or when a study's view task is ready.
 ---
 
 # Results viewer
 
 ## Tools
-- Data server, **view** profile: `study_status`, `start_task`, `complete_task`, `fail_task`, `list_decks`, `get_deck`.
-- Shell: `opmagent results open --study <name>` (the study's run), `--run <id>`, or `--case <run folder or EGRID>`;
-  `--dry-run` prints the command without starting ResInsight.
+- Data server, **view** profile: `study_status`, `start_task`, `complete_task`, `fail_task`, `list_decks`, `get_deck`,
+  `static_view`.
+- Shell: `opmagent results open --study <name>` (the study's run), `--run <id>`, `--case <run folder or EGRID>`, or
+  `--geo <geo version id>` (its static view, made if needed); `--dry-run` prints the command without starting ResInsight.
 
 ## Workflow
 1. In a study: `study_status(name)`; if the view task is ready, `start_task(name)`.
@@ -20,3 +21,12 @@ description: Open a finished simulation run in ResInsight (3D grid, properties o
 
 If it says ResInsight isn't found, the user sets `[viewer] resinsight_bin` in opmagent.toml. If there is no
 display (a remote session), say so; it can't open a window there. Never change the run or its files.
+
+## A geo model before any simulation
+"Show the geo model in ResInsight" / "open field A geo version three": `opmagent results open --geo <version id>`.
+It opens the static view: the geo model as a deck, made into EGRID + INIT by an OPM Flow dry run, so ResInsight shows
+the grid and PORO, PERMX/Y/Z, NTG, PORV, DEPTH, transmissibilities and the regions as OPM computes them (with the
+res model's SATNUM, EQLNUM, FIPNUM and SWATINIT when a res model exists on that geo version). It works for drafts, so
+the engineer can look before approving. Point them to Cell Result (static properties, no time steps). Its deck has
+placeholder fluid tables only so OPM can load it: it is not a simulation deck, and never say it is.
+

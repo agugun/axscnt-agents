@@ -156,8 +156,11 @@ def build_geo_model(cfg, *, tops, logs, spec: dict, name: str, surveys=None, des
     sub = D("submit_for_review", kind="geo", version_id=vid, qc_report_file_id=rid,
             metrics={"cells": g["nx"] * g["ny"] * g["nz"], "hcpv_rm3": round(tot), "zones": len(g["zones"]),
                      **{k: x for k, x in qc_extra.items() if k != "qc_notebook"}})
+    from .static_view import after_build
+    sv = after_build(cfg, svc.con, vid)
+    say = sv.pop("static_view_say")
     return {"ok": True, "status": sub["header"]["status"], "version_id": vid, "version": v["version"], "qc_report": str(rep),
-            **qc_extra, "grid": f"{g['nx']} x {g['ny']} x {g['nz']}", "zones": g["zones"], "assumptions": assumptions,
+            **qc_extra, **sv, "grid": f"{g['nx']} x {g['ny']} x {g['nz']}", "zones": g["zones"], "assumptions": assumptions,
             "spoken_summary": f"Geo model {name} version {v['version']} {review_state(sub)}: grid {g['nx']} by "
                               f"{g['ny']} by {g['nz']}, hydrocarbon pore volume {tot / 1e6:.1f} million reservoir "
-                              f"cubic metres." + findings_say}
+                              f"cubic metres." + findings_say + say}

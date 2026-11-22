@@ -425,6 +425,16 @@ class DataService:
         return {"ok": True, "ran_clean": r["ok"], "error": r["error"], "html": r["html"], "notebook": r["notebook"],
                 "file_id": fid, "spoken_summary": say}
 
+    # ------------------------------------------------------------ static view of a geo model
+    def static_view(self, version_id: int, include_res: bool = True) -> dict:
+        """The static view of a geo version for ResInsight: its static model as a deck, made into EGRID + INIT by an
+        OPM Flow dry run (grid, PORO, PERM, NTG, PORV, DEPTH, transmissibilities, regions; no simulation). Works for
+        drafts too. include_res adds the region arrays of the res model on this geo version. Open it with
+        `opmagent results open --geo <version_id>`."""
+        from ..geo.static_view import build_static_view, latest_res_on
+        res = latest_res_on(self.con, version_id) if include_res else None
+        return build_static_view(self.cfg, self.con, version_id, res_version_id=res)
+
     # ------------------------------------------------------------ reviewer (human only)
     def list_pending_reviews(self) -> dict:
         """List model versions waiting for review."""
@@ -469,17 +479,17 @@ STUDY = ["study_status", "list_studies", "start_task", "complete_task", "fail_ta
          "resolve_request"]
 QC_NOTEBOOKS = ["run_qc_notebook", "create_investigation_notebook", "run_investigation_notebook"]
 TOOLS = {
-    "fluid": COMMON + WRITER + STUDY + DATA_READ + FEEDBACK + QC_NOTEBOOKS, "geo": COMMON + WRITER + STUDY + DATA_READ + FEEDBACK + QC_NOTEBOOKS,
+    "fluid": COMMON + WRITER + STUDY + DATA_READ + FEEDBACK + QC_NOTEBOOKS, "geo": COMMON + WRITER + STUDY + DATA_READ + FEEDBACK + QC_NOTEBOOKS + ["static_view"],
     "well": COMMON + WRITER + STUDY + DATA_READ + FEEDBACK + QC_NOTEBOOKS,
     "res": COMMON + WRITER + STUDY + DATA_READ + FEEDBACK,
     "import": COMMON + WRITER,
     "deck": COMMON + ["create_deck", "add_deck_file", "set_deck_status", "list_decks", "get_deck", "init_study"] + STUDY,
     "run": COMMON + ["list_decks", "get_deck"] + STUDY,
     "data": COMMON + ["register_file", "load_study_data", "load_deck_data", "load_study_input"] + DATA_READ + STUDY,
-    "view": COMMON + ["list_decks", "get_deck"] + STUDY,
+    "view": COMMON + ["list_decks", "get_deck", "static_view"] + STUDY,
     "reviewer": COMMON + ["list_pending_reviews", "get_qc_report", "approve", "reject", "add_review_comment",
                           "get_review_feedback", "list_decks", "get_deck", "study_status", "list_studies",
-                          "study_data", "study_data_rows", "log_stats"],
+                          "study_data", "study_data_rows", "log_stats", "static_view"],
 }
 WRITE_TOOLS = (set(WRITER) | {"create_deck", "add_deck_file", "set_deck_status", "approve", "reject", "init_study",
                                "load_study_data", "load_deck_data", "load_study_input", "answer_review_feedback", "add_review_comment"}

@@ -114,7 +114,7 @@ opmagent deck compare A.DATA B.DATA    # any two decks
 opmagent study task SPE9_RB data start|complete [--result JSON]   # the board from a terminal
 opmagent study status FieldA_WF        # the board: tasks, open requests, what is next
 opmagent study events FieldA_WF        # its history
-opmagent results open --study FieldA_WF   # open the study's run in ResInsight
+opmagent results open --study FieldA_WF   # open the study's run in ResInsight (--geo <id>: a geo model's static view)
 ```
 
 In Claude Code you don't type these: in your own session in the workspace, ask "start a study ..." and then "run
@@ -127,7 +127,9 @@ database (`studies`, `study_tasks`, `study_requests`, `study_events`), so DBeave
 **Testing scenarios.** [testing/](testing/README.md) has scenarios anyone can follow to check the logic end to
 end. The first is the SPE9 reverse loop: read SPE9 into study input and build the models (scenario 1), then
 rebuild from that input, render the deck, run it and view it in ResInsight (scenario 2); the generated deck must be
-the SPE9 deck again. `testing/spe9_loop.sh` runs both from a terminal.
+the SPE9 deck again. `testing/spe9_loop.sh` runs both from a terminal. The geo static view scenario
+(`testing/geo-static-view.md`, `testing/geo_static_view.sh`) checks the geo modeler's static model opens in
+ResInsight and gives SPE9's and Norne's own INIT.
 
 **Approval.** `[study] auto_approve = true` in `opmagent.toml` approves a model as soon as it passes its
 validator, recorded in `approvals` as `auto (approval disabled)`; models with validator errors still stop.
@@ -208,6 +210,18 @@ registered files (sha256 checked) and the tables from the database. It covers:
 
 The geo model is the static model: grid, cell properties, PVTNUM and faults. SCAL, rock compressibility, contacts,
 initial pressure and the region arrays are the res model's (next section).
+
+**Static view in ResInsight.** Every geo build also makes a static view: the geo model as a deck (its GRID section
+from the same renderer real decks use, plus placeholder fluid tables only so OPM can load it), made into EGRID + INIT
+by an OPM Flow dry run in a few seconds. ResInsight then shows the grid and PORO, PERMX/Y/Z, NTG, PORV, DEPTH,
+transmissibilities and the regions as OPM computes them, for drafts too, before any simulation. With a res model on
+that geo version, its region arrays and SWATINIT are included; a geo model rebuilt from a deck includes that deck's
+GRID passthrough (e.g. MULTREGT), so SPE9 and Norne match their own decks' INIT exactly.
+
+```bash
+opmagent results open --geo 7        # open geo version 7's static view (made if needed)
+opmagent geo view 7 [--res 4 | --no-res] [--open]   # (re)make it; files in data/files/qc/geo_<model>_v<N>/static/
+```
 
 Findings don't block the build; they are listed for the reviewer. The geo and well profiles have the same notebook
 tools as the fluid profile. Models from a deck keep their model view (`opmagent study view`).

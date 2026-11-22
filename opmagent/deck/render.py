@@ -142,6 +142,46 @@ def resolve_completions(geo: dict, well: dict) -> list[dict]:
     return out
 
 
+def grid_section(gh: dict, gt: dict, file_paths: dict[int, str]) -> list[str]:
+    """The GRID section's body (after the GRID keyword) from a geo model: INIT, the grid itself (inline cartesian
+    sizes or the COORD/ZCORN include), the cell arrays (constants inline, files as INCLUDE), MINPV, PINCH, faults.
+    geo_properties rows need their file 'path' set. Shared by the deck builder and the static view."""
+    L: list[str] = []
+    a = L.append
+    nx, ny, nz = gh["nx"], gh["ny"], gh["nz"]
+    ncell = nx * ny * nz
+    a("INIT\n")
+    props = {p["keyword"]: p for p in gt["geo_properties"]}
+    if gh["grid_type"] == "cartesian":
+        for kw, scalar, n in (("DX", "dx", ncell), ("DY", "dy", ncell), ("DZ", "dz", ncell), ("TOPS", "tops", nx * ny)):
+            if kw not in props:
+                a(f"{kw}\n {n}*{_num(gh[scalar])} /\n")
+    else:
+        a(f"INCLUDE\n '{file_paths[gh['grid_file_id']]}' /\n")
+    for kw in ("DX", "DY", "DZ", "TOPS", "ACTNUM", "PORO", "PERMX", "PERMY", "PERMZ", "NTG",
+               "MULTX", "MULTY", "MULTZ", "MULTX-", "MULTY-", "MULTZ-", "MULTPV"):
+        p = props.get(kw)
+        if not p:
+            continue
+        n = nx * ny if kw == "TOPS" else ncell
+        a(f"{kw}\n {n}*{_num(p['const_value'])} /\n" if p["const_value"] is not None else f"INCLUDE\n '{p['path']}' /\n")
+    if gh.get("minpv") is not None:
+        a(f"MINPV\n {_num(gh['minpv'])} /\n")
+    if gh.get("pinch_threshold") is not None:
+        a(f"PINCH\n {_num(gh['pinch_threshold'])} /\n")
+    if gt["faults"]:
+        a("FAULTS")
+        for f in gt["faults"]:
+            a(f" '{f['fault_name']}' {f['i1']} {f['i2']} {f['j1']} {f['j2']} {f['k1']} {f['k2']} '{f['face']}' /")
+        a("/\n")
+    if gt["fault_multipliers"]:
+        a("MULTFLT")
+        for m in gt["fault_multipliers"]:
+            a(f" '{m['fault_name']}' {_num(m['mult'])} /")
+        a("/\n")
+    return L
+
+
 def render(spec: dict, fluid: dict, geo: dict, well: dict, file_paths: dict[int, str]) -> str:
     """geo: combine(geo, res), the static and dynamic model together. spec: name, start_date, end_date, report ('monthly'|'quarterly'|'yearly'), summary (list), title."""
     fh, gh, wh = fluid["header"], geo["header"], well["header"]
@@ -208,35 +248,8 @@ def render(spec: dict, fluid: dict, geo: dict, well: dict, file_paths: dict[int,
 
     # ---------------- GRID
     a("GRID\n")
-    a("INIT\n")
+    L += grid_section(gh, gt, file_paths)
     props = {p["keyword"]: p for p in gt["geo_properties"]}
-    if gh["grid_type"] == "cartesian":
-        for kw, scalar, n in (("DX", "dx", ncell), ("DY", "dy", ncell), ("DZ", "dz", ncell), ("TOPS", "tops", nx * ny)):
-            if kw not in props:
-                a(f"{kw}\n {n}*{_num(gh[scalar])} /\n")
-    else:
-        a(f"INCLUDE\n '{file_paths[gh['grid_file_id']]}' /\n")
-    for kw in ("DX", "DY", "DZ", "TOPS", "ACTNUM", "PORO", "PERMX", "PERMY", "PERMZ", "NTG",
-               "MULTX", "MULTY", "MULTZ", "MULTX-", "MULTY-", "MULTZ-", "MULTPV"):
-        p = props.get(kw)
-        if not p:
-            continue
-        n = nx * ny if kw == "TOPS" else ncell
-        a(f"{kw}\n {n}*{_num(p['const_value'])} /\n" if p["const_value"] is not None else f"INCLUDE\n '{p['path']}' /\n")
-    if gh.get("minpv") is not None:
-        a(f"MINPV\n {_num(gh['minpv'])} /\n")
-    if gh.get("pinch_threshold") is not None:
-        a(f"PINCH\n {_num(gh['pinch_threshold'])} /\n")
-    if gt["faults"]:
-        a("FAULTS")
-        for f in gt["faults"]:
-            a(f" '{f['fault_name']}' {f['i1']} {f['i2']} {f['j1']} {f['j2']} {f['k1']} {f['k2']} '{f['face']}' /")
-        a("/\n")
-    if gt["fault_multipliers"]:
-        a("MULTFLT")
-        for m in gt["fault_multipliers"]:
-            a(f" '{m['fault_name']}' {_num(m['mult'])} /")
-        a("/\n")
     passthrough("GRID")
     if pt.get("EDIT"):
         a("EDIT\n")

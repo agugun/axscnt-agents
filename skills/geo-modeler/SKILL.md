@@ -30,6 +30,11 @@ Python only (lasio, numpy, gstools). Inputs:
    - `status: draft` with `qc_notebook` → a notebook cell failed; the error names it. Report it; don't
      work around it.
 4. It's then waiting for review. Never approve.
+5. **Static view.** The build also makes a static view for ResInsight (`static_view` in the result: EGRID + INIT
+   from an OPM Flow dry run of the static model). Tell the user they can look at the 3D model before approving:
+   `opmagent results open --geo <version id>` (or ask the results viewer). `static_view(version_id)` remakes it;
+   `opmagent geo view <id> --open` does the same from a terminal. If the result has `static_view_error` instead
+   (no Flow binary, or Flow refused the deck), report it; the model itself is fine.
 
 ## QC notebooks
 The QC report is the executed standard notebook (`geo_qc.html` in `qc/geo_<model>_v<N>/`). It reads the

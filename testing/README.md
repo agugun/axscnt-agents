@@ -6,6 +6,7 @@ Each one says what to do, what you should see, and when it counts as passed.
 | Scenario | What it proves | Time |
 | --- | --- | --- |
 | [SPE9 reverse loop](spe9-reverse-loop.md) | A deck read into study input gives the same models, and the same deck again. Running that deck gives the same results. | about 10 min by hand, under a minute scripted |
+| [Geo static view](geo-static-view.md) | The geo modeler's static model opens in ResInsight before any simulation, and is the model as OPM sees it: SPE9's and Norne's static views give their own decks' INIT exactly. | about 10 min by hand, about 25 s scripted |
 
 The automated test suite (`pytest`) covers the same logic on small decks. These scenarios run it on a real deck,
 through the steps an engineer takes, and show the results you can look at (QC reports, ResInsight).
