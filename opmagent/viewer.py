@@ -43,7 +43,7 @@ def find_case(cfg, run_id: int | None = None, study: str | None = None, case: st
         try:
             egrid = current_case(cfg, con, geo)
         except ToolError as e:
-            return None, f"geo version {geo}: {e}"
+            return None, f"geo version {geo}: {e} (database {cfg.database}; is OPMAGENT_CONFIG or --config the workspace you mean?)"
         return egrid, f"static view of geo version {geo}"
     if study and run_id is None:
         res = {t["task"]: t["result"] for t in studies.status(con, study)["tasks"]}

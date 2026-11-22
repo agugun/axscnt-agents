@@ -63,17 +63,36 @@ Options: `WS=<dir>` (the workspace to create), `OPM_TESTS=<dir>` (the opm-tests 
 
 ## B. Terminal, step by step
 
+Do every step in **one terminal**: the variables set here (`REPO`, `WS`, `OPMAGENT_CONFIG`, `CHECK`) exist only in
+the terminal where you set them. In a new terminal, set them again (the second block) before going on.
+
 ```bash
-WS=~/opmagent-testing/geo-view
-opmagent setup $WS && export OPMAGENT_CONFIG=$WS/opmagent.toml
+cd ~/repo/axscnt-agents                 # your clone of this repo
+source .venv/bin/activate               # opmagent and the checks run in its environment
+REPO=$PWD
+WS=~/opmagent-testing/geo-view          # a new folder: if it exists from an earlier try, remove it or pick another
+opmagent setup $WS
 sed -i 's/^auto_approve = false/auto_approve = true/' $WS/opmagent.toml     # or approve each model yourself
+# a new workspace doesn't know where ResInsight is: point it at your launcher (part 3 needs it)
+sed -i "s|^# resinsight_bin = .*|resinsight_bin = \"$HOME/opm-agents/ResInsight/bin/resinsight\"|" $WS/opmagent.toml
+grep resinsight_bin $WS/opmagent.toml        # must show the path, without a leading #
 ```
+
+```bash
+export OPMAGENT_CONFIG=$WS/opmagent.toml      # every opmagent command below uses this workspace
+CHECK="python $REPO/testing/geo_static_check.py"
+opmagent doctor | head -1                     # must show: [ok]   config: database=<WS>/data/opm.db
+```
+
+If `opmagent doctor` shows `~/opm-agents/data/opm.db` instead, `OPMAGENT_CONFIG` isn't set in this terminal: the
+builds would go to your main workspace and `results open --geo <n>` would say `geo version <n> not found`.
+The version ids below (1, 2, 3) hold for a new workspace; on a rerun use the ids the steps print.
 
 ### Part 1: from raw data
 
 **1.1 The dataset.**
 ```bash
-python testing/geo_static_check.py inputs $WS/inputs
+$CHECK inputs $WS/inputs
 ```
 Expect: `wrote .../tops.csv, .../A.las B.las C.las D.las, .../geo.json (grid 10 x 10 x 5)`.
 
@@ -86,7 +105,7 @@ and a spoken summary ending `Static view for ResInsight: opmagent results open -
 
 **1.3 Check it.**
 ```bash
-python testing/geo_static_check.py model GEO_VIEW_TEST
+$CHECK model GEO_VIEW_TEST
 ```
 Expect only PASS lines: static view made, INIT written, marked not for simulation, not a deck, INIT holds the static
 arrays, grid 10 x 10 x 5, 500 of 500 cells active, INIT PORO / PERMX / NTG equal the model's (difference about 1e-7).
@@ -108,21 +127,31 @@ Expect the geo summary to end `Static view for ResInsight: opmagent results open
 
 **2.2 Compare with SPE9's own INIT.**
 ```bash
-python testing/geo_static_check.py compare SPE9_GV $D
+$CHECK compare SPE9_GV $D
 ```
 It dry-runs a copy of SPE9's folder (adding `INIT` after `GRID`, which SPE9 lacks) and compares. Expect
 `active cells: 9000 (deck: 9000)` and PASS for every array; TRANX shows about 2e-7, the rest 0.
 
-**2.3 Norne, the same way.** Use `NORNE_GV` and `~/opmagent/open-data/opm-tests/norne/NORNE_ATW2013.DATA`.
+**2.3 Norne.** It becomes geo version 3 (part 3 opens it as `--geo 3`).
+```bash
+N=~/opmagent/open-data/opm-tests/norne/NORNE_ATW2013.DATA
+opmagent study init NORNE_GV --requirement "Static view of Norne"
+opmagent study task NORNE_GV data start
+opmagent data from-deck NORNE_GV $N
+opmagent study task NORNE_GV data complete
+opmagent study build geo NORNE_GV --complete      # summary ends: opmagent results open --geo 3.
+opmagent study build res NORNE_GV --complete
+$CHECK compare NORNE_GV $N
+```
 Expect `active cells: 44431 (deck: 44431)` and PASS for every array, EQLNUM and FIPNUM included (Norne has several
-equilibration and fluid-in-place regions; they come with the res model).
+equilibration and fluid-in-place regions; they come with the res model). Norne takes about a minute.
 
 ### Part 3: ResInsight
 
 ```bash
 opmagent results open --geo 1        # part 1's model (the version id printed by the checks)
 opmagent results open --geo 2        # SPE9
-opmagent results open --geo 3        # Norne
+opmagent results open --geo 3        # Norne (after step 2.3)
 opmagent geo view 2 --open           # the same, remade first
 ```
 
@@ -157,6 +186,11 @@ yourself.
 | `OPM Flow could not load the static deck: ...` | Flow refused a keyword | read `static/run.log`; a passthrough keyword that needs more than RUNSPEC sizing is the usual cause |
 | EQLNUM or FIPNUM differ, everything else passes | the view was made before the res model | build the res model, or `opmagent results open --geo <n>` (remakes it) |
 | TRANX/Y/Z differ, PORV passes | a deck's GRID passthrough is missing from the view | the geo model must come from the study (`data_source.study`); check `static/*.DATA` for MULTREGT and the like |
+| `geo version 3 not found (database <WS>/...)` | step 2.3 (Norne) wasn't run in this workspace | run step 2.3; it makes geo version 3 |
+| `geo version <n> not found (database ~/opm-agents/...)` | `OPMAGENT_CONFIG` isn't set in this terminal | `export OPMAGENT_CONFIG=$WS/opmagent.toml`, or add `--config $WS/opmagent.toml` |
+| `can't open file .../testing/geo_static_check.py` | the check was run outside the repo folder | use `$CHECK` as set above, or the full path to the file |
+| `a study named SPE9_GV already exists` | a rerun in the same workspace | a new `WS`, or a new study name |
+| `ResInsight not found: set [viewer] resinsight_bin` | the new workspace has no ResInsight path | the `sed` line for `resinsight_bin` in the setup block, with your launcher's path |
 | `Nothing to open` / ResInsight doesn't start | `[viewer] resinsight_bin` not set, or no desktop session | set it in `opmagent.toml`; ResInsight needs a display |
 
 ## What the scenario covers
