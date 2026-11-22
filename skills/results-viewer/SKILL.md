@@ -20,7 +20,7 @@ description: Open a finished simulation run in ResInsight (3D grid, properties o
    with the time slider for changes over time; Summary Cases for plots such as FOPR, FWCT, FPR and WBHP per well.
 4. `complete_task(name, {"opened": "<case path>"})`. That finishes the study.
 
-If it says ResInsight isn't found, the user sets `[viewer] resinsight_bin` in opmagent.toml. If there is no
+If it says ResInsight isn't found, the user installs it in `/opt/ResInsight` (README) or sets `[viewer] resinsight_bin` in opmagent.toml; `opmagent doctor` shows which one it finds. If there is no
 display (a remote session), say so; it can't open a window there. Never change the run or its files.
 
 ## A geo model before any simulation

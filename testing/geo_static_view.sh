@@ -9,7 +9,7 @@
 # Usage: testing/geo_static_view.sh
 #   OPM_TESTS=<dir>    opm-tests checkout (default: ~/opmagent/open-data/opm-tests)
 #   WS=<dir>           workspace to create (default: a new temporary folder); must not exist yet
-#   RESINSIGHT=<path>  the ResInsight launcher (default: ~/opm-agents/ResInsight/bin/resinsight if it exists)
+#   RESINSIGHT=<path>  the ResInsight launcher (default: found on PATH or in /opt/ResInsight)
 #   NO_VIEWER=1        don't start ResInsight (print what would open)
 #   SKIP_NORNE=1       part 2 with SPE9 only (Norne adds about a minute)
 set -euo pipefail
@@ -34,8 +34,8 @@ command -v flow >/dev/null || stop "OPM Flow not on PATH (the static view is an 
 step "Workspace: $WS"
 opmagent setup "$WS" >/dev/null
 sed -i 's/^auto_approve = false/auto_approve = true/' "$WS/opmagent.toml"
-RESINSIGHT="${RESINSIGHT:-$HOME/opm-agents/ResInsight/bin/resinsight}"
-if [ -x "$RESINSIGHT" ]; then
+RESINSIGHT="${RESINSIGHT:-}"        # empty: opmagent finds it on PATH or in /opt/ResInsight
+if [ -n "$RESINSIGHT" ] && [ -x "$RESINSIGHT" ]; then
   sed -i "s|^# resinsight_bin = .*|resinsight_bin = \"$RESINSIGHT\"|" "$WS/opmagent.toml"
 fi
 export OPMAGENT_CONFIG="$WS/opmagent.toml"

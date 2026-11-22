@@ -64,6 +64,15 @@ Quick check of the whole install: `opmagent hello` (see the hello skill).
 """
 
 
+def _resinsight_line() -> str:
+    """[viewer] resinsight_bin: left out (commented) when ResInsight is found without it (PATH, /opt/ResInsight)."""
+    from .viewer import find_resinsight
+    found = find_resinsight()
+    if found:
+        return f'# resinsight_bin = "{found}"   # found on PATH or in /opt; set it only to use another one'
+    return '# resinsight_bin = "/opt/ResInsight/bin/resinsight"   # not found: install ResInsight there, or set this'
+
+
 def _bin(name: str) -> str:
     cand = Path(sys.executable).parent / name
     return str(cand) if cand.exists() else name
@@ -105,7 +114,7 @@ vscode_bin = "code"
 auto_approve = false
 
 [viewer]
-{'resinsight_bin = "' + str(ws / 'ResInsight' / 'bin' / 'resinsight') + '"' if (ws / 'ResInsight' / 'bin' / 'resinsight').exists() else '# resinsight_bin = "~/ResInsight/bin/resinsight"'}
+{_resinsight_line()}
 """)
         created.append(str(cfg_path))
     c = str(cfg_path)

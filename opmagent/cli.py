@@ -52,6 +52,18 @@ def cmd_doctor(args):
         __import__("opm.simulators")
         return "opm.simulators Python bindings (flow binary not on PATH; optional)"
     check("OPM simulator", simulator)
+
+    def resinsight():
+        from .viewer import find_resinsight
+        exe = find_resinsight(cfg.resinsight_bin if cfg else None)
+        if exe:
+            return exe
+        raise FileNotFoundError("not found (optional, to view runs): install it in /opt/ResInsight, or set "
+                                "[viewer] resinsight_bin")
+    try:
+        print(f"[ok]   ResInsight: {resinsight()}")
+    except FileNotFoundError as e:
+        print(f"[warn] ResInsight: {e}")
     if cfg:
         check("database", lambda: "exists" if cfg.database.exists() else (_ for _ in ()).throw(FileNotFoundError("run: opmagent init-db")))
 

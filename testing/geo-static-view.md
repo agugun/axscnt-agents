@@ -73,15 +73,12 @@ REPO=$PWD
 WS=~/opmagent-testing/geo-view          # a new folder: if it exists from an earlier try, remove it or pick another
 opmagent setup $WS
 sed -i 's/^auto_approve = false/auto_approve = true/' $WS/opmagent.toml     # or approve each model yourself
-# a new workspace doesn't know where ResInsight is: point it at your launcher (part 3 needs it)
-sed -i "s|^# resinsight_bin = .*|resinsight_bin = \"$HOME/opm-agents/ResInsight/bin/resinsight\"|" $WS/opmagent.toml
-grep resinsight_bin $WS/opmagent.toml        # must show the path, without a leading #
 ```
 
 ```bash
 export OPMAGENT_CONFIG=$WS/opmagent.toml      # every opmagent command below uses this workspace
 CHECK="python $REPO/testing/geo_static_check.py"
-opmagent doctor | head -1                     # must show: [ok]   config: database=<WS>/data/opm.db
+opmagent doctor | grep -E 'config:|ResInsight'   # [ok] config: database=<WS>/data/opm.db, and [ok] ResInsight: <its path>
 ```
 
 If `opmagent doctor` shows `~/opm-agents/data/opm.db` instead, `OPMAGENT_CONFIG` isn't set in this terminal: the
@@ -190,7 +187,7 @@ yourself.
 | `geo version <n> not found (database ~/opm-agents/...)` | `OPMAGENT_CONFIG` isn't set in this terminal | `export OPMAGENT_CONFIG=$WS/opmagent.toml`, or add `--config $WS/opmagent.toml` |
 | `can't open file .../testing/geo_static_check.py` | the check was run outside the repo folder | use `$CHECK` as set above, or the full path to the file |
 | `a study named SPE9_GV already exists` | a rerun in the same workspace | a new `WS`, or a new study name |
-| `ResInsight not found: set [viewer] resinsight_bin` | the new workspace has no ResInsight path | the `sed` line for `resinsight_bin` in the setup block, with your launcher's path |
+| `ResInsight not found (...)` | ResInsight isn't on PATH or in /opt/ResInsight | install it in `/opt/ResInsight` (README), or set `[viewer] resinsight_bin` in `$WS/opmagent.toml` |
 | `Nothing to open` / ResInsight doesn't start | `[viewer] resinsight_bin` not set, or no desktop session | set it in `opmagent.toml`; ResInsight needs a display |
 
 ## What the scenario covers

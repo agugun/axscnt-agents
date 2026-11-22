@@ -76,13 +76,12 @@ REPO=$PWD
 WS=~/opmagent-testing/init-view         # a new folder: if it exists from an earlier try, remove it or pick another
 opmagent setup $WS
 sed -i 's/^auto_approve = false/auto_approve = true/' $WS/opmagent.toml     # or approve each model yourself
-sed -i "s|^# resinsight_bin = .*|resinsight_bin = \"$HOME/opm-agents/ResInsight/bin/resinsight\"|" $WS/opmagent.toml
 ```
 
 ```bash
 export OPMAGENT_CONFIG=$WS/opmagent.toml
 CHECK="python $REPO/testing/init_view_check.py"
-opmagent doctor | head -1                     # must show: [ok]   config: database=<WS>/data/opm.db
+opmagent doctor | grep -E 'config:|ResInsight'   # [ok] config: database=<WS>/data/opm.db, and [ok] ResInsight: <its path>
 ```
 
 The deck ids below (1, 2, 3) hold for a new workspace; on a rerun use the ids the steps print.
@@ -159,7 +158,7 @@ and FPR as flat lines over that step.
 | `OPM Flow could not initialise the deck: ...` | the deck doesn't initialise (e.g. a pressure outside the PVT tables) | read `init_views/<deck>_deck<id>/run.log`; the same deck would fail its first run |
 | a check warns `... the deepest X below the contact` | cells below a contact keep oil or gas | near the contact: a capillary transition or end-point scaling; far below it: look at the contacts and SCAL of the res model |
 | `deck <n> not found (database ~/opm-agents/...)` | `OPMAGENT_CONFIG` isn't set in this terminal | `export OPMAGENT_CONFIG=$WS/opmagent.toml`, or `--config $WS/opmagent.toml` |
-| `ResInsight not found: set [viewer] resinsight_bin` | the new workspace has no ResInsight path | the `sed` line for `resinsight_bin` in the setup block |
+| `ResInsight not found (...)` | ResInsight isn't on PATH or in /opt/ResInsight | install it in `/opt/ResInsight` (README), or set `[viewer] resinsight_bin` in `$WS/opmagent.toml` |
 
 ## What the scenario covers
 
