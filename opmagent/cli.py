@@ -431,6 +431,27 @@ def cmd_geo_build(args):
     raise SystemExit(0 if r.get("ok") else 2)
 
 
+def cmd_geo_view(args):
+    """The static view of a geo version: a static deck made into EGRID + INIT by an OPM Flow dry run."""
+    import json
+    from .core.errors import ToolError
+    from .geo.static_view import build_static_view, latest_res_on
+    from .viewer import open_in_resinsight
+    cfg = cfgmod.load(args.config)
+    con = db.connect(cfg.database)
+    res = None if args.no_res else (args.res if args.res is not None else latest_res_on(con, args.version_id))
+    try:
+        r = build_static_view(cfg, con, args.version_id, res_version_id=res)
+    except ToolError as e:
+        r = e.to_dict()
+    if r.get("ok") and args.open:
+        o = open_in_resinsight(cfg, case=r["egrid"])
+        r["opened"] = o["ok"]
+        r["spoken_summary"] += " " + o["spoken_summary"]
+    print(json.dumps(r, indent=2, default=str) if args.json else r.get("spoken_summary") or r.get("message"))
+    raise SystemExit(0 if r.get("ok") else 2)
+
+
 def cmd_res_build(args):
     import json
     from .core.errors import ToolError
@@ -506,9 +527,11 @@ def cmd_study(args):
             print(r["spoken_summary"])
             raise SystemExit(0 if r["ok"] else 2)
         if args.scmd == "view":
-            r = _study_view(con, args.name, args.kinds or list(MODEL_KINDS), args.open)
+            r = _study_view(con, args.name, args.kinds or list(MODEL_KINDS), args.open, cfg)
             for v in r["views"]:
                 print(f"  {v['kind']:<6} {v.get('model', ''):<20} {v.get('status', ''):<10} {v.get('qc_report') or v['note']}")
+                if v.get("resinsight"):
+                    print(f"         static view (ResInsight): {v['resinsight']}")
             raise SystemExit(0 if r["ok"] else 2)
         if args.complete:
             studies.start_task(con, args.name, args.what, actor=getpass.getuser())
@@ -558,7 +581,7 @@ def _study_run(cfg, con, name, timeout_s=3600):
                               + (w.get("spoken_summary") or "")}
 
 
-def _study_view(con, name, kinds, open_=False):
+def _study_view(con, name, kinds, open_=False, cfg=None):
     """Each model of the study as its QC report (plots and tables of what the model holds), before any simulation:
     the version the modeler completed its task with, or the study's latest version while it waits for review."""
     import webbrowser
@@ -581,6 +604,11 @@ def _study_view(con, name, kinds, open_=False):
         path = (q["qc_report"] or {}).get("path")
         views.append({"kind": kind, "version_id": int(vid), "model": f"{q['model_name']} v{q['version']}",
                       "status": q["status"], "qc_report": path, "note": "" if path else "no QC report"})
+        if kind == "geo":
+            from .geo.static_view import static_case
+            sc = static_case(cfg, con, int(vid)) if cfg is not None else None
+            views[-1]["static_view"] = str(sc) if sc else None
+            views[-1]["resinsight"] = f"opmagent results open --geo {int(vid)}"
         if open_ and path:
             webbrowser.open(Path(path).as_uri())
     return {"ok": all(v.get("qc_report") for v in views), "views": views}
@@ -739,7 +767,7 @@ def cmd_results(args):
     """Results viewer: open a run in ResInsight (grid, properties over time, summary vectors)."""
     from .viewer import open_in_resinsight
     cfg = cfgmod.load(args.config)
-    r = open_in_resinsight(cfg, run_id=args.run, study=args.study, case=args.case, dry_run=args.dry_run)
+    r = open_in_resinsight(cfg, run_id=args.run, study=args.study, case=args.case, geo=args.geo, dry_run=args.dry_run)
     print(r["spoken_summary"])
     if args.dry_run and r.get("command"):
         print(" ".join(r["command"]))
@@ -952,6 +980,7 @@ def main(argv=None):
     x.add_argument("--run", type=int, help="run id (default: the study's run, or the latest run)")
     x.add_argument("--study")
     x.add_argument("--case", help="an EGRID/.DATA path or a run folder")
+    x.add_argument("--geo", type=int, help="a geo version id: its static view (grid and properties, no simulation)")
     x.add_argument("--dry-run", action="store_true", help="print the command, don't start ResInsight")
     x.set_defaults(fn=cmd_results)
     gm = sub.add_parser("geo", help="geo modeler").add_subparsers(dest="gcmd", required=True)
@@ -963,6 +992,13 @@ def main(argv=None):
     x.add_argument("--name", required=True)
     x.add_argument("--description")
     x.set_defaults(fn=cmd_geo_build)
+    x = gm.add_parser("view", help="static view: the geo model as EGRID + INIT (OPM Flow dry run) for ResInsight")
+    x.add_argument("version_id", type=int)
+    x.add_argument("--res", type=int, help="include this res version's region arrays (default: the res on this geo)")
+    x.add_argument("--no-res", action="store_true", help="the geo model alone")
+    x.add_argument("--open", action="store_true", help="open it in ResInsight")
+    x.add_argument("--json", action="store_true")
+    x.set_defaults(fn=cmd_geo_view)
     x = gm.add_parser("qc", help="re-run the standard QC notebook for a draft version (prints the new report's file id)")
     x.add_argument("version_id", type=int)
     x.set_defaults(fn=cmd_model_notebook, nb_kind="geo")

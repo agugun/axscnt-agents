@@ -33,6 +33,15 @@ No approvals are carried over. Design: [docs/design/res-model.md](docs/design/re
   review, runs, runs whose process is gone). Fails if the reviewer server is in the agents' workspace.
   `-v`, `--json`, `--workspace`. The `opm-doctor` skill runs it from Claude Code (`/opm-doctor`, or "how are the
   agents?") and reports what needs attention with the fix.
+- **Static view of a geo model in ResInsight** (`opmagent/geo/static_view.py`): the static model as a deck (the shared
+  GRID section renderer, placeholder PROPS/SOLUTION so OPM loads it, the res model's region arrays and SWATINIT when
+  one exists on that geo, a deck-sourced study's GRID passthrough) made into EGRID + INIT by an OPM Flow dry run.
+  Made after every geo build (never fails the build), for drafts too; `opmagent results open --geo <id>`,
+  `opmagent geo view <id>`, MCP `static_view` (geo, view, reviewer profiles); `study view` shows it. SPE9 and Norne
+  static views match their own decks' INIT (PORV, PERMX, TRANX/Y/Z, FIPNUM) exactly. Not registered as a deck.
+  A res build remakes its geo's static view with the region arrays; `results open --geo` remakes it when the res
+  model changed. Testing scenario `testing/geo-static-view.md` (+ `geo_static_view.sh`, `geo_static_check.py`):
+  raw data, SPE9 and Norne, compared with each deck's own INIT, then opened in ResInsight.
 - Runs always use the release Flow: a `flow_bin` pointing at the Debug build (`opm_debug_flow`) is refused.
 
 ## 0.2.0 (unreleased)

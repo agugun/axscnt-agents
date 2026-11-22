@@ -223,8 +223,11 @@ def build_res_model(cfg, *, spec: dict, name: str, geo_version_id: int, descript
     sub = D("submit_for_review", kind="res", version_id=vid, qc_report_file_id=rid,
             metrics={"satnum": nsat, "eqlnum": len(contacts), "regions": {k: v["n"] for k, v in regions.items()}})
     c0 = contacts[0]
+    from ..geo.static_view import after_res_build
+    sv = after_res_build(cfg, svc.con, vid)
+    sv_say = sv.pop("static_view_say")
     return {"ok": True, "status": sub["header"]["status"], "version_id": vid, "version": v["version"],
-            "qc_report": str(rep), "assumptions": assumptions,
+            "qc_report": str(rep), "assumptions": assumptions, **sv,
             "spoken_summary": f"Res model {name} version {v['version']} {review_state(sub)}: {nsat} saturation "
                               f"region(s), {len(contacts)} equilibration region(s), datum {c0['datum_depth']:g} m at "
-                              f"{c0['datum_pressure']:g} bar on geo {gh['model_name']} v{gh['version']}."}
+                              f"{c0['datum_pressure']:g} bar on geo {gh['model_name']} v{gh['version']}." + sv_say}

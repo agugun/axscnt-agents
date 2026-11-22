@@ -1,4 +1,4 @@
-"""Results viewer: open a finished run in ResInsight.
+"""Results viewer: open a finished run, or a geo version's static view, in ResInsight.
 
 ResInsight reads Flow's output directly: the grid (.EGRID), static properties (.INIT), properties over time
 (.UNRST) and summary vectors (.SMSPEC/.UNSMRY) next to it. Set the launcher in opmagent.toml:
@@ -30,11 +30,21 @@ def _egrid(path: Path) -> Path | None:
     return cand if cand.exists() else None
 
 
-def find_case(cfg, run_id: int | None = None, study: str | None = None, case: str | None = None) -> tuple[Path | None, str]:
-    """The EGRID to open, and a short description of where it came from."""
+def find_case(cfg, run_id: int | None = None, study: str | None = None, case: str | None = None,
+              geo: int | None = None) -> tuple[Path | None, str]:
+    """The EGRID to open, and a short description of where it came from. geo: a geo version's static view (an
+    OPM Flow dry run of its static model), made now if it isn't there yet."""
     if case:
         return _egrid(Path(case)), f"case {case}"
     con = db.connect(cfg.database)
+    if geo is not None:
+        from .core.errors import ToolError
+        from .geo.static_view import current_case
+        try:
+            egrid = current_case(cfg, con, geo)
+        except ToolError as e:
+            return None, f"geo version {geo}: {e}"
+        return egrid, f"static view of geo version {geo}"
     if study and run_id is None:
         res = {t["task"]: t["result"] for t in studies.status(con, study)["tasks"]}
         run_id = (res.get("run") or {}).get("run_id")
@@ -60,8 +70,9 @@ def resinsight_bin(cfg) -> str | None:
 
 
 def open_in_resinsight(cfg, *, run_id: int | None = None, study: str | None = None, case: str | None = None,
+                       geo: int | None = None,
                        dry_run: bool = False) -> dict:
-    egrid, where = find_case(cfg, run_id, study, case)
+    egrid, where = find_case(cfg, run_id, study, case, geo)
     if egrid is None:
         return {"ok": False, "spoken_summary": f"Nothing to open: {where}."}
     exe = resinsight_bin(cfg)

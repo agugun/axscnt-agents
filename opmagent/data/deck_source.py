@@ -385,11 +385,16 @@ def build_model(cfg, con, study: str, kind: str, model_name: str, *, geo_version
     rid = D("register_file", path=str(rep), kind="qc_report")["file_id"]
     sub = D("submit_for_review", kind=kind, version_id=vid, qc_report_file_id=rid,
             metrics={"from_deck": Path(info["source_path"]).name, "tables": {t: len(r) for t, r in tables.items()}})
+    sv, say = {}, ""
+    if kind in ("geo", "res"):
+        from ..geo.static_view import after_build, after_res_build
+        sv = after_build(cfg, con, vid) if kind == "geo" else after_res_build(cfg, con, vid)
+        say = sv.pop("static_view_say")
     return {"ok": True, "status": sub["header"]["status"], "version_id": vid, "version": v["version"],
-            "qc_report": str(rep), "assumptions": assumptions,
+            "qc_report": str(rep), "assumptions": assumptions, **sv,
             "spoken_summary": f"{kind.capitalize()} model {model_name} version {v['version']} {review_state(sub)}: "
                               f"rebuilt from {Path(info['source_path']).name}, "
-                              f"{sum(len(r) for r in tables.values())} table rows."}
+                              f"{sum(len(r) for r in tables.values())} table rows." + say}
 
 
 def deck_spec(con, study: str, name: str, requirement: str, ids: dict) -> dict:
