@@ -850,12 +850,59 @@ def cmd_setup(args):
     print(f"\nNext: cd {r['workspace']} && opmagent --config {r['config']} doctor && opmagent --config {r['config']} hello")
 
 
+def cmd_backup(args):
+    """A consistent copy of the database, the config and a manifest (and with --files the file store)."""
+    from . import maintenance as mt
+    cfg = cfgmod.load(args.config)
+    r = mt.backup(cfg, config_path=cfgmod.find_path(args.config), out=args.out, files=args.files)
+    m = r["manifest"]
+    rows = ", ".join(f"{v} {k}" for k, v in m["rows"].items() if v)
+    print(f"Backup: {r['archive']} ({mt.human(r['bytes'])})")
+    print(f"  database {m['database']}{' and the file store' if m['with_files'] else ''}; {rows or 'empty'}")
+    if not m["with_files"]:
+        print(f"  the file store ({m['file_store']}) is not in it: add --files")
+
+
+def cmd_clean(args):
+    """List what can go (failed runs, older unapproved imports, views); remove it with --yes."""
+    from . import maintenance as mt
+    cfg = cfgmod.load(args.config)
+    cats = [c for c in mt.CATEGORIES if getattr(args, c)] or list(mt.CATEGORIES)
+    print(f"File store {cfg.file_store}: " + ", ".join(f"{u['folder']} {mt.human(u['bytes'])}" for u in mt.usage(cfg)))
+    items = mt.plan(cfg, cats)
+    if not items:
+        print(f"Nothing to clean ({', '.join(cats)}).")
+        return
+    for c in cats:
+        mine = [i for i in items if i["category"] == c]
+        if mine:
+            print(f"\n{c}: {len(mine)}, {mt.human(sum(i['bytes'] for i in mine))}")
+            for i in mine:
+                print(f"  {mt.human(i['bytes']):>9}  {i['path']}  ({i['why']})")
+    total = sum(i["bytes"] for i in items)
+    if not args.yes:
+        print(f"\n{mt.human(total)} can go. Nothing removed: run again with --yes to remove it.")
+        return
+    r = mt.clean(cfg, items)
+    print(f"\nRemoved {len(r['removed'])} folder(s), {mt.human(r['bytes'])} freed.")
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="opmagent")
     p.add_argument("--version", action="version", version=__version__)
     p.add_argument("--config", help="path to opmagent.toml")
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("init-db", help="create the SQLite database and file store").set_defaults(fn=cmd_init_db)
+    x = sub.add_parser("backup", help="back up the database (a consistent copy) and the config, into one archive")
+    x.add_argument("--out", help="the folder for the archive (default: ~/.local/share/opmagent/backups)")
+    x.add_argument("--files", action="store_true", help="also the file store (without the views: remade when opened)")
+    x.set_defaults(fn=cmd_backup)
+    x = sub.add_parser("clean", help="list (and with --yes remove) failed runs' files, older unapproved imports, views")
+    x.add_argument("--runs", action="store_true", help="only the output folders of failed runs")
+    x.add_argument("--imports", action="store_true", help="only older imports none of whose models are approved")
+    x.add_argument("--views", action="store_true", help="only initialisation and static views (remade when opened)")
+    x.add_argument("--yes", action="store_true", help="remove them (without it: only list them)")
+    x.set_defaults(fn=cmd_clean)
     x = sub.add_parser("doctor", help="check prerequisites and the condition of each agent in the workspace")
     x.add_argument("--workspace", help="the agents workspace (default: the folder of the config, if setup made it)")
     x.add_argument("--deep", action="store_true", help="also start each MCP server over stdio and list its tools")

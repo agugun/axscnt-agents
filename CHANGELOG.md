@@ -55,6 +55,15 @@ No approvals are carried over. Design: [docs/design/res-model.md](docs/design/re
   for per-user application data, instead of `~/opmagent/open-data`: `tools/fetch_open_data.sh`, `tools/install.sh`,
   the testing scripts and the docs. To move an existing checkout: `mkdir -p ~/.local/share/opmagent &&
   mv ~/opmagent/open-data ~/.local/share/opmagent/` (the tests keep reading `OPM_TESTS_DIR`).
+- **`tools/install_resinsight.sh`**: the latest ResInsight release from GitHub (the el8 build, self-contained) into
+  `~/.local/opt/ResInsight`, or `/opt/ResInsight` and `/usr/local/bin/resinsight` with `SYSTEM=1`; a downloaded
+  archive, `VERSION=`, `BUILD=ubuntu`, `FORCE=1` (the old install kept as `.old`). `tools/install.sh` runs it when
+  ResInsight isn't found (`SKIP_RESINSIGHT=1`).
+- **`opmagent backup`**: a consistent copy of the database (SQLite online backup), the config and a manifest in one
+  archive under `~/.local/share/opmagent/backups`; `--files` adds the file store without the views.
+- **`opmagent clean`**: lists, then with `--yes` removes, failed runs' output folders, older imports none of whose
+  models are approved, and the initialisation and static views (remade when opened); shows the file store's size by
+  folder. Never outside the file store; the agents ask before running it (`ask` rule in `.claude/settings.json`).
 - **Upgrade path**: `tools/create_workspace.sh --update <workspace>` refreshes the agents, skills, MCP servers and
   CLAUDE.md after a `git pull`, keeping `opmagent.toml`, the database and the data. README "Upgrade".
 - **Default workspace**: the config is looked up in `--config`, `OPMAGENT_CONFIG`, `./opmagent.toml`, then
