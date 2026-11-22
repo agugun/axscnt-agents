@@ -223,6 +223,32 @@ def cmd_deck_build(args):
     raise SystemExit(0 if r.get("ok") else 2)
 
 
+def cmd_deck_init(args):
+    """The initialisation view of a deck: initial state and fluids in place at time zero (OPM Flow, no wells)."""
+    import json
+    from .core.errors import ToolError
+    from .deck.init_view import build_init_view
+    from .viewer import open_in_resinsight
+    cfg = cfgmod.load(args.config)
+    con = db.connect(cfg.database)
+    try:
+        r = build_init_view(cfg, con, args.deck_id)
+    except ToolError as e:
+        r = e.to_dict()
+    if r.get("ok") and args.open:
+        o = open_in_resinsight(cfg, case=r["egrid"])
+        r["spoken_summary"] += " " + o["spoken_summary"]
+    if args.json:
+        print(json.dumps(r, indent=2, default=str))
+    else:
+        print(r.get("spoken_summary") or r.get("message"))
+        for c in r.get("checks", []):
+            print(f"  [{c['status']}] {c['check']}: {c['detail']}")
+        for reg, v in sorted((r.get("regions") or {}).items(), key=lambda kv: int(kv[0])):
+            print(f"  region {reg}: " + ", ".join(f"{k} {x:,.6g}" for k, x in v.items()))
+    raise SystemExit(0 if r.get("ok") else 2)
+
+
 def cmd_deck_compare(args):
     """Are two decks the same simulation deck? Grid, tables, cell arrays and schedule, without running either."""
     import json
@@ -611,7 +637,14 @@ def _study_view(con, name, kinds, open_=False, cfg=None):
             views[-1]["resinsight"] = f"opmagent results open --geo {int(vid)}"
         if open_ and path:
             webbrowser.open(Path(path).as_uri())
-    return {"ok": all(v.get("qc_report") for v in views), "views": views}
+    did = (res.get("deck") or {}).get("deck_id")
+    if did:
+        from .deck.init_view import init_case
+        ic = init_case(cfg, con, int(did)) if cfg is not None else None
+        views.append({"kind": "deck", "deck_id": int(did), "qc_report": str(ic) if ic else None,
+                      "note": "" if ic else "no initialisation view yet: opmagent deck init " + str(did),
+                      "resinsight": f"opmagent results open --deck {int(did)} --init", "model": "initialisation view"})
+    return {"ok": all(v.get("qc_report") for v in views if v["kind"] != "deck"), "views": views}
 
 
 def _study_build(cfg, con, what, name):
@@ -767,7 +800,10 @@ def cmd_results(args):
     """Results viewer: open a run in ResInsight (grid, properties over time, summary vectors)."""
     from .viewer import open_in_resinsight
     cfg = cfgmod.load(args.config)
-    r = open_in_resinsight(cfg, run_id=args.run, study=args.study, case=args.case, geo=args.geo, dry_run=args.dry_run)
+    if args.init and args.deck is None:
+        raise SystemExit("--init needs --deck <deck id>")
+    r = open_in_resinsight(cfg, run_id=args.run, study=args.study, case=args.case, geo=args.geo,
+                           deck=args.deck if args.init or args.deck is not None else None, dry_run=args.dry_run)
     print(r["spoken_summary"])
     if args.dry_run and r.get("command"):
         print(" ".join(r["command"]))
@@ -867,6 +903,11 @@ def main(argv=None):
     x = dk.add_parser("build", help="build a deck from a JSON spec")
     x.add_argument("--spec", required=True)
     x.set_defaults(fn=cmd_deck_build)
+    x = dk.add_parser("init", help="initialisation view: the deck at time zero (initial state, fluids in place) for ResInsight")
+    x.add_argument("deck_id", type=int)
+    x.add_argument("--open", action="store_true", help="open it in ResInsight")
+    x.add_argument("--json", action="store_true")
+    x.set_defaults(fn=cmd_deck_init)
     x = dk.add_parser("compare", help="are two decks the same simulation deck? (parsed: grid, tables, arrays, schedule)")
     x.add_argument("original")
     x.add_argument("generated")
@@ -981,6 +1022,8 @@ def main(argv=None):
     x.add_argument("--study")
     x.add_argument("--case", help="an EGRID/.DATA path or a run folder")
     x.add_argument("--geo", type=int, help="a geo version id: its static view (grid and properties, no simulation)")
+    x.add_argument("--deck", type=int, help="a deck id: its initialisation view (the dynamic model at time zero)")
+    x.add_argument("--init", action="store_true", help="with --deck: the initialisation view (the default for --deck)")
     x.add_argument("--dry-run", action="store_true", help="print the command, don't start ResInsight")
     x.set_defaults(fn=cmd_results)
     gm = sub.add_parser("geo", help="geo modeler").add_subparsers(dest="gcmd", required=True)

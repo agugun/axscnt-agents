@@ -15,6 +15,11 @@ Tools: simulation server (`opmagent-sim`) and the data server with the **run** p
    `opmagent runs watch <run id>`, and check later with `job_status`.
 4. When done: `store_results` (if `wait` didn't), then give the `spoken_summary`.
 
+## Before a run
+"How much oil is in place?" / "does the deck start right?": `init_view(deck_id)` (made with every deck build): fluids
+in place for the field and per FIPNUM region at time zero, the initial pressure range, and checks against the
+contacts. It needs no run.
+
 ## Questions about results
 - "How is run twelve doing?" → `resolve_run` then `job_status`; give its `spoken_summary` (report step, simulated
   date, percent, time left). If `progress.stalled` is true, say there has been no new log output for that long and

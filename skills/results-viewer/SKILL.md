@@ -7,9 +7,10 @@ description: Open a finished simulation run in ResInsight (3D grid, properties o
 
 ## Tools
 - Data server, **view** profile: `study_status`, `start_task`, `complete_task`, `fail_task`, `list_decks`, `get_deck`,
-  `static_view`.
+  `static_view`, `init_view`.
 - Shell: `opmagent results open --study <name>` (the study's run), `--run <id>`, `--case <run folder or EGRID>`, or
-  `--geo <geo version id>` (its static view, made if needed); `--dry-run` prints the command without starting ResInsight.
+  `--geo <geo version id>` (its static view, made if needed), or `--deck <deck id> --init` (the deck at time zero);
+  `--dry-run` prints the command without starting ResInsight.
 
 ## Workflow
 1. In a study: `study_status(name)`; if the view task is ready, `start_task(name)`.
@@ -29,4 +30,11 @@ the grid and PORO, PERMX/Y/Z, NTG, PORV, DEPTH, transmissibilities and the regio
 res model's SATNUM, EQLNUM, FIPNUM and SWATINIT when a res model exists on that geo version). It works for drafts, so
 the engineer can look before approving. Point them to Cell Result (static properties, no time steps). Its deck has
 placeholder fluid tables only so OPM can load it: it is not a simulation deck, and never say it is.
+
+## A deck at time zero
+"Show the deck at time zero" / "how does the model start?": `opmagent results open --deck <deck id> --init`. It opens
+the initialisation view: the deck run for one tiny step without wells, so time step 0 is the initial state. Point
+them to PRESSURE, SWAT, SGAS and RS at step 0, and to EQLNUM / FIPNUM; the summary has FOIP, FGIP, FWIP and FPR at
+time zero. `init_view(deck_id)` gives the fluids in place per region and the checks against the contacts. It is not
+a run of the deck.
 

@@ -435,6 +435,14 @@ class DataService:
         res = latest_res_on(self.con, version_id) if include_res else None
         return build_static_view(self.cfg, self.con, version_id, res_version_id=res)
 
+    def init_view(self, deck_id: int) -> dict:
+        """The initialisation view of a built deck: the dynamic model (fluid, geo, res, well) at time zero, run in
+        OPM Flow without wells for one 1e-4 day step. Returns the fluids in place (field and per FIPNUM region), the
+        initial pressure range and checks against the res model's contacts (water below the OWC, no free gas below
+        the GOC). Open it with `opmagent results open --deck <deck_id> --init`. Never changes the deck."""
+        from ..deck.init_view import build_init_view
+        return build_init_view(self.cfg, self.con, deck_id)
+
     # ------------------------------------------------------------ reviewer (human only)
     def list_pending_reviews(self) -> dict:
         """List model versions waiting for review."""
@@ -483,13 +491,14 @@ TOOLS = {
     "well": COMMON + WRITER + STUDY + DATA_READ + FEEDBACK + QC_NOTEBOOKS,
     "res": COMMON + WRITER + STUDY + DATA_READ + FEEDBACK,
     "import": COMMON + WRITER,
-    "deck": COMMON + ["create_deck", "add_deck_file", "set_deck_status", "list_decks", "get_deck", "init_study"] + STUDY,
-    "run": COMMON + ["list_decks", "get_deck"] + STUDY,
+    "deck": COMMON + ["create_deck", "add_deck_file", "set_deck_status", "list_decks", "get_deck", "init_study",
+                      "init_view"] + STUDY,
+    "run": COMMON + ["list_decks", "get_deck", "init_view"] + STUDY,
     "data": COMMON + ["register_file", "load_study_data", "load_deck_data", "load_study_input"] + DATA_READ + STUDY,
-    "view": COMMON + ["list_decks", "get_deck", "static_view"] + STUDY,
+    "view": COMMON + ["list_decks", "get_deck", "static_view", "init_view"] + STUDY,
     "reviewer": COMMON + ["list_pending_reviews", "get_qc_report", "approve", "reject", "add_review_comment",
                           "get_review_feedback", "list_decks", "get_deck", "study_status", "list_studies",
-                          "study_data", "study_data_rows", "log_stats", "static_view"],
+                          "study_data", "study_data_rows", "log_stats", "static_view", "init_view"],
 }
 WRITE_TOOLS = (set(WRITER) | {"create_deck", "add_deck_file", "set_deck_status", "approve", "reject", "init_study",
                                "load_study_data", "load_deck_data", "load_study_input", "answer_review_feedback", "add_review_comment"}

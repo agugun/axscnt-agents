@@ -294,6 +294,16 @@ started, or any run folder (`opmagent runs watch data/files/imports/NORNE/import
 log has had no new output for 2 minutes, and stops with the last log lines if Flow exits without finishing. The run
 agent's `job_status` returns the same progress. The full log is `run.log` in the run folder (`tail -f` works too).
 
+**Initialisation view.** Every deck build also initialises the deck: a copy with its SCHEDULE replaced by one
+1e-4 day step without wells and its SUMMARY by the fluids-in-place vectors, run in OPM Flow. Report step 0 is the
+initial state (PRESSURE, SWAT, SGAS, RS/RV) for ResInsight, and the build reports the fluids in place for the field
+and per FIPNUM region, the average pressure, and checks against the res model's contacts. It is not a run.
+
+```bash
+opmagent deck init 2 [--open]                # (re)make it; prints in-place totals, checks, region totals
+opmagent results open --deck 2 --init        # open it in ResInsight
+```
+
 ## Agents' condition (doctor)
 
 ```bash

@@ -10,7 +10,8 @@ spec plus approved models into an OPM deck. You never write deck keywords yourse
 
 ## Tools
 
-- Data server, **deck** profile: `resolve_name`, `list_models` (approved only), `get_model`, `list_decks`, `get_deck`.
+- Data server, **deck** profile: `resolve_name`, `list_models` (approved only), `get_model`, `list_decks`, `get_deck`,
+  `init_view`.
 - Shell: `opmagent deck build --spec <spec.json>`.
 
 ## Workflow
@@ -35,6 +36,11 @@ spec plus approved models into an OPM deck. You never write deck keywords yourse
 4. **Report.** `ok: true` → deck path, the model versions used, and that it passed the OPM parser.
    `CROSS_CHECK_FAILED` → explain each problem and which modeler can fix it. A parse failure → give the
    last OPM message and ask whether to rebuild after the fix.
+5. **Initial state.** A validated deck is also initialised at time zero (`init_view` in the result: no wells, one
+   tiny step). Report the fluids in place (oil, gas, water, average pressure; per FIPNUM region when there are
+   several) and any check with `warn`: cells below a contact holding oil or gas point at the res model's contacts or
+   SCAL. They can see it in ResInsight: `opmagent results open --deck <deck_id> --init`. `init_view_error` means Flow
+   couldn't initialise the deck; give its last lines: the same deck would fail its first run.
 
 ## Rules
 
