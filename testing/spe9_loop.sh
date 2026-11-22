@@ -11,7 +11,7 @@
 #   NO_VIEWER=1    don't start ResInsight or the browser (print what would open)
 set -euo pipefail
 
-DECK="${1:-$HOME/opmagent/open-data/opm-tests/spe9/SPE9.DATA}"
+DECK="${1:-${XDG_DATA_HOME:-$HOME/.local/share}/opmagent/open-data/opm-tests/spe9/SPE9.DATA}"
 WS="${WS:-$(mktemp -d -t opmagent-spe9-loop-XXXX)/ws}"
 S1=SPE9_S1
 S2=SPE9_S2

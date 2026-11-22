@@ -99,7 +99,7 @@ BARSA.`, and only PASS lines from the check, ending `deck 1: opmagent results op
 
 **2.1 SPE9** (deck 2):
 ```bash
-D=~/opmagent/open-data/opm-tests/spe9/SPE9.DATA
+D=~/.local/share/opmagent/open-data/opm-tests/spe9/SPE9.DATA
 opmagent study init SPE9_IV --requirement "Initialisation view of SPE9"
 opmagent study task SPE9_IV data start
 opmagent data from-deck SPE9_IV $D
@@ -113,7 +113,7 @@ which SPE9 lacks) and expects PASS for every line.
 
 **2.2 Norne** (deck 3, a few minutes):
 ```bash
-N=~/opmagent/open-data/opm-tests/norne/NORNE_ATW2013.DATA
+N=~/.local/share/opmagent/open-data/opm-tests/norne/NORNE_ATW2013.DATA
 opmagent study init NORNE_IV --requirement "Initialisation view of Norne"
 opmagent study task NORNE_IV data start
 opmagent data from-deck NORNE_IV $N

@@ -1,7 +1,18 @@
+import os
+from pathlib import Path
+
 import pytest
 
+from opmagent.core import config as cfgmod
 from opmagent.core import db
 from opmagent.core.config import Config
+
+
+@pytest.fixture(autouse=True)
+def _no_default_workspace(monkeypatch):
+    """Tests never fall back to the user's real workspace (cwd or ~/.config/opmagent/opmagent.toml): a config is
+    passed explicitly, or comes from OPMAGENT_CONFIG set by the test."""
+    monkeypatch.setattr(cfgmod, "DEFAULT_PATHS", [Path(os.environ.get("OPMAGENT_CONFIG", ""))])
 
 
 @pytest.fixture

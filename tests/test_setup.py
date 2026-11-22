@@ -17,3 +17,17 @@ def test_setup_workspace(tmp_path):
     assert (ws / ".claude" / "skills" / "fluid-modeler" / "SKILL.md").exists()
     assert (ws / "data" / "opm.db").exists() and (ws / "data" / "files" / "inbox").is_dir()
     main(["setup", str(ws)])   # idempotent
+
+
+def test_setup_allows_opmagent_and_the_workspace_servers_never_the_reviewer(tmp_path):
+    ws = tmp_path / "ws"
+    (ws / ".claude").mkdir(parents=True)
+    (ws / ".claude" / "settings.json").write_text(json.dumps({"permissions": {"allow": ["Bash(ls:*)"]}, "x": 1}))
+    main(["setup", str(ws)])
+    main(["setup", str(ws)])   # again: no duplicates
+    s = json.loads((ws / ".claude" / "settings.json").read_text())
+    allow = s["permissions"]["allow"]
+    assert s["x"] == 1 and allow[0] == "Bash(ls:*)"            # what was there is kept
+    assert "Bash(opmagent:*)" in allow and "mcp__opm-data-fluid" in allow and "mcp__opm-sim" in allow
+    assert len(allow) == len(set(allow))
+    assert not any("reviewer" in a for a in allow)

@@ -41,8 +41,11 @@ tools/create_workspace.sh ~/opm-agents   # the agents' workspace, checked with o
 
 - `tools/install.sh` (safe to run again): `sudo apt` installs Python venv, git, Java 17 (NeqSim) and gdb, and OPM
   Flow from the OPM packages (skipped if `flow` is already there); creates `.venv` and runs
-  `pip install -e ".[dev,geo,opm]"`; fetches SPE1, SPE9 and Norne into `~/opmagent/open-data` (`tools/fetch_open_data.sh`).
-  `SKIP_APT=1` (no sudo), `SKIP_DATA=1`, `RUN_TESTS=1` (the test suite at the end), `PYTHON=<python 3.11+>`.
+  `pip install -e ".[dev,geo,opm]"`; fetches SPE1, SPE9 and Norne into `~/.local/share/opmagent/open-data` (`tools/fetch_open_data.sh`).
+  The venv is made from the system `/usr/bin/python3` (a conda or pyenv Python breaks the venv when it's updated);
+  `opmagent` is linked into `~/.local/bin`, so it works without activating the venv.
+  `SKIP_APT=1` (no sudo), `SKIP_DATA=1`, `RUN_TESTS=1` (the test suite at the end), `PYTHON=<python 3.11+>`,
+  `NO_LINK=1`.
 - `tools/create_workspace.sh [folder]` (default `~/opm-agents`; the folder must not exist yet): `opmagent setup`
   (config, database, file store, `.mcp.json`, `.claude/agents` and skills, `CLAUDE.md`, `reviewer-mcp.json`), then
   `opmagent doctor` and `opmagent hello`. `AUTO_APPROVE=1` (models that pass their validator are approved; hello then
@@ -51,6 +54,23 @@ tools/create_workspace.sh ~/opm-agents   # the agents' workspace, checked with o
   `opmagent review approve-hello` (you type `approve`), then `opmagent hello` again. On a new workspace the doctor warns
   "server not approved" for every agent until Claude Code approves the servers at its first start (it asks once per
   server), or `APPROVE_SERVERS=1` approves them up front.
+- The first workspace becomes the **default workspace**: `~/.config/opmagent/opmagent.toml` links to its config, so
+  `opmagent` works on it from any folder (the config is found from `--config`, then `OPMAGENT_CONFIG`, then
+  `opmagent.toml` in the current folder, then the default). A later workspace leaves the link as it is
+  (`NO_DEFAULT=1` skips it); `opmagent doctor` says which config it uses and why.
+- `opmagent setup` writes `.claude/settings.json` allowing `opmagent` commands and the workspace's MCP tools, so the
+  agents don't ask for each call. The reviewer is never allowed: approvals stay with you.
+
+### Upgrade
+
+```bash
+cd ~/repo/axscnt-agents && git pull
+tools/install.sh                                # new dependencies (SKIP_APT=1 SKIP_DATA=1 to skip the rest)
+tools/create_workspace.sh --update ~/opm-agents  # new agents, skills, MCP servers and CLAUDE.md
+```
+
+`--update` keeps `opmagent.toml`, the database and the data; restart Claude Code in the workspace afterwards. To
+rebuild the venv (e.g. a new Python), remove `.venv` and run `tools/install.sh` again.
 
 The same by hand:
 
@@ -64,10 +84,10 @@ sudo apt install -y mpi-default-bin libopm-simulators-bin
 # project
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev,geo,opm]"     # opm + opm-simulators wheels: parser and simulator bindings
-tools/fetch_open_data.sh            # SPE1, SPE9, Norne into ~/opmagent/open-data
+tools/fetch_open_data.sh            # SPE1, SPE9, Norne into ~/.local/share/opmagent/open-data
 pytest -q                           # scratch databases; nothing to configure
-OPM_TESTS_DIR=~/opmagent/open-data/opm-tests pytest -q             # also the SPE1/SPE9 round trips
-OPMAGENT_SLOW=1 OPM_TESTS_DIR=~/opmagent/open-data/opm-tests pytest -q -k norne   # Norne (~20 min)
+OPM_TESTS_DIR=~/.local/share/opmagent/open-data/opm-tests pytest -q             # also the SPE1/SPE9 round trips
+OPMAGENT_SLOW=1 OPM_TESTS_DIR=~/.local/share/opmagent/open-data/opm-tests pytest -q -k norne   # Norne (~20 min)
 
 # the agents' workspace (MCP servers, agents, skills, config, database)
 opmagent setup ~/opm-agents
@@ -123,7 +143,7 @@ opmagent review feedback --all         # comments and answers
 
 # the reverse process: a study that rebuilds an existing deck
 opmagent study init SPE9_RB --requirement "rebuild SPE9"
-opmagent data from-deck SPE9_RB ~/opmagent/open-data/opm-tests/spe9/SPE9.DATA   # tables -> database, arrays -> files
+opmagent data from-deck SPE9_RB ~/.local/share/opmagent/open-data/opm-tests/spe9/SPE9.DATA   # tables -> database, arrays -> files
 opmagent study build geo SPE9_RB --complete   # likewise fluid, then res and well (after geo), then deck: the deck's data as given
 opmagent study view SPE9_RB --open     # each model's QC report (PVT curves, layer maps, SCAL and contacts, wells), no simulation
 opmagent study init SPE9_B --requirement "rebuild SPE9 from SPE9_RB's input"

@@ -6,11 +6,21 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
+USER_CONFIG = Path.home() / ".config" / "opmagent" / "opmagent.toml"   # the default workspace (create_workspace.sh links it)
 DEFAULT_PATHS = [
     Path(os.environ.get("OPMAGENT_CONFIG", "")),
     Path.cwd() / "opmagent.toml",
-    Path.home() / ".config" / "opmagent" / "opmagent.toml",
+    USER_CONFIG,
 ]
+
+
+def _candidates(path) -> list[Path]:
+    if path:
+        return [Path(path)]
+    if DEFAULT_PATHS and DEFAULT_PATHS[-1] == USER_CONFIG:   # read OPMAGENT_CONFIG and the cwd now, not at import
+        return [p for p in (Path(os.environ.get("OPMAGENT_CONFIG", "")), Path.cwd() / "opmagent.toml", USER_CONFIG)
+                if str(p) not in ("", ".")]
+    return [p for p in DEFAULT_PATHS if str(p) not in ("", ".")]
 
 
 @dataclass
@@ -47,13 +57,11 @@ def _expand(p: str | None) -> Path | None:
 
 def find_path(path: str | os.PathLike | None = None) -> Path | None:
     """The config file load() would read, or None."""
-    candidates = [Path(path)] if path else [p for p in DEFAULT_PATHS if str(p)]
-    return next((p.resolve() for p in candidates if p.is_file()), None)
+    return next((p.resolve() for p in _candidates(path) if p.is_file()), None)
 
 
 def load(path: str | os.PathLike | None = None) -> Config:
-    candidates = [Path(path)] if path else [p for p in DEFAULT_PATHS if str(p)]
-    for p in candidates:
+    for p in _candidates(path):
         if p.is_file():
             data = tomllib.loads(p.read_text())
             break
