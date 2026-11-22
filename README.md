@@ -31,36 +31,56 @@ Design: see the architecture and user-guide docs (links in `docs/README.md`).
 
 ## Laptop setup (Ubuntu)
 
+Two scripts do it, from a clone of this repo:
+
+```bash
+git clone https://github.com/agugun/axscnt-agents.git && cd axscnt-agents
+tools/install.sh                     # system packages and OPM Flow (sudo), .venv with opmagent, the open test decks
+tools/create_workspace.sh ~/opm-agents   # the agents' workspace, checked with opmagent doctor, then hello
+```
+
+- `tools/install.sh` (safe to run again): `sudo apt` installs Python venv, git, Java 17 (NeqSim) and gdb, and OPM
+  Flow from the OPM packages (skipped if `flow` is already there); creates `.venv` and runs
+  `pip install -e ".[dev,geo,opm]"`; fetches SPE1, SPE9 and Norne into `~/opmagent/open-data` (`tools/fetch_open_data.sh`).
+  `SKIP_APT=1` (no sudo), `SKIP_DATA=1`, `RUN_TESTS=1` (the test suite at the end), `PYTHON=<python 3.11+>`.
+- `tools/create_workspace.sh [folder]` (default `~/opm-agents`; the folder must not exist yet): `opmagent setup`
+  (config, database, file store, `.mcp.json`, `.claude/agents` and skills, `CLAUDE.md`, `reviewer-mcp.json`), then
+  `opmagent doctor` and `opmagent hello`. `AUTO_APPROVE=1` (models that pass their validator are approved; hello then
+  runs to the end), `APPROVE_SERVERS=1` (pre-approve the MCP servers for Claude Code), `RESINSIGHT=<launcher>` (if it
+  isn't on PATH or in `/opt/ResInsight`), `SKIP_HELLO=1`. Without auto-approve, hello stops for your review:
+  `opmagent review approve-hello` (you type `approve`), then `opmagent hello` again. On a new workspace the doctor warns
+  "server not approved" for every agent until Claude Code approves the servers at its first start (it asks once per
+  server), or `APPROVE_SERVERS=1` approves them up front.
+
+The same by hand:
+
 ```bash
 # prerequisites
 sudo apt update
 sudo apt install -y python3-venv python3-pip git openjdk-17-jdk gdb software-properties-common
 sudo apt-add-repository ppa:opm/ppa && sudo apt update
-sudo apt install -y mpi-default-bin libopm-simulators-bin python3-opm-simulators
+sudo apt install -y mpi-default-bin libopm-simulators-bin
 
 # project
-git clone https://github.com/agugun/axscnt-agents.git && cd axscnt-agents
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev,geo,opm]"     # opm + opm-simulators wheels: parser and simulator bindings
-cp opmagent.example.toml opmagent.toml      # edit paths
-opmagent init-db
-opmagent doctor
-pytest -q
-# with the open decks (tools/fetch_open_data.sh): SPE1/SPE9 round trips too; OPMAGENT_SLOW=1 adds Norne (~10 min)
-OPM_TESTS_DIR=~/opmagent/open-data/opm-tests pytest -q
-OPMAGENT_SLOW=1 OPM_TESTS_DIR=~/opmagent/open-data/opm-tests pytest -q -k norne
+tools/fetch_open_data.sh            # SPE1, SPE9, Norne into ~/opmagent/open-data
+pytest -q                           # scratch databases; nothing to configure
+OPM_TESTS_DIR=~/opmagent/open-data/opm-tests pytest -q             # also the SPE1/SPE9 round trips
+OPMAGENT_SLOW=1 OPM_TESTS_DIR=~/opmagent/open-data/opm-tests pytest -q -k norne   # Norne (~20 min)
 
-# create the agents workspace (MCP servers, agents, skills, config, database)
+# the agents' workspace (MCP servers, agents, skills, config, database)
 opmagent setup ~/opm-agents
 cd ~/opm-agents
-
-# end-to-end check
+opmagent doctor                      # prerequisites and every agent
 opmagent hello                       # builds the 4 demo models, waits for you
 opmagent review approve-hello        # you approve (interactive: type 'approve')
-opmagent hello                       # builds the HELLO deck, parses it with OPM, runs it 5 years
+opmagent hello                       # builds the HELLO deck, initialises it, parses it with OPM, runs it 5 years
 
-# testing scenario: the SPE9 reverse loop in a fresh temporary workspace (about 30 s; see testing/)
-NO_VIEWER=1 testing/spe9_loop.sh     # from the repo; prints PASS SPE9 reverse loop
+# testing scenarios, from the repo, each in a fresh temporary workspace (see testing/)
+NO_VIEWER=1 testing/spe9_loop.sh     # SPE9 reverse loop, about 30 s
+NO_VIEWER=1 testing/geo_static_view.sh   # geo static view, about 25 s
+NO_VIEWER=1 testing/init_view.sh     # initialisation view, about 45 s
 ```
 
 Then start Claude Code in `~/opm-agents`: the agents (`.claude/agents/`), skills and MCP servers are picked up
@@ -71,8 +91,9 @@ after the first start.
 Open test decks: `tools/fetch_open_data.sh` (SPE1, SPE9, Norne from opm-tests, ODbL). Volve must be
 downloaded from Equinor's portal (Equinor Open Data Licence).
 
-The OPM Flow binary from the OPM package archive (`libopm-simulators-bin`) is optional: the runner uses
-`flow` when it's on PATH, otherwise the `opm.simulators` Python bindings.
+The OPM Flow binary from the OPM package archive (`libopm-simulators-bin`) is recommended: runs use `flow` when it's
+on PATH, otherwise the `opm.simulators` Python bindings, but the geo static view and the deck initialisation view
+need the `flow` binary.
 
 ## Studies
 
