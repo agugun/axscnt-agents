@@ -3,14 +3,20 @@
 # CLAUDE.md, and the reviewer server for your own client (reviewer-mcp.json). Then check it and run hello.
 #
 # Usage: tools/create_workspace.sh [workspace]          (default: ~/opm-agents; must not exist yet)
+#        tools/create_workspace.sh --update [workspace]  after a git pull: refresh the agents, skills, MCP servers
+#                                                         and CLAUDE.md; keeps opmagent.toml, the database and the data
 #   AUTO_APPROVE=1     approve models that pass their validator ([study] auto_approve = true); default: you approve
 #   RESINSIGHT=<path>  the ResInsight launcher, if it isn't on PATH, in /opt/ResInsight or ~/.local/opt/ResInsight
 #   SKIP_HELLO=1       don't run hello (the end-to-end check)
 #   APPROVE_SERVERS=1  pre-approve the workspace's MCP servers for Claude Code (.claude/settings.local.json);
 #                      otherwise Claude Code asks once per server at its first start
+#   NO_DEFAULT=1       don't make it the default workspace (~/.config/opmagent/opmagent.toml links to its config, so
+#                      opmagent works on it from any folder; set only when no default exists yet)
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
+UPDATE=""
+if [ "${1:-}" = "--update" ]; then UPDATE=1; shift; fi
 WS="${1:-$HOME/opm-agents}"
 WS="${WS/#\~/$HOME}"
 
@@ -22,8 +28,19 @@ die()  { printf '\033[31mFAIL\033[0m %s\n' "$*"; exit 1; }
 [ -x "$REPO/.venv/bin/opmagent" ] || die "opmagent isn't installed in $REPO/.venv: run $REPO/tools/install.sh first"
 # shellcheck disable=SC1091
 source "$REPO/.venv/bin/activate"
+if [ -n "$UPDATE" ]; then
+  [ -f "$WS/opmagent.toml" ] || die "$WS has no opmagent.toml: not a workspace (create it without --update)"
+  step "Update workspace: $WS"
+  opmagent setup "$WS"                       # keeps opmagent.toml (and so the database and data)
+  export OPMAGENT_CONFIG="$WS/opmagent.toml"
+  step "Check (opmagent doctor)"
+  opmagent doctor || true
+  printf '\nWorkspace updated: %s (agents, skills, MCP servers, CLAUDE.md; opmagent.toml and the data kept).\n' "$WS"
+  printf 'Restart Claude Code in it so the agents pick up the new skills and tools.\n'
+  exit 0
+fi
 if [ -e "$WS" ] && [ -n "$(ls -A "$WS" 2>/dev/null)" ]; then
-  die "$WS already exists and isn't empty: move it aside (e.g. mv $WS $WS.old) or pick another folder"
+  die "$WS already exists and isn't empty: move it aside (e.g. mv $WS $WS.old) or pick another folder, or --update it"
 fi
 
 step "Workspace: $WS"
@@ -50,6 +67,17 @@ s["enabledMcpjsonServers"] = sorted(set(s.get("enabledMcpjsonServers", [])) | se
 p.write_text(json.dumps(s, indent=2) + "\n")
 print(f"ok   MCP servers pre-approved for Claude Code: {', '.join(servers)}")
 PY
+fi
+DEFAULT="$HOME/.config/opmagent/opmagent.toml"
+if [ -z "${NO_DEFAULT:-}" ]; then
+  if [ ! -e "$DEFAULT" ] && [ ! -L "$DEFAULT" ]; then
+    mkdir -p "$(dirname "$DEFAULT")"
+    ln -s "$TOML" "$DEFAULT"
+    ok "default workspace: $DEFAULT -> $TOML (opmagent works on it from any folder)"
+  else
+    printf '     default workspace unchanged: %s -> %s\n' "$DEFAULT" "$(readlink -f "$DEFAULT")"
+    printf '     (to make this one the default: ln -sf %s %s)\n' "$TOML" "$DEFAULT"
+  fi
 fi
 export OPMAGENT_CONFIG="$TOML"
 

@@ -51,6 +51,19 @@ No approvals are carried over. Design: [docs/design/res-model.md](docs/design/re
   (deck, run, view, reviewer); `study view` lists it. Testing scenario `testing/init-view.md` (+ `init_view.sh`,
   `init_view_check.py`): hello, then SPE9 and Norne rebuilt through studies, whose initial state equals their own
   decks' (Norne: all 16 regions).
+- **Open test decks in `~/.local/share/opmagent/open-data`** (`$XDG_DATA_HOME/opmagent/open-data`), the standard place
+  for per-user application data, instead of `~/opmagent/open-data`: `tools/fetch_open_data.sh`, `tools/install.sh`,
+  the testing scripts and the docs. To move an existing checkout: `mkdir -p ~/.local/share/opmagent &&
+  mv ~/opmagent/open-data ~/.local/share/opmagent/` (the tests keep reading `OPM_TESTS_DIR`).
+- **Upgrade path**: `tools/create_workspace.sh --update <workspace>` refreshes the agents, skills, MCP servers and
+  CLAUDE.md after a `git pull`, keeping `opmagent.toml`, the database and the data. README "Upgrade".
+- **Default workspace**: the config is looked up in `--config`, `OPMAGENT_CONFIG`, `./opmagent.toml`, then
+  `~/.config/opmagent/opmagent.toml`; `create_workspace.sh` links the latter to the new workspace's config when no
+  default exists (`NO_DEFAULT=1` skips it). `opmagent doctor` says which config it uses and why.
+- **Permissions**: `opmagent setup` writes `.claude/settings.json` allowing `Bash(opmagent:*)` and the workspace's
+  MCP servers (merged with what is there); the reviewer is never allowed.
+- **`tools/install.sh`** makes the venv from `/usr/bin/python3` by default and links `~/.local/bin/opmagent` to it
+  (`NO_LINK=1` skips it; an existing file that isn't a link is left alone).
 - **ResInsight outside the workspace**: without `[viewer] resinsight_bin`, the viewer looks on PATH (`resinsight`,
   `ResInsight`), then in `/opt/ResInsight` and `~/.local/opt/ResInsight`; `opmagent setup` no longer looks inside the
   workspace, and `opmagent doctor` shows where ResInsight is. README: install it in `/opt/ResInsight`, with a wrapper in

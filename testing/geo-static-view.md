@@ -111,7 +111,7 @@ arrays, grid 10 x 10 x 5, 500 of 500 cells active, INIT PORO / PERMX / NTG equal
 
 **2.1 SPE9 into a study, geo and res built.**
 ```bash
-D=~/opmagent/open-data/opm-tests/spe9/SPE9.DATA
+D=~/.local/share/opmagent/open-data/opm-tests/spe9/SPE9.DATA
 opmagent study init SPE9_GV --requirement "Static view of SPE9"
 opmagent study task SPE9_GV data start
 opmagent data from-deck SPE9_GV $D
@@ -131,7 +131,7 @@ It dry-runs a copy of SPE9's folder (adding `INIT` after `GRID`, which SPE9 lack
 
 **2.3 Norne.** It becomes geo version 3 (part 3 opens it as `--geo 3`).
 ```bash
-N=~/opmagent/open-data/opm-tests/norne/NORNE_ATW2013.DATA
+N=~/.local/share/opmagent/open-data/opm-tests/norne/NORNE_ATW2013.DATA
 opmagent study init NORNE_GV --requirement "Static view of Norne"
 opmagent study task NORNE_GV data start
 opmagent data from-deck NORNE_GV $N

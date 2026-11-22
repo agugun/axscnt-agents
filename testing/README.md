@@ -21,7 +21,7 @@ through the steps an engineer takes, and show the results you can look at (QC re
 2. **OPM Flow** on `PATH` (`flow --version`). `opmagent doctor` checks the rest.
 3. **Open decks** (SPE1, SPE9, Norne from OPM's opm-tests):
    ```bash
-   tools/fetch_open_data.sh          # into ~/opmagent/open-data/opm-tests/
+   tools/fetch_open_data.sh          # into ~/.local/share/opmagent/open-data/opm-tests/
    ```
 4. **ResInsight**, to look at runs. Optional; the scenarios say what to do without it.
 5. **A workspace just for testing**, so the test studies stay out of your real one:

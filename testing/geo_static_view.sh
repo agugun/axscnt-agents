@@ -7,7 +7,7 @@
 #   part 3 (viewer):   each static view opens in ResInsight
 #
 # Usage: testing/geo_static_view.sh
-#   OPM_TESTS=<dir>    opm-tests checkout (default: ~/opmagent/open-data/opm-tests)
+#   OPM_TESTS=<dir>    opm-tests checkout (default: ~/.local/share/opmagent/open-data/opm-tests)
 #   WS=<dir>           workspace to create (default: a new temporary folder); must not exist yet
 #   RESINSIGHT=<path>  the ResInsight launcher (default: found on PATH or in /opt/ResInsight)
 #   NO_VIEWER=1        don't start ResInsight (print what would open)
@@ -16,7 +16,7 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 CHECK="python3 $HERE/geo_static_check.py"
-OPM_TESTS="${OPM_TESTS:-$HOME/opmagent/open-data/opm-tests}"
+OPM_TESTS="${OPM_TESTS:-${XDG_DATA_HOME:-$HOME/.local/share}/opmagent/open-data/opm-tests}"
 WS="${WS:-$(mktemp -d -t opmagent-geo-view-XXXX)/ws}"
 FAILS=0
 

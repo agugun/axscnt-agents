@@ -4,14 +4,19 @@
 #
 # Usage: tools/install.sh
 #   SKIP_APT=1        skip the system packages and OPM Flow (no sudo); the rest still runs
-#   SKIP_DATA=1       don't fetch the open decks (SPE1, SPE9, Norne) into ~/opmagent/open-data
+#   SKIP_DATA=1       don't fetch the open decks (SPE1, SPE9, Norne) into ~/.local/share/opmagent/open-data
 #   RUN_TESTS=1       run the test suite at the end (about 7 min; with the open decks, also SPE1/SPE9 round trips)
-#   PYTHON=<python>   the interpreter for the virtual environment (default: python3; needs 3.11 or newer)
+#   PYTHON=<python>   the interpreter for the virtual environment (default: the system's /usr/bin/python3, else
+#                     python3 on PATH; needs 3.11 or newer). An existing .venv is kept: remove it to rebuild.
+#   NO_LINK=1         don't link opmagent into ~/.local/bin (then activate .venv to use it)
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
-PYTHON="${PYTHON:-python3}"
-OPEN_DATA="$HOME/opmagent/open-data"
+# the system Python by default: a venv made from a conda or pyenv Python breaks when that Python is updated or removed
+if [ -z "${PYTHON:-}" ]; then
+  if [ -x /usr/bin/python3 ]; then PYTHON=/usr/bin/python3; else PYTHON=python3; fi
+fi
+OPEN_DATA="${XDG_DATA_HOME:-$HOME/.local/share}/opmagent/open-data"
 
 step() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 ok()   { printf '\033[32mok\033[0m   %s\n' "$*"; }
@@ -46,7 +51,20 @@ step "Virtual environment: $REPO/.venv"
 source "$REPO/.venv/bin/activate"
 python -m pip install -q --upgrade pip
 python -m pip install -q -e "$REPO[dev,geo,opm]"     # neqsim, mcp, lasio, gstools, opm, opm-simulators, nbclient ...
-ok "opmagent $(opmagent --version 2>&1 | awk '{print $NF}') in $REPO/.venv ($(python --version))"
+ok "opmagent $(opmagent --version 2>&1 | awk '{print $NF}') in $REPO/.venv ($(python --version), from $(sed -n 's/^home = //p' "$REPO/.venv/pyvenv.cfg"))"
+
+# ------------------------------------------------------------------ opmagent on PATH
+if [ -z "${NO_LINK:-}" ]; then
+  BIN="$HOME/.local/bin"
+  mkdir -p "$BIN"
+  if [ -e "$BIN/opmagent" ] && [ ! -L "$BIN/opmagent" ]; then
+    warn "$BIN/opmagent exists and isn't a link: left as it is"
+  else
+    ln -sfn "$REPO/.venv/bin/opmagent" "$BIN/opmagent"
+    ok "opmagent on PATH: $BIN/opmagent -> $REPO/.venv/bin/opmagent"
+    case ":$PATH:" in *":$BIN:"*) ;; *) warn "$BIN isn't on PATH: add it (e.g. in ~/.profile), or activate .venv" ;; esac
+  fi
+fi
 
 # ------------------------------------------------------------------ open test decks
 if [ -z "${SKIP_DATA:-}" ]; then
@@ -69,6 +87,6 @@ fi
 cat <<EOF
 
 Installed. Next:
-  source $REPO/.venv/bin/activate
-  $REPO/tools/create_workspace.sh ~/opm-agents        # the agents' workspace
+  $REPO/tools/create_workspace.sh ~/opm-agents        # the agents' workspace (a new one)
+  $REPO/tools/create_workspace.sh --update ~/opm-agents   # or: refresh an existing one after an upgrade
 EOF

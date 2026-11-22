@@ -73,6 +73,19 @@ def _resinsight_line() -> str:
     return '# resinsight_bin = "/opt/ResInsight/bin/resinsight"   # not found: install ResInsight there, or set this'
 
 
+def _permissions(ws: Path, servers: dict) -> Path:
+    """.claude/settings.json: allow the agents' own commands without a prompt each time: `opmagent ...` in Bash and the
+    workspace's MCP servers. Kept: what the user added there. Never the reviewer server (it isn't in .mcp.json), and
+    approving or rejecting still needs a person typing at an interactive terminal."""
+    p = ws / ".claude" / "settings.json"
+    s = json.loads(p.read_text()) if p.is_file() else {}
+    perms = s.setdefault("permissions", {})
+    want = ["Bash(opmagent:*)"] + [f"mcp__{name}" for name in sorted(servers) if "reviewer" not in name]
+    perms["allow"] = list(dict.fromkeys(list(perms.get("allow", [])) + want))
+    p.write_text(json.dumps(s, indent=2) + "\n")
+    return p
+
+
 def _bin(name: str) -> str:
     cand = Path(sys.executable).parent / name
     return str(cand) if cand.exists() else name
@@ -160,5 +173,6 @@ Run `opmagent` commands with `--config {c}` if the working directory isn't the w
             dst.mkdir(exist_ok=True)
             shutil.copy2(sk / "SKILL.md", dst / "SKILL.md")
     (ws / "CLAUDE.md").write_text(CLAUDE_MD.format(agents="\n".join(lines)))
+    created.append(str(_permissions(ws, servers)))
     created += [str(agents_dir), str(skills_dir), str(ws / "CLAUDE.md")]
     return {"workspace": str(ws), "config": c, "created": created, "servers": sorted(servers), "reviewer": str(ws / "reviewer-mcp.json")}

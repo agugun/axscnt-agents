@@ -37,7 +37,12 @@ def cmd_doctor(args):
     cfg = None
     try:
         cfg = cfgmod.load(args.config)
-        print(f"[ok]   config: database={cfg.database}")
+        cp = cfgmod.find_path(args.config)
+        import os
+        why = ("--config" if args.config else "OPMAGENT_CONFIG" if os.environ.get("OPMAGENT_CONFIG") else
+               "the default workspace, ~/.config/opmagent/opmagent.toml" if cp and cfgmod.USER_CONFIG.is_file()
+               and cp == cfgmod.USER_CONFIG.resolve() else "this folder")
+        print(f"[ok]   config: database={cfg.database}  ({cp}, from {why})")
     except Exception as e:  # noqa: BLE001
         ok = False
         print(f"[FAIL] config: {e}")

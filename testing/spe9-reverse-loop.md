@@ -55,11 +55,11 @@ are tested elsewhere, in `tests/` and in studies built from raw data.
 ## Before you start
 
 Follow [testing/README.md](README.md#before-any-scenario): opmagent, Flow, the SPE9 deck, a testing workspace.
-The deck is at `~/opmagent/open-data/opm-tests/spe9/SPE9.DATA`. The steps below write it as `$DECK`:
+The deck is at `~/.local/share/opmagent/open-data/opm-tests/spe9/SPE9.DATA`. The steps below write it as `$DECK`:
 
 ```bash
 export OPMAGENT_CONFIG=~/opmagent-testing/opmagent.toml
-DECK=~/opmagent/open-data/opm-tests/spe9/SPE9.DATA
+DECK=~/.local/share/opmagent/open-data/opm-tests/spe9/SPE9.DATA
 ```
 
 If the studies `SPE9_S1` and `SPE9_S2` already exist in that workspace from an earlier test, use new names, e.g.
@@ -249,7 +249,7 @@ Scenario 2 passes when 2.4 and 2.6 both print `same` for every level.
 Same loop, with the agents doing each step. Start `claude` in your testing workspace and talk to the coordinator
 (the `study` skill):
 
-1. *"Make a study SPE9_S1 from `~/opmagent/open-data/opm-tests/spe9/SPE9.DATA`. Build the models but don't build a deck or run anything."*
+1. *"Make a study SPE9_S1 from `~/.local/share/opmagent/open-data/opm-tests/spe9/SPE9.DATA`. Build the models but don't build a deck or run anything."*
    The coordinator reads back the name and the deck. After your "yes":
    - the data manager runs `load_deck_data`, a check first
    - the modelers build: fluid and geo, then well
