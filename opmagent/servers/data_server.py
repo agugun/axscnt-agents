@@ -25,7 +25,8 @@ from ..notebooks import runner
 PROFILES = ("fluid", "geo", "res", "well", "import", "deck", "run", "data", "view", "hm", "reviewer")
 MODELER_KIND = {"fluid": "fluid", "geo": "geo", "res": "res", "well": "well"}
 READS = {"res": {"res", "geo"}}   # a modeler reads its own kind; the res modeler also reads the geo grid it builds on
-STUDY_TASK = {p: p for p in ("data", "fluid", "geo", "res", "well", "deck", "run", "view")}   # profile -> its study task
+STUDY_TASK = {**{p: p for p in ("data", "fluid", "geo", "res", "well", "deck", "run", "view")},
+              "hm": "match"}   # profile -> its study task
 AUTO_REVIEWER = "auto (approval disabled)"
 
 
@@ -238,6 +239,9 @@ class DataService:
     def raise_request(self, name: str, to_task: str, kind: str, message: str) -> dict:
         """Ask another task for something: kind missing_data, improve_data or question; to_task is usually 'data'.
         Your task is blocked until the request is resolved."""
+        if kind == "match":
+            raise ToolError(FORBIDDEN, "match requests are raised when the engineer accepts a match proposal "
+                                       "(opmagent review hm accept), not by an agent")
         st = studies.raise_request(self.con, name, self._my_task(), to_task, kind, message, actor=self.profile)
         st["spoken_summary"] = (f"Request {st['request_id']} sent to {to_task} ({studies.AGENT[to_task]}); "
                                 f"{self._my_task()} waits for it.")
@@ -516,10 +520,9 @@ TOOLS = {
     "run": COMMON + ["list_decks", "get_deck", "init_view"] + STUDY,
     "data": COMMON + ["register_file", "load_study_data", "load_deck_data", "load_study_input"] + DATA_READ + STUDY,
     "view": COMMON + ["list_decks", "get_deck", "static_view", "init_view"] + STUDY,
-    # history matcher: reads every model, the decks and the study data; writes nothing here (its tables are the
-    # HM server's). The study task 'match' and its requests come with the match proposals (phase 3).
-    "hm": COMMON + ["list_decks", "get_deck", "init_view", "study_status", "list_studies", "study_data",
-                    "study_data_rows"],
+    # history matcher: reads every model, the decks and the study data, and runs the study's match task; its own
+    # tables are the HM server's. The requests to the modelers are raised when the engineer accepts a proposal.
+    "hm": COMMON + ["list_decks", "get_deck", "init_view", "study_data", "study_data_rows"] + STUDY,
     "reviewer": COMMON + ["list_pending_reviews", "get_qc_report", "approve", "reject", "add_review_comment",
                           "accept_init_view", "reject_init_view",
                           "get_review_feedback", "list_decks", "get_deck", "study_status", "list_studies",

@@ -55,7 +55,15 @@ A's input (`load_study_input`)". The rest is as above. This is scenario 2 of `te
    the data task to the **data-manager** with the request text. If it needs something only the engineer has,
    ask the engineer, wait for the file, then hand it back. When the request is resolved the asking task is
    ready again: hand it back to its agent.
-5. **Approval.** If an agent reports its model is waiting for review, approval is on
+5. **History match (optional).** After the run, `match` is ready too (agent: **history-matcher**). Hand it over only
+   when the engineer wants the model matched to history; a study completes without it if it is never started. The
+   matcher sets up parameters (read back to the engineer), runs sensitivities and the search, and proposes values.
+   The engineer decides: `opmagent review hm show <proposal>`, then `accept` or `reject --comment`. Accepting raises
+   one request per owner (geo, res) from the match task: hand those tasks to their modelers with the request text,
+   then the deck (rebuild with the new versions) and the run. Then hand `match` back: the matcher confirms that the
+   new run equals its proposal (`hm_confirm`) and completes the task. A study with no production history: the
+   matcher completes `match` as skipped.
+6. **Approval.** If an agent reports its model is waiting for review, approval is on
    (`[study] auto_approve = false`): tell the engineer to approve it (`opmagent review list`, then
    `opmagent review approve <kind> <id>`), and hand the task back afterwards so the agent can complete it.
 6. **Review feedback.** The engineer can comment on any model version (`opmagent review comment <kind> <id>

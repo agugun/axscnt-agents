@@ -7,8 +7,8 @@ description: Compare a run's simulated history with the measured history (misfit
 
 Tools: the HM server (`opm-hm`) and the data server with the **hm** profile (read only: models, decks, study data).
 You never edit a model, a deck or a run. Variants are the approved deck with parameter values applied in memory;
-they write no model version and are "not for decisions". Changes to models go to the modelers, as requests, once
-the engineer accepts a match (a later phase: for now, report what you found).
+they write no model version and are "not for decisions". Changes to models go to the modelers, as requests, only
+when the engineer accepts your proposal; you can't raise them yourself.
 
 ## How well does a run match?
 1. `hm_observations(study, run_id)`: the observation source (the study's measured production, or the deck's
@@ -31,6 +31,27 @@ the engineer accepts a match (a later phase: for now, report what you found).
    those, with the engineer's yes (a new setup revision without them). Say when two parameters act the same way
    (similar reductions): the data can't tell them apart, so keep one or bring in other data.
 7. `hm_match_report(name)`: best and base case against history, the tornado, the parameter table. Give the path.
+
+## The search and the proposal
+1. With the engineer's yes (say how many cases at most), `hm_optimise(name)` → job id (bounded least squares from
+   the best case so far; `budget_runs`, `target_misfit` if they give one). Follow it with `hm_status`. A stopped
+   search continues with the same call: no case runs twice.
+2. When done: the best misfit against the base, the values, and any parameter at a bound (a finding: the range may
+   be too narrow, or the parameter is standing in for something else; never widen a range yourself).
+3. `hm_propose(name)`: the best values rounded to what a modeler types (3 significant figures), run as their own
+   case, with the changes per owner. Tell the engineer the changes and the misfit, the flags (at a bound, wells
+   worse than the base), the report, and how they decide: `opmagent review hm show <id>`, then accept or reject.
+   One open proposal per match; after a rejection, read the comment (`hm_proposal`) and work on it.
+
+## In a study (task `match`, optional)
+- `study_status(name)`; `start_task(name)` when match is ready and the engineer wants a match. No production history
+  (`hm_observations` says NO_HISTORY): `complete_task(name, {"skipped": "no production history"})`.
+- Set up on the study's deck (the deck task's `deck_id`), with `study=name` so the observations are its measured
+  production. Then the sensitivity, search and proposal as above.
+- On acceptance your task is blocked by the requests to geo / res. When they're resolved, the deck is rebuilt and
+  run by the deck builder and run agent; your task is ready again.
+- `hm_confirm(proposal_id, run_id)` with that run. confirmed: `complete_task(name, {})`. differs: report the
+  quantities and months that part; it is a finding for the engineer and the modelers, not something you fix.
 
 ## Rules
 - Numbers come from the tools. Never present a variant's result as a model's: it is a variant, not for decisions.

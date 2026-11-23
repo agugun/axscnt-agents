@@ -163,6 +163,46 @@ def _reviewer(cfg):
     return DataService("reviewer", cfg)
 
 
+def _hm_review(rv, args):
+    """The engineer's decision on a match proposal: show, accept (requests to the modelers) or reject."""
+    from .core.errors import ToolError
+    from .hm import proposals
+    try:
+        if args.action == "show":
+            p = proposals.show(rv.con, args.proposal_id)
+            print(f"Proposal {p['id']} for history match {p['hm']['name']} (revision {p['hm']['revision']}, deck "
+                  f"{p['hm']['deck_id']}{', study ' + p['hm']['study'] if p['hm']['study'] else ''}): {p['status']}")
+            print(f"  misfit {p['misfit']:.4g}" + (f" (base {p['base_misfit']:.4g})" if p["base_misfit"] is not None
+                                                  else "") + f", case {p['case_no']}")
+            for owner, lines in ((p["requests"] or {}).get("changes") or {}).items():
+                for line in lines:
+                    print(f"  {owner}: {line}")
+            f = p["flags"] or {}
+            if f.get("at_bound"):
+                print(f"  at a bound of its range: {', '.join(f['at_bound'])}")
+            if f.get("wells_worse"):
+                print(f"  wells worse than the base case: {', '.join(f['wells_worse'])}")
+            if p.get("report_path"):
+                print(f"  report: {p['report_path']}")
+            if p["status"] == "proposed":
+                print(f"  decide: opmagent review hm accept {p['id']}   or   opmagent review hm reject {p['id']} "
+                      "--comment '...'")
+            return
+        r = proposals.decide(rv.con, args.proposal_id, args.action, comment=args.comment)
+    except ToolError as e:
+        raise SystemExit(f"{e.code}: {e.message}") from None
+    if args.action == "accept":
+        print(f"Proposal {args.proposal_id} accepted.")
+        for q in r["raised"]:
+            print(f"  request {q['request_id']} to {q['to']}: {q['message']}")
+        if not r["raised"]:
+            print("  No study: give these changes to the modelers yourself:")
+            for owner, lines in ((r["requests"] or {}).get("changes") or {}).items():
+                print(f"    {owner}: {'; '.join(lines)}")
+    else:
+        print(f"Proposal {args.proposal_id} rejected; the comment goes back to the history matcher.")
+
+
 def cmd_review(args):
     """Human review from the terminal (uses the reviewer profile)."""
     import json
@@ -198,6 +238,8 @@ def cmd_review(args):
         return
     if args.rcmd in ("accept-init", "reject-init"):
         return _init_review(cfg, rv, args)
+    if args.rcmd == "hm":
+        return _hm_review(rv, args)
     targets = []
     if args.rcmd == "approve-hello":
         from .hello.run import latest_demo
@@ -946,7 +988,8 @@ def cmd_hm(args):
         raise SystemExit(f"{e.code}: {e.message}") from None
 
 
-HM_PHASE2 = ("targets", "setup", "base", "sensitivity", "status", "stop", "cases", "case", "match-report")
+HM_PHASE2 = ("targets", "setup", "base", "sensitivity", "status", "stop", "cases", "case", "match-report",
+             "optimise", "propose", "proposal", "confirm")
 
 
 def _cmd_hm2(args, cfg, con):
@@ -1012,6 +1055,35 @@ def _cmd_hm2(args, cfg, con):
     if c == "case":
         h = jobs.get_hm(con, args.hm)
         return out(jobs.case_detail(con, h["id"], args.case))
+    if c == "optimise":
+        h = jobs.get_hm(con, args.hm)
+        job = jobs.create_job(con, h, "optimise", {"method": "lsq", "start": args.start,
+                                                   "budget_runs": args.budget_runs, "budget_hours": args.budget_hours,
+                                                   "target_misfit": args.target})
+        print(f"job {job}: least squares, up to {args.budget_runs} case(s), {jobs.slots(cfg)} at a time")
+        j = jobs.Runner(cfg, job, log=lambda m: print("  " + m)).run()
+        print(jobs.spoken_job(j))
+        r = j.get("result") or {}
+        if r:
+            print(f"  stopped because {r['stopped_because']} after {r['iterations']} iteration(s), "
+                  f"{r['cases_run']} case(s); best case {r['best_case']} misfit {r['best_misfit']:.4g} "
+                  f"(base {r['base_misfit'] if r['base_misfit'] is None else format(r['base_misfit'], '.4g')})")
+            for k, v in r["best_values"].items():
+                print(f"    {k} = {v:.6g}" + ("  (at a bound)" if k in r["at_bound"] else ""))
+        return
+    if c == "propose":
+        from .hm import proposals
+        r = proposals.propose(cfg, con, args.hm, case=args.case, note=args.note, digits=args.digits)
+        print(r["spoken_summary"])
+        return
+    if c == "proposal":
+        from .hm import proposals
+        return out(proposals.show(con, args.proposal_id))
+    if c == "confirm":
+        from .hm import proposals
+        r = proposals.confirm(con, args.proposal_id, args.run)
+        print(r["spoken_summary"])
+        raise SystemExit(0 if r["status"] == "confirmed" else 2)
     if c == "match-report":
         r = jobs.write_match_report(cfg, con, args.hm)
         print(r["spoken_summary"])
@@ -1156,6 +1228,11 @@ def main(argv=None):
     x = rv.add_parser("approve-hello", help="approve the four hello demo models, then (run again) accept the hello "
                                             "deck's initial state")
     x.set_defaults(fn=cmd_review, comment=None)
+    x = rv.add_parser("hm", help="a history-match proposal: show it, accept it (requests to the modelers) or reject it")
+    x.add_argument("action", choices=["show", "accept", "reject"])
+    x.add_argument("proposal_id", type=int)
+    x.add_argument("--comment", help="why (required to reject)")
+    x.set_defaults(fn=cmd_review)
     x = rv.add_parser("accept-init", help="accept a deck's initial state (the initialisation view) so it can run")
     x.add_argument("deck_id", type=int)
     x.add_argument("--comment")
@@ -1241,7 +1318,7 @@ def main(argv=None):
     x.set_defaults(fn=cmd_study)
     x = sd.add_parser("task", help="start or complete a study task from a terminal (agents use start_task/complete_task)")
     x.add_argument("name")
-    x.add_argument("task", choices=["data", "fluid", "geo", "res", "well", "deck", "run", "view"])
+    x.add_argument("task", choices=["data", "fluid", "geo", "res", "well", "deck", "run", "view", "match"])
     x.add_argument("action", choices=["start", "complete"])
     x.add_argument("--result", help='the task result as JSON, e.g. \'{"version_id": 12}\'')
     x.set_defaults(fn=cmd_study)
@@ -1401,6 +1478,22 @@ def main(argv=None):
     x.add_argument("case", type=int)
     x = hm.add_parser("match-report", help="the HM report of a history match (best and base case, tornado)")
     x.add_argument("hm")
+    x = hm.add_parser("optimise", help="bounded least squares from the best case so far (foreground, restartable)")
+    x.add_argument("hm")
+    x.add_argument("--start", default="best", choices=("best", "start"))
+    x.add_argument("--budget-runs", dest="budget_runs", type=int, default=200)
+    x.add_argument("--budget-hours", dest="budget_hours", type=float)
+    x.add_argument("--target", type=float, help="stop at this misfit")
+    x = hm.add_parser("propose", help="a match proposal from the best case (values rounded, run, for your review)")
+    x.add_argument("hm")
+    x.add_argument("--case", type=int)
+    x.add_argument("--note")
+    x.add_argument("--digits", type=int, default=3, help="significant figures of the proposed values")
+    x = hm.add_parser("proposal", help="a match proposal (JSON)")
+    x.add_argument("proposal_id", type=int)
+    x = hm.add_parser("confirm", help="does a run of the rebuilt deck equal the proposal's case?")
+    x.add_argument("proposal_id", type=int)
+    x.add_argument("--run", type=int, required=True, help="the run of the deck built from the modelers' versions")
     for x in hm.choices.values():
         x.set_defaults(fn=cmd_hm)
     x = sub.add_parser("hello", help="end-to-end demo: models, approval, deck, run")

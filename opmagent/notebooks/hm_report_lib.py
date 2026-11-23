@@ -228,3 +228,16 @@ def cases_frame(data: dict) -> pd.DataFrame:
         return c
     vals = pd.DataFrame(list(c["values"]))
     return pd.concat([c[["case_no", "label", "misfit", "wall_s"]], vals], axis=1)
+
+
+def fig_convergence(data: dict):
+    """The optimiser's misfit per evaluation (log scale)."""
+    o = data.get("optimise")
+    if not o or not o.get("history"):
+        return None
+    h = [max(x, 1e-16) for x in o["history"]]
+    fig = go.Figure(go.Scatter(x=list(range(1, len(h) + 1)), y=h, mode="lines+markers", line=dict(color="#0969da")))
+    fig.update_layout(**LAYOUT, title=f"Search: {o['evaluations']} evaluation(s), {o['cases_run']} case(s); "
+                                      f"stopped: {o['stopped_because']}",
+                      xaxis_title="evaluation", yaxis_title="misfit (residual sum of squares)", yaxis_type="log")
+    return fig

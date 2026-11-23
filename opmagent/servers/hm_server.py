@@ -19,7 +19,7 @@ from mcp.server.mcpserver import MCPServer
 from ..core import config as cfgmod
 from ..core import db
 from ..core.errors import ToolError
-from ..hm import jobs, params, service
+from ..hm import jobs, params, proposals, service
 
 
 class HMService:
@@ -104,10 +104,10 @@ class HMService:
         return {"ok": True, "match": top, "candidates": rows[:5],
                 "spoken_summary": f"History match {top['name']} revision {top['revision']} ({top['status']})."}
 
-    def _start(self, hm, kind: str, wait: bool) -> dict:
+    def _start(self, hm, kind: str, wait: bool, options: dict | None = None) -> dict:
         h = jobs.get_hm(self.con, hm)
-        job = jobs.create_job(self.con, h, kind)
-        n = len(jobs.plan(h, kind))
+        job = jobs.create_job(self.con, h, kind, options)
+        n = len(jobs.plan(h, kind)) if kind != "optimise" else (options or {}).get("budget_runs", 200)
         if wait:
             j = jobs.Runner(self.cfg, job).run()
         else:
@@ -121,7 +121,7 @@ class HMService:
         """Case 0 of a setup: the base deck's misfit. It uses the deck's latest finished run (from the run agent);
         without one it runs the base deck as a variant. Freezes the setup."""
         r = self._start(hm, "base", wait)
-        if wait:
+        if wait and r["job"]["status"] == "done":
             h = jobs.get_hm(self.con, hm)
             c = jobs.cases(self.con, h["id"], order="case", limit=1)
             r["base"] = c[0] if c else None
@@ -174,7 +174,50 @@ class HMService:
         return jobs.write_match_report(self.cfg, self.con, hm)
 
 
-TOOLS = ["hm_observations", "hm_misfit", "hm_report", "hm_targets", "hm_setup", "hm_resolve", "hm_base",
+    # ------------------------------------------------------------ phase 3: optimiser, proposals, confirmation
+    def hm_optimise(self, hm: str, method: str = "lsq", start: str = "best", budget_runs: int = 200,
+                    budget_hours: float | None = None, target_misfit: float | None = None,
+                    wait: bool = False) -> dict:
+        """Start the search as a background job: bounded least squares (trust region) on the weighted residuals,
+        log parameters searched in log space, the Jacobian from forward differences (N cases per iteration, in
+        parallel). start='best' begins from the best case so far, 'start' from the setup's start values. Stops at
+        convergence, target_misfit, budget_runs (cases run by this search) or budget_hours. Every evaluation is a
+        case, so a stopped search continues with the same call. method 'esmda' comes later (phase 5)."""
+        if method != "lsq":
+            raise ToolError("INVALID_INPUT", "method: 'lsq' (the ensemble smoother, 'esmda', comes in phase 5)")
+        if start not in ("best", "start"):
+            raise ToolError("INVALID_INPUT", "start: 'best' or 'start'")
+        r = self._start(hm, "optimise", wait, {"method": "lsq", "start": start, "budget_runs": int(budget_runs),
+                                                "budget_hours": budget_hours, "target_misfit": target_misfit})
+        if not wait:
+            r["spoken_summary"] = (f"Started the search, job {r['job_id']}: up to {budget_runs} case(s), "
+                                   f"{r['slots']} at a time. Check it with hm_status.")
+        return r
+
+    def hm_propose(self, hm: str, case: int | None = None, note: str | None = None, digits: int = 3) -> dict:
+        """Make a match proposal from the best case (or case): its values rounded to what a modeler would type
+        (digits significant figures, default 3), run as a case of its own, written as the changes per owner
+        ("geo: PERMX and PERMY x 0.5 in layers 1"), with flags for parameters at a bound and wells that got worse,
+        and its report. One open proposal per match. It raises no request: the engineer reviews it
+        (opmagent review hm show <id>) and accepting it sends the requests to the modelers."""
+        return proposals.propose(self.cfg, self.con, hm, case=case, note=note, digits=digits)
+
+    def hm_proposal(self, proposal_id: int) -> dict:
+        """A match proposal: its values, changes per owner, flags, status (proposed, accepted, rejected with the
+        engineer's comment, confirmed, differs) and the requests raised."""
+        p = proposals.show(self.con, proposal_id)
+        say = f"Proposal {proposal_id} is {p['status']}" + (f": {p['comment']}" if p.get("comment") else "") + "."
+        return {"ok": True, "proposal": p, "spoken_summary": say}
+
+    def hm_confirm(self, proposal_id: int, run_id: int) -> dict:
+        """After the modelers' new versions are approved and the deck built from them has run: compare that run
+        with the proposal's case on every matched quantity, monthly (rel_tol 1e-4). Equal: confirmed, and the
+        study's match task can complete. Not equal: differs, with the first quantities and months that part, a
+        finding for the engineer and the modelers, not something you fix."""
+        return proposals.confirm(self.con, proposal_id, run_id)
+
+
+TOOLS = ["hm_optimise", "hm_propose", "hm_proposal", "hm_confirm", "hm_observations", "hm_misfit", "hm_report", "hm_targets", "hm_setup", "hm_resolve", "hm_base",
          "hm_sensitivity", "hm_status", "hm_stop", "hm_cases", "hm_case", "hm_match_report"]
 
 
