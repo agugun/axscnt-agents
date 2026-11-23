@@ -96,7 +96,7 @@ def _activity(con, profile: str) -> tuple[dict, list[dict]]:
 def _work(con, name: str) -> tuple[dict, list[dict]]:
     from .core.studies import AGENT
     tasks = [t for t, a in AGENT.items() if a == name]
-    work: dict = {"tasks": [], "requests": [], "waiting_review": [], "runs": []}
+    work: dict = {"tasks": [], "requests": [], "waiting_review": [], "runs": [], "waiting_init": []}
     if tasks:
         q = ",".join("?" * len(tasks))
         work["tasks"] = [dict(r) for r in con.execute(
@@ -110,6 +110,12 @@ def _work(con, name: str) -> tuple[dict, list[dict]]:
     if kind:
         work["waiting_review"] = [dict(r) for r in con.execute(
             f"SELECT model_name, id AS version_id, version, qc_ready_at FROM pending_review_{kind} ORDER BY qc_ready_at")]
+    if name in ("deck-builder", "run-agent"):   # decks whose initial state waits for a person (the full run waits too)
+        from .deck.init_review import pending
+        try:
+            work["waiting_init"] = pending(con)
+        except Exception:  # noqa: BLE001  a database from before the gate
+            work["waiting_init"] = []
     if name == "run-agent":
         for r in con.execute("SELECT r.id, d.name AS deck, r.pid, r.started_at FROM runs r JOIN decks d "
                              "ON d.id = r.deck_id WHERE r.status = 'running'"):
@@ -125,11 +131,14 @@ def _work(con, name: str) -> tuple[dict, list[dict]]:
         checks.append(_check("work", "warn", "run(s) marked running but the Flow process is gone: "
                              + ", ".join(f"run {r['id']}" for r in gone) + " (job_status refreshes them)"))
     parts = []
-    for key, label in (("tasks", "task"), ("requests", "open request"), ("waiting_review", "model waiting for review"),
-                       ("runs", "run in progress")):
+    for key, one, many in (("tasks", "task", "tasks"), ("requests", "open request", "open requests"),
+                           ("waiting_review", "model waiting for review", "models waiting for review"),
+                           ("runs", "run in progress", "runs in progress"),
+                           ("waiting_init", "deck whose initial state waits for you",
+                            "decks whose initial state waits for you")):
         n = len(work[key])
         if n:
-            parts.append(f"{n} {label}{'s' if n > 1 else ''}")
+            parts.append(f"{n} {one if n == 1 else many}")
     if not checks:
         detail = ", ".join(parts) or "nothing waiting"
         if blocked:

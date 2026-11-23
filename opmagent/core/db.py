@@ -200,6 +200,21 @@ MIGRATIONS = [
         study_id INTEGER PRIMARY KEY REFERENCES studies(id) ON DELETE CASCADE,
         source_id INTEGER REFERENCES data_sources(id) ON DELETE CASCADE,
         unit_system TEXT, scal_json TEXT NOT NULL);"""),
+    # The initialisation gate: a person accepts (or rejects) a deck's initial state before its full run.
+    ("init_reviews", """CREATE TABLE init_reviews (
+        id INTEGER PRIMARY KEY, deck_id INTEGER NOT NULL REFERENCES decks(id),
+        decision TEXT NOT NULL CHECK (decision IN ('accepted','rejected')),
+        reviewer TEXT NOT NULL CHECK (length(trim(reviewer)) > 0), comment TEXT,
+        init_view_sha256 TEXT NOT NULL, view_json TEXT NOT NULL,
+        decided_at TEXT NOT NULL DEFAULT (datetime('now')),
+        CHECK (decision = 'accepted' OR (comment IS NOT NULL AND length(trim(comment)) > 0)));
+        CREATE TRIGGER init_reviews_no_update BEFORE UPDATE ON init_reviews
+        BEGIN SELECT RAISE(ABORT, 'init_reviews is append-only'); END;
+        CREATE TRIGGER init_reviews_no_delete BEFORE DELETE ON init_reviews
+        BEGIN SELECT RAISE(ABORT, 'init_reviews is append-only'); END;
+        CREATE TRIGGER init_reviews_validated_deck BEFORE INSERT ON init_reviews
+        BEGIN SELECT RAISE(ABORT, 'only a validated deck has an initial state to review')
+              WHERE (SELECT status FROM decks WHERE id = NEW.deck_id) IS NOT 'validated'; END;"""),
 ]
 
 

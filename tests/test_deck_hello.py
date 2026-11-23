@@ -1,5 +1,6 @@
 """Deck builder and hello end to end (uses opm.io and opm.simulators if installed)."""
 import pytest
+import shutil
 
 from opmagent.core.errors import ToolError
 from opmagent.deck import build as b
@@ -18,6 +19,14 @@ def approve_hello(cfg):
             assert rv.approve(kind=kind, version_id=m["version_id"], qc_report_file_id=rid)["ok"]
 
 
+def accept_hello_init(cfg):
+    from opmagent.deck.init_review import accept, pending
+    con = DataService("reviewer", cfg).con
+    for p in pending(con):
+        if p["name"] == "HELLO":
+            accept(cfg, con, p["id"], "tester")
+
+
 def test_hello_end_to_end(cfg):
     r = hello(cfg, log=lambda *_: None)
     assert r["ok"] and r["stage"] == "waiting_for_approval"
@@ -25,6 +34,13 @@ def test_hello_end_to_end(cfg):
     approve_hello(cfg)
     r = hello(cfg, log=lambda *_: None)
     assert r["deck"]["ok"], r["deck"]["validation_log"]
+    if shutil.which("flow"):   # the deck initialises; its initial state waits for a person
+        assert r["stage"] == "waiting_for_init_acceptance", r["spoken_summary"]
+        deck_id = r["deck"]["deck_id"]
+        assert hello(cfg, log=lambda *_: None)["deck"]["deck_id"] == deck_id     # no second deck
+        accept_hello_init(cfg)
+        r = hello(cfg, log=lambda *_: None)
+        assert r["deck"]["deck_id"] == deck_id
     if "opm.simulators" in str(r.get("run", {}).get("engine")) or r.get("stage") == "done":
         assert r["ok"] and r["stage"] == "done"
         assert r["results"]["FOPR"] == pytest.approx(500, rel=0.01)

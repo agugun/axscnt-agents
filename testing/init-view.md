@@ -45,6 +45,7 @@ its runs are never touched.
 | 4 | SPE9 (part 2) | 9,000 active cells; initial PRESSURE, SWAT, SGAS, RS, FOIP, FGIP, FWIP, FPR and the region totals equal the source deck's (relative difference ≤ 1e-6) |
 | 5 | Norne (part 2) | 44,431 active cells; the same, plus RV, for all 16 FIPNUM regions (≤ 1e-6) |
 | 6 | ResInsight (part 3) | each view opens and shows what the list under part 3 describes |
+| 7 | The gate | without auto-approve, `opmagent run` / `study run` refuse the deck until `opmagent review accept-init <deck>`; with it, a deck whose checks all pass is accepted automatically (`opmagent review list` shows none waiting) |
 
 Last run (2026-11-22): all checks pass. SPE9: PRESSURE 1.2e-7, SWAT 1.1e-7, the rest 0; Norne: all 0.
 
@@ -89,7 +90,8 @@ The deck ids below (1, 2, 3) hold for a new workspace; on a rerun use the ids th
 ### Part 1: hello
 
 ```bash
-opmagent hello                                # four models approved (auto-approve), the HELLO deck, its run
+opmagent hello                                # four models approved (auto-approve), the HELLO deck, its initial state
+                                              # accepted automatically (every check passes), its run
 $CHECK deck 1 --hc 0.8 --fpr 201 --fpr-tol 2
 ```
 Expect the deck stage to report `Deck HELLO initialises: oil in place 3,855,717 SM3, ... average pressure 201.1

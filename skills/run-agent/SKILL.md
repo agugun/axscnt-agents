@@ -8,7 +8,11 @@ description: Run validated OPM decks, report progress, store and query results, 
 Tools: simulation server (`opmagent-sim`) and the data server with the **run** profile (read-only).
 
 ## Run
-1. Find the deck: `resolve_deck` with the user's words ("the field A waterflood deck"). Only validated decks run.
+1. Find the deck: `resolve_deck` with the user's words ("the field A waterflood deck"). Only validated decks whose
+   initial state a person accepted run: `init_view(deck_id)` says (`init_review`). Waiting? Give the fluids in
+   place and the checks, and tell them to look (`opmagent results open --deck <id> --init`) and accept it
+   (`opmagent review accept-init <id>`). `run_simulation` refuses otherwise (`INIT_NOT_ACCEPTED`). You can't
+   accept it.
 2. Read back before starting: "Run deck FieldA_WF20 (fluid v3, geo v7, wells v2)? Say yes to start." Start only after yes.
 3. `run_simulation(deck_id)` → run id. For short runs call `wait(run_id)`; it stores results when done.
    For long runs, tell the user it's started, that they can follow it live in a terminal with
@@ -18,7 +22,8 @@ Tools: simulation server (`opmagent-sim`) and the data server with the **run** p
 ## Before a run
 "How much oil is in place?" / "does the deck start right?": `init_view(deck_id)` (made with every deck build): fluids
 in place for the field and per FIPNUM region at time zero, the initial pressure range, and checks against the
-contacts. It needs no run.
+contacts. It needs no run. Its `init_review` says whether a person accepted the initial state (needed before the
+full run), rejected it (with their comment) or hasn't decided yet.
 
 ## Questions about results
 - "How is run twelve doing?" → `resolve_run` then `job_status`; give its `spoken_summary` (report step, simulated

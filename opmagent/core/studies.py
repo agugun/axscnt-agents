@@ -204,7 +204,10 @@ def _check_result(con, study: str, task: str, result: dict, auto_approve: bool) 
         d = con.execute("SELECT id, name, status FROM decks WHERE id = ?", (result.get("deck_id"),)).fetchone()
         if not d or d["status"] != "validated":
             raise ToolError(INVALID_INPUT, "deck result needs the deck_id of a validated deck")
-        return {"deck_id": d["id"], "deck": d["name"]}
+        from ..deck.init_review import latest, require
+        require(con, d["id"])          # the initialisation gate: its initial state is accepted
+        r = latest(con, d["id"])
+        return {"deck_id": d["id"], "deck": d["name"], "init_accepted_by": r["reviewer"]}
     if task == "run":
         r = con.execute("SELECT id, status, out_dir FROM runs WHERE id = ?", (result.get("run_id"),)).fetchone()
         if not r or r["status"] not in ("done", "stored"):

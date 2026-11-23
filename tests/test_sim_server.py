@@ -19,6 +19,9 @@ def deck_id(cfg):
         rid = rv.get_qc_report(kind=kind, version_id=m["version_id"])["qc_report"]["id"]
         rv.approve(kind=kind, version_id=m["version_id"], qc_report_file_id=rid)
     r = hello(cfg, log=lambda *_: None)
+    from opmagent.deck.init_review import accept, state
+    if state(rv.con, r["deck"]["deck_id"]) == "waiting":   # the initialisation gate, as a person would
+        accept(cfg, rv.con, r["deck"]["deck_id"], "tester")
     return r["deck"]["deck_id"]
 
 

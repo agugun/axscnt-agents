@@ -41,6 +41,11 @@ spec plus approved models into an OPM deck. You never write deck keywords yourse
    several) and any check with `warn`: cells below a contact holding oil or gas point at the res model's contacts or
    SCAL. They can see it in ResInsight: `opmagent results open --deck <deck_id> --init`. `init_view_error` means Flow
    couldn't initialise the deck; give its last lines: the same deck would fail its first run.
+6. **The gate.** The full run waits until a person accepts that initial state (`init_review` in the result:
+   `waiting`, or `accepted` automatically with auto-approve when every check passes). Tell the engineer to look at
+   it and accept it: `opmagent review accept-init <deck_id>`, or `reject-init <deck_id> --to res --comment "..."`
+   (the comment goes to that model's review feedback). In a study the deck task completes only once it is
+   accepted: `complete_task(name, {"deck_id": ...})` refuses before. You can't accept it.
 
 ## Rules
 

@@ -188,17 +188,27 @@ def cmd_review(args):
                   f"{', ' + f['item'] if f['item'] else ''}) {f['comment']}{ans}"[:300])
         return
     if args.rcmd == "list":
+        from .deck.init_review import pending as init_pending
+        for p in init_pending(rv.con):
+            print(f"  deck  id={p['id']:<4} {p['name']}: initial state waiting (opmagent review accept-init {p['id']})")
         print(rv.list_pending_reviews()["spoken_summary"])
         for p in rv.list_pending_reviews()["pending"]:
             q = rv.get_qc_report(kind=p["kind"], version_id=p["version_id"])
             print(f"  {p['kind']:5} id={p['version_id']:<4} {p['model_name']} v{p['version']}  report: {(q['qc_report'] or {}).get('path')}")
         return
+    if args.rcmd in ("accept-init", "reject-init"):
+        return _init_review(cfg, rv, args)
     targets = []
     if args.rcmd == "approve-hello":
         from .hello.run import latest_demo
         targets = [(k, m) for k, m in latest_demo(rv.con).items() if m and m["status"] == "qc_ready"]
         if not targets:
-            print("No hello models are waiting for review.")
+            from .deck.init_review import pending
+            hello_deck = next((p for p in pending(rv.con) if p["name"] == "HELLO"), None)
+            if hello_deck:   # the models are approved; what waits now is the hello deck's initial state
+                args.deck_id, args.comment = hello_deck["id"], "hello demo"
+                return _init_review(cfg, rv, args, accept=True)
+            print("No hello models or hello initial state are waiting for review.")
             return
     else:
         from .core.errors import ToolError
@@ -230,6 +240,39 @@ def cmd_review(args):
             r = rv.approve(kind=kind, version_id=m["version_id"], qc_report_file_id=rid,
                            comment="hello demo" if args.rcmd == "approve-hello" else args.comment)
         print(r["spoken_summary"])
+
+
+def _init_review(cfg, rv, args, accept: bool | None = None) -> None:
+    """Accept or reject a deck's initial state, after showing it; a person typing at a terminal."""
+    import sys
+    from .core.errors import ToolError
+    from .deck import init_review as ir
+    accept = (args.rcmd == "accept-init") if accept is None else accept
+    try:
+        view, _ = ir._view(cfg, rv.con, args.deck_id)
+    except ToolError as e:
+        raise SystemExit(str(e))
+    if ir.state(rv.con, args.deck_id) != "waiting":
+        r = ir.latest(rv.con, args.deck_id)
+        raise SystemExit(f"deck {args.deck_id}'s initial state was already {r['decision']} by {r['reviewer']}; "
+                         "nothing to do.")
+    print(f"Initial state of deck {args.deck_id} ({view.get('deck')}):")
+    for line in ir.summary_lines(view):
+        print(f"  {line}")
+    print(f"  look at it in 3D: opmagent results open --deck {args.deck_id} --init")
+    if not sys.stdin.isatty():
+        raise SystemExit("Accepting an initial state needs an interactive terminal (a person typing). "
+                         "Agents can't accept it.")
+    word = "accept" if accept else "reject"
+    if input(f"Type '{word}' to confirm: ").strip().lower() != word:
+        print("Cancelled.")
+        return
+    try:
+        r = (ir.accept(cfg, rv.con, args.deck_id, rv._reviewer(), args.comment) if accept else
+             ir.reject(cfg, rv.con, args.deck_id, rv._reviewer(), args.comment, args.to))
+    except ToolError as e:
+        raise SystemExit(str(e))
+    print(r["spoken_summary"])
 
 
 def cmd_deck_build(args):
@@ -408,6 +451,12 @@ def cmd_run(args):
     deck = rv.get_deck(deck_id=d["id"])["deck"]
     if deck["status"] != "validated":
         raise SystemExit(f"deck {args.deck} is {deck['status']}, not validated")
+    from .core.errors import ToolError
+    from .deck.init_review import require
+    try:
+        require(rv.con, d["id"])
+    except ToolError as e:
+        raise SystemExit(str(e))
     path = next(f["path"] for f in deck["files"] if f["role"] == "DATA")
     out = cfg.file_store / "runs" / f"{args.deck}_deck{d['id']}"
     import sys
@@ -595,7 +644,13 @@ def cmd_study(args):
         r = _study_build(cfg, con, args.what, args.name)
         if args.complete and r.get("ok"):
             key = "deck_id" if args.what == "deck" else "version_id"
-            if args.what != "deck" and r.get("status") != "approved":
+            from .deck.init_review import state as init_state
+            if args.what == "deck" and init_state(con, r["deck_id"]) != "accepted":
+                r["task"] = (f"not completed: deck {r['deck_id']}'s initial state waits for you. Look at it "
+                             f"(`opmagent results open --deck {r['deck_id']} --init`), accept it "
+                             f"(`opmagent review accept-init {r['deck_id']}`), then `opmagent study task {args.name} "
+                             f"deck complete --result '{{\"deck_id\": {r['deck_id']}}}'`")
+            elif args.what != "deck" and r.get("status") != "approved":
                 r["task"] = (f"not completed: version {r['version_id']} is {r.get('status')}; approve it "
                              f"(`opmagent review approve {args.what} {r['version_id']}`), then "
                              f"`opmagent study task {args.name} {args.what} complete --result "
@@ -975,8 +1030,19 @@ def main(argv=None):
     x.add_argument("--model", help="model name")
     x.add_argument("--all", action="store_true")
     x.set_defaults(fn=cmd_review)
-    x = rv.add_parser("approve-hello", help="approve the three hello demo models")
+    x = rv.add_parser("approve-hello", help="approve the four hello demo models, then (run again) accept the hello "
+                                            "deck's initial state")
     x.set_defaults(fn=cmd_review, comment=None)
+    x = rv.add_parser("accept-init", help="accept a deck's initial state (the initialisation view) so it can run")
+    x.add_argument("deck_id", type=int)
+    x.add_argument("--comment")
+    x.set_defaults(fn=cmd_review)
+    x = rv.add_parser("reject-init", help="reject a deck's initial state; the comment goes to the model concerned")
+    x.add_argument("deck_id", type=int)
+    x.add_argument("--comment", required=True, help="what is wrong, e.g. 'oil below the OWC in EQLNUM 2'")
+    x.add_argument("--to", default="res", choices=["fluid", "geo", "res", "well"],
+                   help="the model the comment is for (default res: contacts, SCAL, regions)")
+    x.set_defaults(fn=cmd_review)
     dk = sub.add_parser("deck", help="deck builder").add_subparsers(dest="dcmd", required=True)
     x = dk.add_parser("build", help="build a deck from a JSON spec")
     x.add_argument("--spec", required=True)

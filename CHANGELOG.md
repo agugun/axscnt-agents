@@ -55,6 +55,15 @@ No approvals are carried over. Design: [docs/design/res-model.md](docs/design/re
   for per-user application data, instead of `~/opmagent/open-data`: `tools/fetch_open_data.sh`, `tools/install.sh`,
   the testing scripts and the docs. To move an existing checkout: `mkdir -p ~/.local/share/opmagent &&
   mv ~/opmagent/open-data ~/.local/share/opmagent/` (the tests keep reading `OPM_TESTS_DIR`).
+- **The initialisation gate**: a deck runs in full only after a person accepts its initial state (the
+  initialisation view): `opmagent review accept-init <deck>` / `reject-init <deck> --to res --comment ...`, typed at
+  a terminal, or the reviewer server's `accept_init_view` / `reject_init_view`. Recorded in `init_reviews`
+  (append-only, new table) with the view it was made on; a rejection is also filed as review feedback on the model
+  named. With `[study] auto_approve` it is accepted automatically only when every check passes or is n/a.
+  `run_simulation`, `opmagent run` and `opmagent study run` refuse a deck not accepted (`INIT_NOT_ACCEPTED`); a
+  study's deck task completes only after it; import round trips are exempt. Hello stops at it too
+  (`approve-hello` again accepts it) and reuses its deck. `opmagent review list`, `opmagent doctor` and
+  `init_view` show the decision.
 - **Fix: QC notebook kernels are shut down.** Each QC notebook run left its Jupyter kernel running (about 200 MB):
   nbclient doesn't stop a kernel manager it is given. A long session (the MCP data server, or the test suite, which
   runs over a hundred notebooks) ran the machine out of memory. The runner now shuts the kernel down after every

@@ -16,7 +16,9 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-CHECK="python3 $HERE/init_view_check.py"
+# the Python of the opmagent on PATH (the repo venv), so the check imports opmagent without activating it
+PY="$(dirname "$(readlink -f "$(command -v opmagent)")")/python"
+CHECK="$PY $HERE/init_view_check.py"
 OPM_TESTS="${OPM_TESTS:-${XDG_DATA_HOME:-$HOME/.local/share}/opmagent/open-data/opm-tests}"
 WS="${WS:-$(mktemp -d -t opmagent-init-view-XXXX)/ws}"
 FAILS=0
