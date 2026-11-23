@@ -300,6 +300,31 @@ imported deck) is refused by `hm_setup` until its data has a model home.
 - Found on the way: the Corey builders produced complex numbers for non-integer exponents (rounding took the
   normalised saturation past 1). They now clamp it to [0, 1].
 
+**Phase 3 as built** (`opmagent/hm/jobs.py` optimiser, `opmagent/hm/proposals.py`):
+
+- `hm_optimise`: bounded least squares (`scipy.optimize.least_squares`, trf). The search space is log10 for log
+  parameters. The residuals are fixed for the whole search: sqrt(w / N) · (sim − obs) / σ over the observations the
+  objective keeps; a failed case counts as 10 σ everywhere. The Jacobian is forward differences (1 % of each range,
+  backward at the upper bound), its N cases one parallel batch. Every evaluation is a case, so a restart reuses
+  them. It stops at xtol / ftol, `target_misfit`, `budget_runs` or `budget_hours`, and reports parameters at a
+  bound.
+- `hm_propose`: the best case's values rounded to 3 significant figures (`digits`) and run as their own case, so
+  the proposal is exactly what the modelers will type. The changes are written per owner, with flags at a bound and
+  for wells worse than the base. One open proposal per match (a unique index).
+- `opmagent review hm show / accept / reject`, the engineer's only. Accept raises one study request per owner (kind
+  `match`, from task `match`); without a study it prints the changes. Agents can't raise `match` requests.
+- `hm_confirm`: a run of a deck other than the base deck, compared with the proposal's case on every matched
+  quantity, monthly (rel_tol 1e-4 of each series' largest value). `confirmed` or `differs`.
+- Study task `match` (agent history-matcher) after `run`. It is optional: a study completes without it if it was
+  never started. It completes only with a confirmed proposal, or as skipped when the study has no production
+  history. Older databases get `study_tasks` and `study_requests` rebuilt with the new CHECK values, and their
+  studies (without a match row) keep working.
+- Gate: `tests/test_hm_proposals.py`. On hello, from start values PERMX ×1 and nw 2, the search recovers PERMX ×0.5
+  and nw 3 (to 1e-5) in 6 iterations, 18 cases. The proposal rounds them to 0.5 and 3. Accepting it sends requests
+  to geo and res. New geo, res and well versions with those values are approved, and the deck is rebuilt and run.
+  `hm_confirm` finds the run equal to the proposal (largest difference below 1e-6), and the match task completes.
+  A rebuild with nw 2.5 is reported as `differs`.
+
 - Gate: `tests/test_hm.py` runs hello and gets misfit 0 against itself, both as a `run` truth and through
   `data_production` built from its own monthly volumes. The `deck_history` path has no end-to-end test yet (no small
   deck with WCONHIST); Norne in phase 4 is its test.

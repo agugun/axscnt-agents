@@ -67,7 +67,7 @@ def test_study_end_to_end(cfg, tmp_path, monkeypatch):
     sim = SimService(cfg)
     rid = swrap(sim, "run_simulation")(deck_id=d["deck_id"])["run_id"]
     assert swrap(sim, "wait")(run_id=rid, timeout_s=300)["ok"]
-    assert call("run", "complete_task", name="FieldS", result={"run_id": rid})["unlocked"] == ["view"]
+    assert call("run", "complete_task", name="FieldS", result={"run_id": rid})["unlocked"] == ["view", "match"]   # match: optional
 
     # results viewer
     call("view", "start_task", name="FieldS")

@@ -9,6 +9,13 @@ to the res model, and SQLite can't change the existing tables in place. `opmagen
 so; move it aside and run `opmagent init-db` (or `opmagent setup <workspace>`), then rebuild the studies.
 No approvals are carried over. Design: [docs/design/res-model.md](docs/design/res-model.md).
 
+- **History matching, phase 3**: the search (`hm_optimise`, bounded least squares with a parallel
+  finite-difference Jacobian, restartable), match proposals (`hm_propose`: values rounded to what a modeler types,
+  run as their own case, changes per owner, flags), the engineer's review (`opmagent review hm show / accept /
+  reject`, which raises the requests to the modelers) and the confirmation (`hm_confirm`: the rebuilt deck's run
+  equals the proposal). New optional study task `match` (history matcher): it completes only with a confirmed
+  proposal, or skipped without history. Table `hm_proposals`; older databases get `study_tasks` and
+  `study_requests` rebuilt to allow `match`.
 - **History matching, phase 2**: setups with parameters (PERMX / PERMZ / PORO multipliers by zone or layer,
   MULTFLT, Corey parameters per SATNUM, aquifer volume and PI), checked against the deck's models
   (`hm_targets`). Variant decks render the approved deck with the values applied in memory; they write no model,

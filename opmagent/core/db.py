@@ -65,7 +65,7 @@ MIGRATIONS = [
         created_by TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now')));
         CREATE TABLE study_tasks (
         id INTEGER PRIMARY KEY, study_id INTEGER NOT NULL REFERENCES studies(id) ON DELETE CASCADE,
-        task TEXT NOT NULL CHECK (task IN ('data','fluid','geo','res','well','deck','run','view')),
+        task TEXT NOT NULL CHECK (task IN ('data','fluid','geo','res','well','deck','run','view','match')),
         status TEXT NOT NULL DEFAULT 'waiting'
           CHECK (status IN ('waiting','ready','in_progress','blocked','done','failed')),
         depends_on TEXT NOT NULL DEFAULT '', result_json TEXT, note TEXT,
@@ -73,7 +73,7 @@ MIGRATIONS = [
         CREATE TABLE study_requests (
         id INTEGER PRIMARY KEY, study_id INTEGER NOT NULL REFERENCES studies(id) ON DELETE CASCADE,
         from_task TEXT NOT NULL, to_task TEXT NOT NULL,
-        kind TEXT NOT NULL CHECK (kind IN ('missing_data','improve_data','question')),
+        kind TEXT NOT NULL CHECK (kind IN ('missing_data','improve_data','question','match')),
         message TEXT NOT NULL CHECK (length(trim(message)) > 0),
         status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','resolved')),
         resolution TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')), resolved_at TEXT,
@@ -264,6 +264,42 @@ MIGRATIONS = [
         CREATE TRIGGER hm_objective_frozen BEFORE UPDATE OF objective_json, source, truth_run_id, deck_id
         ON hm_studies WHEN OLD.status <> 'setup'
         BEGIN SELECT RAISE(ABORT, 'the setup is frozen once a search has run; make a new revision'); END;"""),
+    # History matching, phase 3: match proposals, the engineer's decision on them, and their confirmation.
+    ("hm_proposals", """CREATE TABLE hm_proposals (
+        id INTEGER PRIMARY KEY, hm_id INTEGER NOT NULL REFERENCES hm_studies(id) ON DELETE CASCADE,
+        case_id INTEGER NOT NULL REFERENCES hm_cases(id), values_json TEXT NOT NULL, note TEXT, flags_json TEXT,
+        status TEXT NOT NULL DEFAULT 'proposed'
+          CHECK (status IN ('proposed','accepted','rejected','confirmed','differs')),
+        reviewer TEXT, comment TEXT, requests_json TEXT, report_path TEXT,
+        confirm_run_id INTEGER REFERENCES runs(id), confirm_json TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')), decided_at TEXT,
+        CHECK (status <> 'rejected' OR (comment IS NOT NULL AND length(trim(comment)) > 0)),
+        CHECK (status = 'proposed' OR reviewer IS NOT NULL));
+        CREATE UNIQUE INDEX hm_proposals_one_open ON hm_proposals(hm_id) WHERE status IN ('proposed','accepted');"""),
+    # The study task 'match' (history matcher) and request kind 'match': SQLite can't change a CHECK in place, so
+    # databases from before history matching get study_tasks and study_requests rebuilt with the new values.
+    ("study_tasks_match", """CREATE TABLE study_tasks_v2 (
+        id INTEGER PRIMARY KEY, study_id INTEGER NOT NULL REFERENCES studies(id) ON DELETE CASCADE,
+        task TEXT NOT NULL CHECK (task IN ('data','fluid','geo','res','well','deck','run','view','match')),
+        status TEXT NOT NULL DEFAULT 'waiting'
+          CHECK (status IN ('waiting','ready','in_progress','blocked','done','failed')),
+        depends_on TEXT NOT NULL DEFAULT '', result_json TEXT, note TEXT,
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')), UNIQUE (study_id, task));
+        INSERT INTO study_tasks_v2 SELECT * FROM study_tasks;
+        DROP TABLE study_tasks;
+        ALTER TABLE study_tasks_v2 RENAME TO study_tasks;
+        CREATE TABLE study_requests_v2 (
+        id INTEGER PRIMARY KEY, study_id INTEGER NOT NULL REFERENCES studies(id) ON DELETE CASCADE,
+        from_task TEXT NOT NULL, to_task TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('missing_data','improve_data','question','match')),
+        message TEXT NOT NULL CHECK (length(trim(message)) > 0),
+        status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','resolved')),
+        resolution TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')), resolved_at TEXT,
+        CHECK (status = 'open' OR (resolution IS NOT NULL AND length(trim(resolution)) > 0)));
+        INSERT INTO study_requests_v2 SELECT * FROM study_requests;
+        DROP TABLE study_requests;
+        ALTER TABLE study_requests_v2 RENAME TO study_requests;
+        CREATE INDEX study_tasks_match ON study_tasks(study_id, task);"""),
 ]
 
 

@@ -34,11 +34,13 @@ from pathlib import Path
 from .errors import FORBIDDEN, INVALID_INPUT, NOT_FOUND, ToolError
 
 DEPENDS = {"data": [], "fluid": ["data"], "geo": ["data"], "res": ["geo"], "well": ["data"],
-           "deck": ["fluid", "geo", "res", "well"], "run": ["deck"], "view": ["run"]}   # res is defined on geo's grid
+           "deck": ["fluid", "geo", "res", "well"], "run": ["deck"], "view": ["run"],
+           "match": ["run"]}   # res is defined on geo's grid; match: the history matcher, optional
 TASKS = list(DEPENDS)
+OPTIONAL = {"match"}     # a study completes without it if it was never started (no history match asked for)
 AGENT = {"data": "data-manager", "fluid": "fluid-modeler", "geo": "geo-modeler", "res": "res-modeler",
          "well": "well-modeler",
-         "deck": "deck-builder", "run": "run-agent", "view": "results-viewer"}
+         "deck": "deck-builder", "run": "run-agent", "view": "results-viewer", "match": "history-matcher"}
 MODEL_TASKS = {"fluid", "geo", "res", "well"}
 SUBFOLDERS = ["inbox", "data", "deck", "runs"]
 REPORTS = ("monthly", "quarterly", "yearly")
@@ -65,7 +67,10 @@ def _study(con, name: str) -> dict:
 def _task(con, study_id: int, task: str) -> dict:
     if task not in DEPENDS:
         raise ToolError(INVALID_INPUT, f"task must be one of {TASKS}")
-    t = _row(con.execute("SELECT * FROM study_tasks WHERE study_id = ? AND task = ?", (study_id, task)).fetchone())
+    r = con.execute("SELECT * FROM study_tasks WHERE study_id = ? AND task = ?", (study_id, task)).fetchone()
+    if r is None:
+        raise ToolError(NOT_FOUND, f"this study has no {task} task (it was made before the {task} task existed)")
+    t = _row(r)
     t["result"] = json.loads(t["result_json"]) if t["result_json"] else None
     return t
 
@@ -127,7 +132,8 @@ def init_study(con, studies_dir: Path, name: str, requirement: str, actor: str |
 
 def status(con, name: str) -> dict:
     s = _study(con, name)
-    tasks = [_task(con, s["id"], t) for t in TASKS]
+    have = {r["task"] for r in con.execute("SELECT task FROM study_tasks WHERE study_id = ?", (s["id"],))}
+    tasks = [_task(con, s["id"], t) for t in TASKS if t in have]    # studies from before 'match' lack it
     reqs = [dict(r) for r in con.execute("SELECT * FROM study_requests WHERE study_id = ? ORDER BY id", (s["id"],))]
     open_reqs = [r for r in reqs if r["status"] == "open"]
     ready = [t["task"] for t in tasks if t["status"] == "ready"]
@@ -141,9 +147,10 @@ def status(con, name: str) -> dict:
     if s["status"] == "complete":
         say = f"Study {name} is complete."
     else:
-        bits = [f"{sum(v == 'done' for v in by.values())} of {len(TASKS)} tasks done"]
+        bits = [f"{sum(v == 'done' for v in by.values())} of {len(tasks)} tasks done"]
         if ready:
-            bits.append("ready: " + ", ".join(f"{t} ({AGENT[t]})" for t in ready))
+            bits.append("ready: " + ", ".join(f"{t} ({AGENT[t]}{', optional' if t in OPTIONAL else ''})"
+                                              for t in ready))
         if open_reqs:
             bits.append(f"{len(open_reqs)} open request(s)")
         blocked = [t for t, v in by.items() if v == "blocked"]
@@ -208,6 +215,16 @@ def _check_result(con, study: str, task: str, result: dict, auto_approve: bool) 
         require(con, d["id"])          # the initialisation gate: its initial state is accepted
         r = latest(con, d["id"])
         return {"deck_id": d["id"], "deck": d["name"], "init_accepted_by": r["reviewer"]}
+    if task == "match":
+        if result.get("skipped"):
+            n = con.execute("SELECT COUNT(*) FROM data_production p JOIN studies s ON s.id = p.study_id "
+                            "WHERE s.name = ?", (study,)).fetchone()[0]
+            if n:
+                raise ToolError(INVALID_INPUT, f"study {study} has {n} production history rows: match it, or say why "
+                                               "not in a note (fail_task)")
+            return {"skipped": str(result["skipped"])}
+        from ..hm.proposals import require_confirmed
+        return require_confirmed(con, study)
     if task == "run":
         r = con.execute("SELECT id, status, out_dir FROM runs WHERE id = ?", (result.get("run_id"),)).fetchone()
         if not r or r["status"] not in ("done", "stored"):
@@ -235,7 +252,10 @@ def complete_task(con, name: str, task: str, result: dict | None = None, actor: 
                 all(_task(con, s["id"], d)["status"] == "done" for d in deps):
             _set(con, s["id"], nxt, "ready", actor=actor, event="ready")
             unlocked.append(nxt)
-    if all(_task(con, s["id"], x)["status"] == "done" for x in TASKS):
+    present = {r["task"]: r["status"] for r in con.execute("SELECT task, status FROM study_tasks WHERE study_id = ?",
+                                                          (s["id"],))}
+    untouched = ("waiting", "ready")
+    if all(st == "done" or (t in OPTIONAL and st in untouched) for t, st in present.items()):
         con.execute("UPDATE studies SET status = 'complete', updated_at = datetime('now') WHERE id = ?", (s["id"],))
         _event(con, s["id"], None, "complete", None, actor)
     out = status(con, name)

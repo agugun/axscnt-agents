@@ -244,9 +244,11 @@ def get_job(con, job_id: int) -> dict:
     return j
 
 
-def plan(h: dict, kind: str) -> list[tuple[dict, str]]:
-    """The cases a job needs: (values, label)."""
+def plan(h: dict, kind: str, options: dict | None = None) -> list[tuple[dict, str]]:
+    """The cases a job needs: (values, label). A base job with options.values evaluates those (a proposal)."""
     base = start_values(h)
+    if kind == "base" and (options or {}).get("values"):
+        return [({**base, **options["values"]}, "proposal")]
     if kind == "base":
         return [(base, "base")]
     out = [(base, "base")]
@@ -258,13 +260,23 @@ def plan(h: dict, kind: str) -> list[tuple[dict, str]]:
     return out
 
 
+class _Halt(Exception):
+    """Ends the optimiser early: budget, target or a stop request (why)."""
+
+    def __init__(self, why: str):
+        super().__init__(why)
+        self.why = why
+
+
 class Runner:
-    """Runs a job's cases: builds variants, starts Flow within capacity, scores finished cases."""
+    """Runs a job: builds variants, starts Flow within capacity, scores finished cases. Base and sensitivity jobs
+    are one batch of cases; the optimiser runs a batch per evaluation (one case) and per Jacobian (N cases)."""
 
     def __init__(self, cfg, job_id: int, log=None):
         self.cfg, self.job_id = cfg, job_id
         self.con = db.connect(cfg.database)
         self.log = log or (lambda *_: None)
+        self.t0 = time.time()
 
     def _progress(self, **p):
         self.con.execute("UPDATE hm_jobs SET progress_json = ? WHERE id = ?", (json.dumps(p), self.job_id))
@@ -272,92 +284,112 @@ class Runner:
     def _stop_requested(self) -> int:
         return self.con.execute("SELECT stop_requested FROM hm_jobs WHERE id = ?", (self.job_id,)).fetchone()[0]
 
-    def run(self) -> dict:
+    # ------------------------------------------------------------ one batch of cases
+    def batch(self, h: dict, cases: list[dict], obs, extra_progress: dict | None = None) -> list[dict]:
+        """Run the queued cases among these until each is done or failed (or a stop request). Returns the rows."""
         from ..sim import runner
         con, cfg = self.con, self.cfg
+        for c in cases:      # a case left 'running' by a server that stopped: run it again
+            if c["status"] == "running" and not _alive(c["pid"]):
+                con.execute("UPDATE hm_cases SET status = 'queued', pid = NULL WHERE id = ?", (c["id"],))
+        folder = hm_dir(cfg.file_store, h)
+        need = case_memory_mb(cfg, con, h)
+        running: dict[int, tuple] = {}
+        while True:
+            rows = [dict(con.execute("SELECT * FROM hm_cases WHERE id = ?", (c["id"],)).fetchone()) for c in cases]
+            queued = [c for c in rows if c["status"] == "queued" and c["id"] not in running]
+            stop = self._stop_requested()
+            if stop == 2:      # now: kill what runs
+                for cid, (p, *_rest) in running.items():
+                    p.kill()
+                    con.execute("UPDATE hm_cases SET status = 'queued', pid = NULL WHERE id = ?", (cid,))
+                running.clear()
+            for cid, (p, cdir, deck, started) in list(running.items()):
+                rc = p.poll()
+                wall = time.time() - started
+                if rc is None and wall > cfg.hm_case_timeout_s:
+                    p.kill()
+                    rc = -9
+                if rc is None:
+                    continue
+                del running[cid]
+                smspec = cdir / (deck.stem + ".SMSPEC")
+                ok = rc == 0 and smspec.exists()
+                con.execute("UPDATE hm_cases SET status = ?, returncode = ?, smspec_path = ?, wall_s = ?, "
+                            "finished_at = ?, pid = NULL, error = ? WHERE id = ?",
+                            ("done" if ok else "failed", rc, str(smspec) if ok else None, round(wall, 1), _now(),
+                             None if ok else _tail(cdir / "run.log"), cid))
+                if ok:
+                    score(con, h, cid, str(smspec), obs)
+                self.log(f"case {cid}: {'done' if ok else 'failed'} in {wall:.0f} s")
+            capacity = max(0, slots(cfg) - ordinary_runs(con))
+            while queued and not stop and len(running) < capacity and memory_ok(cfg, need * (len(running) + 1)):
+                c = queued.pop(0)
+                cdir = folder / f"case_{c['case_no']}"
+                try:
+                    deck = build_variant(con, h, json.loads(c["values_json"]), cdir)
+                    p, _engine, _log = runner.start(deck, cdir / "run", cfg.flow_bin, threads=cfg.hm_threads)
+                except Exception as e:  # noqa: BLE001  (a variant that can't be built fails, the job goes on)
+                    con.execute("UPDATE hm_cases SET status = 'failed', error = ?, finished_at = ? WHERE id = ?",
+                                (f"{type(e).__name__}: {e}", _now(), c["id"]))
+                    continue
+                running[c["id"]] = (p, cdir / "run", deck, time.time())
+                con.execute("UPDATE hm_cases SET status = 'running', run_dir = ?, pid = ?, started_at = ? "
+                            "WHERE id = ?", (str(cdir), p.pid, _now(), c["id"]))
+            self._report(h, cases, len(running), need, extra_progress)
+            left = sum(1 for c in cases if self._status(c["id"]) not in ("done", "failed"))
+            if not running and (left == 0 or stop):
+                break
+            time.sleep(0.5)
+        return [dict(con.execute("SELECT * FROM hm_cases WHERE id = ?", (c["id"],)).fetchone()) for c in cases]
+
+    def _status(self, cid: int) -> str:
+        return self.con.execute("SELECT status FROM hm_cases WHERE id = ?", (cid,)).fetchone()[0]
+
+    def _report(self, h, cases, n_running, need, extra):
+        """Progress over the whole job: its cases (all of the match's, for the optimiser)."""
+        con = self.con
+        rows = [dict(r) for r in con.execute("SELECT status, misfit, case_no, wall_s FROM hm_cases WHERE job_id = ? "
+                                             "OR id IN (%s)" % ",".join(str(c["id"]) for c in cases), (self.job_id,))]
+        done = [r for r in rows if r["status"] == "done"]
+        failed = [r for r in rows if r["status"] == "failed"]
+        left = len(rows) - len(done) - len(failed)
+        allbest = con.execute("SELECT case_no, misfit FROM hm_cases WHERE hm_id = ? AND status = 'done' AND misfit "
+                              "IS NOT NULL ORDER BY misfit LIMIT 1", (h["id"],)).fetchone()
+        walls = [r["wall_s"] for r in done if r["wall_s"]]
+        eta = (left * (sum(walls) / len(walls)) / max(1, slots(self.cfg))) if walls and left else None
+        self._progress(cases=len(rows), done=len(done), failed=len(failed), running=n_running, left=left,
+                       best_case=allbest["case_no"] if allbest else None,
+                       best_misfit=allbest["misfit"] if allbest else None, elapsed_s=round(time.time() - self.t0),
+                       eta_s=round(eta) if eta else None, memory_mb_per_case=round(need), **(extra or {}))
+
+    def _use_base_run(self, h, base: dict, obs):
+        """The base case is the approved deck's own run when there is one."""
+        if base["status"] != "done" and h["base_run_id"]:
+            r = service.run_row(self.con, h["base_run_id"])
+            self.con.execute("UPDATE hm_cases SET status = 'done', run_id = ?, run_dir = ?, smspec_path = ?, "
+                             "finished_at = ? WHERE id = ?", (r["id"], r["out_dir"], r["smspec_path"], _now(),
+                                                              base["id"]))
+            score(self.con, h, base["id"], r["smspec_path"], obs)
+
+    # ------------------------------------------------------------ the job
+    def run(self) -> dict:
+        con = self.con
         job = get_job(con, self.job_id)
         h = get_hm(con, job["hm_id"])
         con.execute("UPDATE hm_jobs SET status = 'running', started_at = COALESCE(started_at, ?) WHERE id = ?",
                     (_now(), self.job_id))
         try:
             obs = _observations(con, h)
-            cases = [ensure_case(con, h, v, self.job_id, lab) for v, lab in plan(h, job["kind"])]
-            # a case left 'running' by a server that stopped: run it again
-            for c in cases:
-                if c["status"] == "running" and not _alive(c["pid"]):
-                    con.execute("UPDATE hm_cases SET status = 'queued', pid = NULL WHERE id = ?", (c["id"],))
-            # the base case is the approved deck's own run when there is one
-            base = cases[0]
-            if base["status"] != "done" and h["base_run_id"]:
-                r = service.run_row(con, h["base_run_id"])
-                con.execute("UPDATE hm_cases SET status = 'done', run_id = ?, run_dir = ?, smspec_path = ?, "
-                            "finished_at = ? WHERE id = ?", (r["id"], r["out_dir"], r["smspec_path"], _now(), base["id"]))
-                score(con, h, base["id"], r["smspec_path"], obs)
-            folder = hm_dir(cfg.file_store, h)
-            need = case_memory_mb(cfg, con, h)
-            running: dict[int, tuple] = {}
-            t0 = time.time()
-            while True:
-                rows = [dict(con.execute("SELECT * FROM hm_cases WHERE id = ?", (c["id"],)).fetchone()) for c in cases]
-                queued = [c for c in rows if c["status"] == "queued" and c["id"] not in running]
-                stop = self._stop_requested()
-                if stop == 2:      # now: kill what runs
-                    for cid, (p, *_rest) in running.items():
-                        p.kill()
-                        con.execute("UPDATE hm_cases SET status = 'queued', pid = NULL WHERE id = ?", (cid,))
-                    running.clear()
-                # finished?
-                for cid, (p, cdir, deck, started) in list(running.items()):
-                    rc = p.poll()
-                    wall = time.time() - started
-                    if rc is None and wall > cfg.hm_case_timeout_s:
-                        p.kill()
-                        rc = -9
-                    if rc is None:
-                        continue
-                    del running[cid]
-                    smspec = cdir / (deck.stem + ".SMSPEC")
-                    ok = rc == 0 and smspec.exists()
-                    con.execute("UPDATE hm_cases SET status = ?, returncode = ?, smspec_path = ?, wall_s = ?, "
-                                "finished_at = ?, pid = NULL, error = ? WHERE id = ?",
-                                ("done" if ok else "failed", rc, str(smspec) if ok else None, round(wall, 1), _now(),
-                                 None if ok else _tail(cdir / "run.log"), cid))
-                    if ok:
-                        score(con, h, cid, str(smspec), obs)
-                    self.log(f"case {cid}: {'done' if ok else 'failed'} in {wall:.0f} s")
-                capacity = max(0, slots(cfg) - ordinary_runs(con))
-                while queued and not stop and len(running) < capacity and memory_ok(cfg, need * (len(running) + 1)):
-                    c = queued.pop(0)
-                    cdir = folder / f"case_{c['case_no']}"
-                    try:
-                        deck = build_variant(con, h, json.loads(c["values_json"]), cdir)
-                        p, _engine, _log = runner.start(deck, cdir / "run", cfg.flow_bin, threads=cfg.hm_threads)
-                    except Exception as e:  # noqa: BLE001  (a variant that can't be built fails, the job goes on)
-                        con.execute("UPDATE hm_cases SET status = 'failed', error = ?, finished_at = ? WHERE id = ?",
-                                    (f"{type(e).__name__}: {e}", _now(), c["id"]))
-                        continue
-                    running[c["id"]] = (p, cdir / "run", deck, time.time())
-                    con.execute("UPDATE hm_cases SET status = 'running', run_dir = ?, pid = ?, started_at = ? "
-                                "WHERE id = ?", (str(cdir), p.pid, _now(), c["id"]))
-                rows = [dict(con.execute("SELECT status, misfit, case_no, wall_s FROM hm_cases WHERE id = ?",
-                                         (c["id"],)).fetchone()) for c in cases]
-                done = [r for r in rows if r["status"] == "done"]
-                failed = [r for r in rows if r["status"] == "failed"]
-                left = len(rows) - len(done) - len(failed)
-                best = min((r for r in done if r["misfit"] is not None), key=lambda r: r["misfit"], default=None)
-                walls = [r["wall_s"] for r in done if r["wall_s"]]
-                eta = (left * (sum(walls) / len(walls)) / max(1, slots(cfg))) if walls and left else None
-                self._progress(cases=len(rows), done=len(done), failed=len(failed), running=len(running),
-                               left=left, best_case=best["case_no"] if best else None,
-                               best_misfit=best["misfit"] if best else None, elapsed_s=round(time.time() - t0),
-                               eta_s=round(eta) if eta else None, memory_mb_per_case=round(need))
-                if not running and (left == 0 or stop):
-                    break
-                time.sleep(0.5)
-            if self._stop_requested() and left:
-                status, result = "stopped", None
+            if job["kind"] == "optimise":
+                status, result = self._optimise(h, job, obs)
             else:
-                status, result = "done", summarise(con, h, job["kind"])
+                cases = [ensure_case(con, h, v, self.job_id, lab) for v, lab in plan(h, job["kind"], job["options"])]
+                self._use_base_run(h, cases[0], obs)
+                rows = self.batch(h, cases, obs)
+                left = sum(1 for r in rows if r["status"] not in ("done", "failed"))
+                status, result = ("stopped", None) if self._stop_requested() and left else \
+                    ("done", summarise(con, h, job["kind"]))
             con.execute("UPDATE hm_jobs SET status = ?, result_json = ?, finished_at = ? WHERE id = ?",
                         (status, json.dumps(result) if result else None, _now(), self.job_id))
             return get_job(con, self.job_id)
@@ -365,6 +397,157 @@ class Runner:
             con.execute("UPDATE hm_jobs SET status = 'failed', error = ?, finished_at = ? WHERE id = ?",
                         (f"{type(e).__name__}: {e}", _now(), self.job_id))
             raise
+
+    # ------------------------------------------------------------ the optimiser
+    def _optimise(self, h: dict, job: dict, obs) -> tuple[str, dict]:
+        """Bounded least squares (trust region reflective) on the weighted residuals, in the search space
+        (log10 for log parameters). The Jacobian is forward differences, its N cases run as one parallel batch;
+        every evaluation is a case, so a restart re-uses them all."""
+        import numpy as np
+        from scipy.optimize import least_squares
+        con, opt = self.con, job["options"] or {}
+        act = [p for p in h["parameters"] if p["active"]]
+        if not act:
+            raise ToolError(INVALID_INPUT, "no active parameters to optimise")
+        fixed = start_values(h)
+        lo = np.array([_to_u(p, p["low"]) for p in act])
+        hi = np.array([_to_u(p, p["high"]) for p in act])
+        step = float(opt.get("fd_step", 0.01))
+        budget = int(opt.get("budget_runs", 200))
+        hours = opt.get("budget_hours")
+        target = opt.get("target_misfit")
+        well_version = con.execute("SELECT well_version_id FROM decks WHERE id = ?", (h["deck_id"],)).fetchone()[0]
+        hon = mf.honoured(con, well_version)
+        keys = residual_keys(obs, h["objective"], hon)
+        used0 = con.execute("SELECT COUNT(*) FROM hm_cases WHERE hm_id = ?", (h["id"],)).fetchone()[0]
+        cache: dict[str, np.ndarray] = {}
+        state = {"iter": 0, "evals": 0, "history": []}
+
+        def values(u):
+            return {**fixed, **{p["name"]: _from_u(p, x) for p, x in zip(act, u)}}
+
+        def evaluate(us, label):
+            vs = [values(u) for u in us]
+            ks = [pm.values_key(v) for v in vs]
+            k0 = pm.values_key(fixed)
+            todo = [ensure_case(con, h, v, self.job_id, "base" if k == k0 else label)
+                    for v, k in zip(vs, ks) if k not in cache]
+            if todo:
+                used = con.execute("SELECT COUNT(*) FROM hm_cases WHERE hm_id = ? AND status IN ('done','failed')",
+                                   (h["id"],)).fetchone()[0]
+                if used - used0 >= budget and any(c["status"] == "queued" for c in todo):
+                    raise _Halt("budget_runs")
+                if hours and time.time() - self.t0 > float(hours) * 3600:
+                    raise _Halt("budget_hours")
+                for c in todo:
+                    if c["label"] == "base":
+                        self._use_base_run(h, c, obs)
+                rows = self.batch(h, todo, obs, {"iteration": state["iter"], "phase": label})
+                if self._stop_requested() and any(r["status"] not in ("done", "failed") for r in rows):
+                    raise _Halt("stopped")
+                for r in rows:
+                    cache[r["values_key"]] = (residuals(obs, r["smspec_path"], h["objective"], hon, keys)
+                                              if r["status"] == "done" else np.full(len(keys), FAILED_RESIDUAL))
+            return [cache[k] for k in ks]
+
+        def fun(u):
+            f, = evaluate([u], "optimise")
+            state["evals"] += 1
+            m = float(f @ f)
+            state["history"].append(m)
+            if target is not None and m <= float(target):
+                raise _Halt("target_misfit")
+            return f
+
+        def jac(u):
+            state["iter"] += 1
+            f0, = evaluate([u], "optimise")
+            us, hs = [], []
+            for i in range(len(u)):
+                d = step * (hi[i] - lo[i])
+                hsg = d if u[i] + d <= hi[i] else -d
+                v = u.copy()
+                v[i] += hsg
+                us.append(v)
+                hs.append(hsg)
+            fs = evaluate(us, f"jacobian {state['iter']}")
+            return np.stack([(f - f0) / hh for f, hh in zip(fs, hs)], axis=1)
+
+        start = opt.get("start", "best")
+        u0 = np.array([_to_u(p, p["start"]) for p in act])
+        if start == "best":
+            b = con.execute("SELECT values_json FROM hm_cases WHERE hm_id = ? AND status = 'done' AND misfit IS NOT "
+                            "NULL ORDER BY misfit LIMIT 1", (h["id"],)).fetchone()
+            if b:
+                bv = json.loads(b[0])
+                u0 = np.array([_to_u(p, bv.get(p["name"], p["start"])) for p in act])
+        u0 = np.clip(u0, lo, hi)
+        why = "converged"
+        try:
+            r = least_squares(fun, u0, jac=jac, bounds=(lo, hi), method="trf", x_scale=hi - lo,
+                              xtol=float(opt.get("xtol", 1e-4)), ftol=float(opt.get("ftol", 1e-6)), gtol=1e-8,
+                              max_nfev=budget)
+            why = {0: "max_evaluations", 1: "gtol", 2: "ftol", 3: "xtol", 4: "ftol+xtol"}.get(r.status, str(r.status))
+        except _Halt as e:
+            why = e.why
+        if why == "stopped":
+            return "stopped", None
+        best = con.execute("SELECT case_no, misfit, values_json FROM hm_cases WHERE hm_id = ? AND status = 'done' "
+                           "AND misfit IS NOT NULL ORDER BY misfit LIMIT 1", (h["id"],)).fetchone()
+        base = con.execute("SELECT misfit FROM hm_cases WHERE hm_id = ? AND label = 'base'", (h["id"],)).fetchone()
+        bv = json.loads(best["values_json"]) if best else {}
+        at_bound = [p["name"] for p in act if best and (abs(bv[p["name"]] - p["low"]) <= 1e-9 * max(1, abs(p["low"]))
+                                                        or abs(bv[p["name"]] - p["high"]) <= 1e-9 * max(1, abs(p["high"])))]
+        return "done", {"method": "lsq", "stopped_because": why, "iterations": state["iter"],
+                        "evaluations": state["evals"],
+                        "cases_run": con.execute("SELECT COUNT(*) FROM hm_cases WHERE hm_id = ? AND status IN "
+                                                 "('done','failed')", (h["id"],)).fetchone()[0] - used0,
+                        "base_misfit": base["misfit"] if base else None,
+                        "best_case": best["case_no"] if best else None, "best_misfit": best["misfit"] if best else None,
+                        "best_values": bv, "at_bound": at_bound, "history": state["history"]}
+
+
+FAILED_RESIDUAL = 10.0     # a failed case: every residual 10 sigma, so the search turns away from it
+
+
+def _to_u(p: dict, v: float) -> float:
+    return math.log10(v) if p["scale"] == "log" else float(v)
+
+
+def _from_u(p: dict, u: float) -> float:
+    return float(10 ** u) if p["scale"] == "log" else float(u)
+
+
+def residual_keys(obs, objective: dict, hon: dict):
+    """The observations the residual vector is over (fixed for the whole search): the period and wells the
+    objective keeps, without the honoured quantities (unless include_honoured), as a DataFrame with σ and weight."""
+    import numpy as np
+    a = obs.copy()
+    if objective.get("period"):
+        lo, hi = objective["period"]
+        a = a[(a["month"] >= (lo or "")) & (a["month"] <= (hi or "9999"))]
+    if objective.get("exclude_wells"):
+        a = a[~a["well"].isin(objective["exclude_wells"])]
+    if not objective.get("include_honoured"):
+        keep = [q not in hon.get(w, {}).get("honoured", []) for w, q in zip(a["well"], a["quantity"])]
+        a = a[keep]
+    a = a.dropna(subset=["value"]).sort_values(["well", "quantity", "month"]).reset_index(drop=True)
+    s = objective["sigma"]
+    a["sigma"] = np.maximum(a["quantity"].map(lambda q: s.get(q, {}).get("rel", 0.1)) * a["value"].abs(),
+                            a["quantity"].map(lambda q: s.get(q, {}).get("abs", 1.0)))
+    a["w"] = a["quantity"].map(lambda q: objective["weights"].get(q, 1.0))
+    return a
+
+
+def residuals(obs, smspec: str, objective: dict, hon: dict, keys) -> "np.ndarray":
+    """sqrt(w / N) · (sim − obs) / σ over the keys; a month the case didn't simulate counts as FAILED_RESIDUAL."""
+    import numpy as np
+    sim = series.from_summary(smspec)
+    m = keys.merge(sim[["well", "quantity", "month", "value"]].rename(columns={"value": "sim"}),
+                   on=["well", "quantity", "month"], how="left")
+    r = ((m["sim"] - m["value"]) / m["sigma"]).to_numpy(dtype=float)
+    r = np.where(np.isnan(r), FAILED_RESIDUAL, r)
+    return np.sqrt(m["w"].to_numpy(dtype=float) / max(1, len(m))) * r
 
 
 def _alive(pid) -> bool:
@@ -487,15 +670,15 @@ def spoken_job(j: dict) -> str:
 
 
 # ---------------------------------------------------------------- the HM report of a match
-def write_match_report(cfg, con, ref, *, timeout: int = 600) -> dict:
-    """The HM report of a history match: the best case against the observations, with the base case beside it,
-    the sensitivity tornado and the cases evaluated."""
+def write_match_report(cfg, con, ref, *, case_no: int | None = None, timeout: int = 600) -> dict:
+    """The HM report of a history match: the best case (or case_no, e.g. a proposal's) against the observations,
+    with the base case beside it, the sensitivity tornado, the optimiser's convergence and the cases evaluated."""
     from ..notebooks import runner
     h = get_hm(con, ref)
     done = [c for c in cases(con, h["id"], limit=10_000) if c["status"] == "done" and c["misfit"] is not None]
     if not done:
         raise ToolError(INVALID_INPUT, f"history match {h['name']} has no finished case yet; run hm_base first")
-    best = done[0]
+    best = next((c for c in done if c["case_no"] == case_no), done[0]) if case_no is not None else done[0]
     base = next((c for c in done if c["label"] == "base"), None)
     smspec = lambda c: con.execute("SELECT smspec_path FROM hm_cases WHERE id = ?", (c["id"],)).fetchone()[0]  # noqa: E731
     obs = _observations(con, h)
@@ -510,6 +693,8 @@ def write_match_report(cfg, con, ref, *, timeout: int = 600) -> dict:
         series.from_summary(smspec(base)).to_csv(folder / "base.csv", index=False)
     sens = con.execute("SELECT result_json FROM hm_jobs WHERE hm_id = ? AND kind = 'sensitivity' AND status = 'done' "
                        "ORDER BY id DESC LIMIT 1", (h["id"],)).fetchone()
+    opt = con.execute("SELECT result_json FROM hm_jobs WHERE hm_id = ? AND kind = 'optimise' AND status = 'done' "
+                      "ORDER BY id DESC LIMIT 1", (h["id"],)).fetchone()
     deck_name = con.execute("SELECT name FROM decks WHERE id = ?", (h["deck_id"],)).fetchone()[0]
     payload = {"schema": 1, "created_at": f"{datetime.now():%Y-%m-%d %H:%M}", "study": h["study"],
                "hm": {"id": h["id"], "name": h["name"], "revision": h["revision"]},
@@ -520,7 +705,8 @@ def write_match_report(cfg, con, ref, *, timeout: int = 600) -> dict:
                "best_case": {k: best[k] for k in ("case_no", "label", "misfit", "values")},
                "base_case": {k: base[k] for k in ("case_no", "label", "misfit", "values")} if base else None,
                "parameters": h["parameters"], "cases": done[:50],
-               "tornado": json.loads(sens[0]).get("tornado") if sens else None}
+               "tornado": json.loads(sens[0]).get("tornado") if sens else None,
+               "optimise": json.loads(opt[0]) if opt else None}
     (folder / "payload.json").write_text(json.dumps(payload, indent=2, default=str))
     out = runner.execute(service.REPORT_TEMPLATE, folder / "hm_report.ipynb", {"payload_path": "payload.json"},
                          cwd=folder, timeout=timeout)
