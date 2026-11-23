@@ -345,7 +345,10 @@ each with its connections to grid faces:
 A face alone connects that whole edge of the grid; `i`, `j`, `layers` or `zone` narrow it. The datum defaults to
 the OWC and the initial pressure to equilibrium with the reservoir (both noted in the assumptions). The deck gets
 `AQUDIMS`, `AQUFETP` / `AQUCT` (built-in influence table) and `AQUANCON`, and the summary `AAQR`, `AAQT`, `AAQP`
-per aquifer. Aquifers in imported decks are still carried through unchanged
+per aquifer. An imported deck's `AQUFETP` / `AQUCT` / `AQUANCON` become its res model's aquifers (and `AQUDIMS` is
+written again); other aquifer forms (`AQUFET`, numerical aquifers, `AQUTAB` influence tables, salinity or
+temperature items, internal connections) keep all the deck's aquifer keywords carried through unchanged, and the
+coverage report says why
 ([design](docs/design/res-model.md)).
 
 ## Well modeler

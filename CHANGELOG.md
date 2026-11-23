@@ -55,6 +55,11 @@ No approvals are carried over. Design: [docs/design/res-model.md](docs/design/re
   for per-user application data, instead of `~/opmagent/open-data`: `tools/fetch_open_data.sh`, `tools/install.sh`,
   the testing scripts and the docs. To move an existing checkout: `mkdir -p ~/.local/share/opmagent &&
   mv ~/opmagent/open-data ~/.local/share/opmagent/` (the tests keep reading `OPM_TESTS_DIR`).
+- **Imported aquifers**: the deck importer (and a study from a deck) maps `AQUFETP`, `AQUCT` and `AQUANCON` into the
+  res model's `aquifers` / `aquifer_connections` (deck units), and `AQUDIMS` is regenerated. A deck with any other
+  aquifer form (`AQUFET`, `AQUNUM`/`AQUCON`, `AQUTAB`, salinity or temperature items, internal connections) keeps
+  all its aquifer keywords as passthrough; the coverage report gives the reason (`aquifer_passthrough`). The hello
+  aquifer deck round-trips with the aquifers mapped.
 - **Res QC notebook** (`res_qc.ipynb`, `res_qc_lib`): every res build runs it on the geo version's static view
   made with the version's regions (Flow's PORV, DEPTH and region arrays). Checks: SCAL end points, mobile oil window,
   kro at connate water SWOF vs SGOF, SGOF within 1 - Swc, Pcow; SATNUM/EQLNUM values against tables, unused tables,

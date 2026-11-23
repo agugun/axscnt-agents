@@ -47,6 +47,66 @@ _EPS_BASE = ["SWL", "SWLPC", "SWCR", "SWU", "SGL", "SGLPC", "SGCR", "SGU", "SOWC
 ENDPOINT_KWS = {p + b + d for b in _EPS_BASE for p in ("", "I") for d in ("", "X", "X-", "Y", "Y-", "Z", "Z-")}
 
 
+# analytical aquifers the res model holds (rendered back by the deck builder); any other aquifer form keeps every
+# aquifer keyword of the deck as passthrough, unchanged
+AQ_MAPPED = {"AQUFETP", "AQUCT", "AQUANCON"}
+AQ_OTHER = {"AQUFET", "AQUNUM", "AQUCON", "AQUTAB", "AQUFLUX", "AQUCHWAT", "AQUCHGAS", "AQUFETP_", "AQUCT_"}
+_FACE = {"X": "I", "Y": "J", "Z": "K"}
+
+
+def aquifer_mappable(deck) -> tuple[bool, str]:
+    """Whether the deck's aquifers fit the res model: AQUFETP / AQUCT with AQUANCON, built-in influence table, no
+    salinity or temperature items, no internal connections. (True, '') or (False, why)."""
+    names = {kw.name for kw in deck}
+    if not names & {"AQUFETP", "AQUCT"}:
+        return False, ""
+    other = sorted(names & AQ_OTHER)
+    if other:
+        return False, f"aquifer keywords {other} have no res model home"
+    if "AQUANCON" not in names:
+        return False, "AQUFETP/AQUCT without AQUANCON"
+    for kw in deck:
+        if kw.name == "AQUFETP" and any(any(x is not None for x in r[7:]) for r in records(kw)):
+            return False, "AQUFETP salinity or temperature items"
+        if kw.name == "AQUCT":
+            for r in records(kw):
+                if (_get(r, 10) or 1) != 1:
+                    return False, f"AQUCT aquifer {r[0]} uses influence table {r[10]} (only the built-in table 1)"
+                if any(x is not None for x in r[11:]):
+                    return False, "AQUCT salinity or temperature items"
+        if kw.name == "AQUANCON":
+            for r in records(kw):
+                if str(_get(r, 10, "NO")).upper().startswith("Y"):
+                    return False, "AQUANCON connections to internal cell faces"
+    return True, ""
+
+
+def aquifer_tables(deck) -> tuple[list[dict], list[dict]]:
+    """aquifers and aquifer_connections rows from AQUFETP, AQUCT and AQUANCON, in the deck's own units."""
+    aqs, conns = [], []
+    for kw in deck:
+        if kw.name == "AQUFETP":
+            for r in records(kw):
+                aqs.append({"aquifer_id": int(r[0]), "aq_type": "FETKOVICH", "datum_depth": r[1],
+                            "init_pressure": _get(r, 2), "water_volume": r[3], "total_compressibility": r[4],
+                            "productivity_index": r[5], "pvtw_table": int(_get(r, 6, 1))})
+        elif kw.name == "AQUCT":
+            for r in records(kw):
+                aqs.append({"aquifer_id": int(r[0]), "aq_type": "CARTER_TRACY", "datum_depth": r[1],
+                            "init_pressure": _get(r, 2), "permeability": r[3], "porosity": r[4],
+                            "total_compressibility": r[5], "inner_radius": r[6], "thickness": r[7],
+                            "angle_deg": _get(r, 8, 360.0), "pvtw_table": int(_get(r, 9, 1)),
+                            "influence_table": int(_get(r, 10, 1))})
+        elif kw.name == "AQUANCON":
+            for r in records(kw):
+                face = str(r[7]).upper()
+                face = _FACE.get(face[0], face[0]) + face[1:]
+                conns.append({"aquifer_id": int(r[0]), "i1": int(r[1]), "i2": int(r[2]), "j1": int(r[3]),
+                              "j2": int(r[4]), "k1": int(r[5]), "k2": int(r[6]), "face": face,
+                              "influx_coeff": _get(r, 8), "influx_mult": float(_get(r, 9, 1.0))})
+    return sorted(aqs, key=lambda a: a["aquifer_id"]), conns
+
+
 class ImportError_(Exception):
     pass
 
@@ -275,6 +335,7 @@ def import_deck(deck_path: str | Path, out_dir: str | Path) -> dict:
     passthrough = defaultdict(list)   # section -> [{keyword, raw_text}]
     kws = defaultdict(list)           # (section, name) -> [kw]
     schedule_kws = []                 # ordered (name, kw)
+    map_aq, aq_why = aquifer_mappable(deck)
     for kw in deck:
         name = kw.name
         if name in SECTIONS:
@@ -285,7 +346,11 @@ def import_deck(deck_path: str | Path, out_dir: str | Path) -> dict:
             raise ImportError_(f"{name}: unsupported feature (only black oil is supported)")
         if section == "SCHEDULE":
             schedule_kws.append((name, kw))
-        if name in MAPPED.get(section, set()) or (section == "EDIT" and name in GRID_PROPS):
+        if map_aq and name in AQ_MAPPED:
+            handling = "mapped"
+        elif map_aq and name == "AQUDIMS":
+            handling = "regenerated"
+        elif name in MAPPED.get(section, set()) or (section == "EDIT" and name in GRID_PROPS):
             handling = "mapped"
             kws[(section, name)].append(kw)
         elif name in APPLIED:
@@ -692,13 +757,16 @@ def import_deck(deck_path: str | Path, out_dir: str | Path) -> dict:
                 "tables": {"faults": faults,
                            "fault_multipliers": [{"fault_name": k, "mult": v} for k, v in multflt.items()]}},
         "res": {"header": {"unit_system": unit}, "props": [p for p in props if p["keyword"] in RES_PROPS],
-                "tables": {"rock": rock, "swof": swof, "sgof": sgof, "contacts": contacts}},
+                "tables": {"rock": rock, "swof": swof, "sgof": sgof, "contacts": contacts,
+                           **dict(zip(("aquifers", "aquifer_connections"),
+                                      aquifer_tables(deck) if map_aq else ([], [])))}},
         "well": {"header": {"unit_system": unit, "start_date": start.isoformat()},
                  "tables": {"well_groups": [g for g in groups.values() if g["group_name"] != "FIELD"],
                             "wells": list(wells.values()), "well_completions": comps, "well_events": events}},
         "spec": spec, "files": files,
         "coverage": {"counts": dict(counts), "keywords": coverage, "schedule_mode": schedule_mode,
                      "schedule_reasons": sorted(set(verbatim_reasons))[:30],
+                     **({"aquifer_passthrough": aq_why} if aq_why else {}),
                      "inexact_cells": inexact},   # cells whose value OPM's parser cannot reproduce exactly
         "grid": {"nx": nx, "ny": ny, "nz": nz, "nactive": int(grid.nactive)},
     }

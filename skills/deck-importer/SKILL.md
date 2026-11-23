@@ -12,6 +12,8 @@ description: Import (reverse-engineer) an existing OPM/Eclipse deck into fluid, 
 3. Report from the output:
    - coverage: how many keywords are mapped, applied, regenerated, passthrough (carried verbatim);
    - schedule mode: `model` (rebuilt from the well model) or `verbatim` (carried as-is, with the reasons);
+   - aquifers: `AQUFETP` / `AQUCT` / `AQUANCON` go into the res model; other forms (`AQUFET`, numerical aquifers,
+     `AQUTAB`, salinity or temperature, internal connections) stay passthrough, and the reason is given;
    - validator findings per model. Imported data is stored as it ran in OPM; findings go to the reviewer,
      they don't block. Explain them plainly (e.g. "several wells switch from producer to injector").
    - `IMPORT_UNSUPPORTED` → explain the feature (e.g. thermal, compositional) and stop.
