@@ -258,7 +258,7 @@ imported deck) is refused by `hm_setup` until its data has a model home.
 | Phase | What | Gate to go on |
 | --- | --- | --- |
 | 1. Misfit | Observations from `data_production`, misfit per well and quantity on a finished run, the HM report's per-well, field and misfit plots | the hello study with history reports misfit 0 against its own simulated "history" |
-| 2. Variants and sensitivities | Parameters, variant decks, parallel Flow runs with memory checks, the tornado chart | a synthetic truth: hello with PERMX x 0.5 in one zone and Corey nw 3. The sensitivity ranks those two first |
+| 2. Variants and sensitivities | Parameters, variant decks, parallel Flow runs with memory checks, the tornado chart | a synthetic truth: hello with PERMX x 0.5 in layer 1 and Corey nw 3. With one PERMX multiplier among the parameters, the sensitivity ranks those two first; with one per layer, it reports the three layers as near-equivalent (hello's layers are the same rock, completed in both wells, so the data can't tell them apart) |
 | 3. Optimisation and proposal | `least_squares` with finite differences, restartable `hm_runs`, the match proposal and its review, requests to the modelers | the synthetic truth: both parameters recovered within 5 %, the misfit near 0; after the modelers' versions, the Flow run equals the best case |
 | 4. Norne | The Norne study from its deck: base misfit against its WCONHIST history, a sensitivity on zone PERMX multipliers, MULTFLT and aquifer support | reported, not a pass mark: the base case is the benchmark's starting model |
 | 5. Ensemble (optional) | ES-MDA, the parameter and forecast spread | the synthetic truth inside the ensemble's spread |
@@ -278,6 +278,28 @@ imported deck) is refused by `hm_setup` until its data has a model home.
 - Simulated rates are the time-weighted monthly mean of the summary rate over the calendar month.
 - The deck builder's default summary gains `WGPR`, `WGIR` and the history vectors `WOPRH`, `WWPRH`, `WGPRH`,
   `WWIRH`, `WGIRH`, `WBHPH`.
+**Phase 2 as built** (`opmagent/hm/params.py`, `opmagent/hm/jobs.py`):
+
+- Tables `hm_studies`, `hm_parameters`, `hm_jobs`, `hm_cases`, `hm_misfits` (a migration). Triggers refuse
+  changes to a frozen setup's parameters and objective. `hm_proposals` comes with phase 3.
+- Parameter kinds: `permx_mult` (with PERMY), `permz_mult`, `poro_mult` by zone, layer range or all cells;
+  `multflt`; Corey `corey_nw`, `corey_now`, `corey_ng`, `corey_nog`, `krw_max`, `krg_max`, `sorw`, `swc` per
+  SATNUM (rebuilt with the res modeler's `scal_tables`); `aquifer_volume_mult`, `aquifer_pi_mult`. Contacts and
+  skins are refused.
+- New HM server tools: `hm_targets`, `hm_setup`, `hm_resolve`, `hm_base`, `hm_sensitivity`, `hm_status`, `hm_stop`,
+  `hm_cases`, `hm_case` and `hm_match_report`. `hm_targets` is on the HM server, not the data server.
+- The `history-matcher` agent uses a new read-only `hm` data-server profile and the `history-matcher` skill.
+  `opmagent setup` now adds `opm-hm`.
+- `hm_base` uses the deck's latest finished run, never the synthetic truth's. Without one it runs the base deck
+  as a variant.
+- Capacity is `[hm] parallel` (default: cores / (2 × threads)), less the ordinary runs in progress. A case starts
+  only while free memory ≥ `[hm] min_free_mb` plus the running cases' estimate (300 MB + 20 kB per cell, or
+  `[hm] case_memory_mb`). A case that runs longer than `[hm] case_timeout_s` is stopped and failed.
+- The sensitivity ranks parameters by how much one end lowers the misfit, then by effect. A parameter whose
+  effect is under 1 % of the base misfit is listed under `no_effect`.
+- Found on the way: the Corey builders produced complex numbers for non-integer exponents (rounding took the
+  normalised saturation past 1). They now clamp it to [0, 1].
+
 - Gate: `tests/test_hm.py` runs hello and gets misfit 0 against itself, both as a `run` truth and through
   `data_production` built from its own monthly volumes. The `deck_history` path has no end-to-end test yet (no small
   deck with WCONHIST); Norne in phase 4 is its test.

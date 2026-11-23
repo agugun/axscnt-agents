@@ -29,6 +29,7 @@ def load(payload_path: str | Path) -> dict:
     data = json.loads(p.read_text())
     data["obs"] = pd.read_csv(p.parent / "observed.csv")
     data["sim"] = pd.read_csv(p.parent / "simulated.csv")
+    data["base"] = pd.read_csv(p.parent / "base.csv") if (p.parent / "base.csv").exists() else None
     return data
 
 
@@ -36,12 +37,18 @@ def header(data: dict):
     from IPython.display import HTML
     m = data.get("misfit")
     mtxt = f"{m:.3f} over {data['points']} points" if m is not None else "not defined"
-    return HTML(f"<h1>History match report: run {data['run_id']}</h1>"
+    title = (f"History match {html.escape(data['hm']['name'])} (revision {data['hm']['revision']})" if data.get("hm")
+             else f"History match report: run {data['run_id']}")
+    best = data.get("best_case")
+    case = (f"<p>Best case {best['case_no']} ({html.escape(str(best.get('label') or 'search'))})"
+            + (f"; base case misfit {data['base_case']['misfit']:.3f}" if data.get("base_case") else "") + "</p>"
+            if best else "")
+    return HTML(f"<h1>{title}</h1>"
                 f"<p>Deck {html.escape(str(data.get('deck_name')))} (id {data['deck_id']})"
                 f"{' &middot; study ' + html.escape(data['study']) if data.get('study') else ''}"
                 f" &middot; observations: {html.escape(data['source'].replace('_', ' '))}"
                 f" &middot; built {data.get('created_at', '')}</p>"
-                f"<p><b>Misfit {mtxt}</b></p>")
+                f"<p><b>Misfit {mtxt}</b></p>" + case)
 
 
 def findings(data: dict):
@@ -96,8 +103,13 @@ def fig_well(data: dict, well: str):
         fig.add_trace(go.Scatter(x=oq["month"], y=oq["value"] - sig, fill="tonexty", **BAND), row=i, col=1)
         fig.add_trace(go.Scatter(x=oq["month"], y=oq["value"], name="observed", showlegend=i == 1, **OBS),
                       row=i, col=1)
-        fig.add_trace(go.Scatter(x=sq["month"], y=sq["value"], name="simulated", showlegend=i == 1, **SIM),
-                      row=i, col=1)
+        if data.get("base") is not None:
+            b = data["base"]
+            bq = b[(b["well"] == well) & (b["quantity"] == q)].sort_values("month")
+            fig.add_trace(go.Scatter(x=bq["month"], y=bq["value"], name="base case", showlegend=i == 1, mode="lines",
+                                     line=dict(width=1.5, color="#8c959f", dash="dash")), row=i, col=1)
+        fig.add_trace(go.Scatter(x=sq["month"], y=sq["value"], name="best case" if data.get("best_case") else
+                                 "simulated", showlegend=i == 1, **SIM), row=i, col=1)
     w = {d["well"]: d for d in data.get("wells", [])}.get(well, {})
     for key, dash, name in (("breakthrough_obs", "dot", "observed"), ("breakthrough_sim", "dash", "simulated")):
         if w.get(key):
@@ -169,3 +181,50 @@ def fig_misfit_map(data: dict):
     fig.update_layout(**{**LAYOUT, "height": 460}, title="Misfit at the well positions",
                       xaxis_title="i", yaxis_title="j", yaxis=dict(autorange="reversed", scaleanchor="x"))
     return fig
+
+
+def fig_tornado(data: dict):
+    """Misfit change per parameter at its low and high end, against the base case (the sensitivity)."""
+    tor = data.get("tornado")
+    if not tor:
+        return None
+    tor = list(reversed(tor))      # rank 1 on top
+    names = [d["name"] for d in tor]
+    fig = go.Figure()
+    fig.add_trace(go.Bar(y=names, x=[d["delta_low"] for d in tor], orientation="h", name="low end",
+                         marker_color="#0969da", text=[f"{d['low']:g}" for d in tor], textposition="auto"))
+    fig.add_trace(go.Bar(y=names, x=[d["delta_high"] for d in tor], orientation="h", name="high end",
+                         marker_color="#bf8700", text=[f"{d['high']:g}" for d in tor], textposition="auto"))
+    fig.add_vline(x=0, line_color="#444")
+    fig.update_layout(**{**LAYOUT, "height": 120 + 40 * len(tor)}, barmode="overlay",
+                      title="Sensitivity: misfit change from the base case (left: better)",
+                      xaxis_title="misfit change")
+    return fig
+
+
+def tornado_frame(data: dict) -> pd.DataFrame:
+    t = pd.DataFrame(data.get("tornado") or [])
+    if t.empty:
+        return t
+    return t[["rank", "name", "kind", "low", "high", "misfit_low", "misfit_high", "best_reduction", "better_end",
+              "effect"]]
+
+
+def parameters_frame(data: dict) -> pd.DataFrame:
+    ps = pd.DataFrame(data.get("parameters") or [])
+    if ps.empty:
+        return ps
+    best = (data.get("best_case") or {}).get("values") or {}
+    ps["best"] = ps["name"].map(best)
+    ps["at_bound"] = [("low" if abs(b - lo) < 1e-12 else "high" if abs(b - hi) < 1e-12 else "")
+                      if b == b and b is not None else "" for b, lo, hi in zip(ps["best"], ps["low"], ps["high"])]
+    ps["target"] = ps["target"].map(lambda t: ", ".join(f"{k} {v}" for k, v in t.items()) if t else "all cells")
+    return ps[["name", "kind", "owner", "target", "low", "start", "high", "scale", "best", "at_bound", "active"]]
+
+
+def cases_frame(data: dict) -> pd.DataFrame:
+    c = pd.DataFrame(data.get("cases") or [])
+    if c.empty:
+        return c
+    vals = pd.DataFrame(list(c["values"]))
+    return pd.concat([c[["case_no", "label", "misfit", "wall_s"]], vals], axis=1)

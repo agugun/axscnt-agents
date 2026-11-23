@@ -28,7 +28,7 @@ def corey_swof(swc=0.2, sorw=0.2, nw=2.0, no=2.0, krw_max=0.4, n=8):
     rows = []
     for i in range(n):
         sw = swc + (1 - swc - sorw) * i / (n - 1)
-        s = (sw - swc) / (1 - swc - sorw)
+        s = min(1.0, max(0.0, (sw - swc) / (1 - swc - sorw)))   # rounding can pass 1: (1 - s) ** 1.5 complex
         rows.append(dict(sw=round(sw, 6), krw=round(krw_max * s ** nw, 6), krow=round((1 - s) ** no, 6), pcow=0.0))
     rows.append(dict(sw=1.0, krw=1.0, krow=0.0, pcow=0.0))
     return rows
@@ -39,7 +39,7 @@ def corey_sgof(swc=0.2, sgc=0.05, sorg=0.1, ng=2.0, no=2.0, krg_max=0.8, n=8):
     rows = [dict(sg=0.0, krg=0.0, krog=1.0, pcog=0.0)]
     for i in range(n):
         sg = sgc + (sgmax - sgc) * i / (n - 1)
-        s = (sg - sgc) / (sgmax - sgc)
+        s = min(1.0, max(0.0, (sg - sgc) / (sgmax - sgc)))
         rows.append(dict(sg=round(sg, 6), krg=round(krg_max * s ** ng, 6), krog=round((1 - s) ** no, 6), pcog=0.0))
     rows.append(dict(sg=round(1 - swc, 6), krg=1.0, krog=0.0, pcog=0.0))
     return rows

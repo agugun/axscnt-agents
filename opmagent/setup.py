@@ -26,6 +26,7 @@ AGENTS = {
     "run-agent": ("run", ["opm-sim"], "Runs validated decks, stores and compares results, and prepares VS Code debug sessions."),
     "data-manager": ("data", [], "Loads a study's raw data from many sources (lab reports, LAS, tops, well tables, production history, Volve) into the database for the modelers, reverse-engineers existing decks into study data, and answers the modelers' data requests."),
     "results-viewer": ("view", [], "Opens finished runs in ResInsight: grid, properties over time and summary vectors."),
+    "history-matcher": ("hm", ["opm-hm"], "Compares simulated with measured history (misfit per well and quantity), sets up history-match parameters, runs variant decks and sensitivities, and reports them. Never edits a model."),
 }
 SKILL_OF = {name: name for name in AGENTS}
 
@@ -137,6 +138,7 @@ auto_approve = false
                for prof in sorted({p for p, _, _ in AGENTS.values()})}
     servers["opm-pvt"] = {"command": _bin("opmagent-pvt"), "args": ["--config", c]}
     servers["opm-sim"] = {"command": _bin("opmagent-sim"), "args": ["--config", c]}
+    servers["opm-hm"] = {"command": _bin("opmagent-hm"), "args": ["--config", c]}
     mcp = ws / ".mcp.json"
     if mcp.exists() and not force:
         existing = json.loads(mcp.read_text())

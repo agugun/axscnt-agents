@@ -41,3 +41,11 @@ timeout_s = 600
 [viewer]
 # ResInsight launcher, for the results viewer (opmagent results open)
 # resinsight_bin = "/opt/ResInsight/bin/resinsight"   # only if ResInsight isn't on PATH or in /opt/ResInsight
+
+[hm]
+# History-match variants (opmagent-hm, `opmagent hm`): how many run at once, threads each, memory kept free
+# parallel = 4              # default: cores / (2 x threads); ordinary runs in progress take a slot each
+threads = 2
+min_free_mb = 1024
+# case_memory_mb = 2000     # default: 300 MB + 20 kB per cell
+case_timeout_s = 3600

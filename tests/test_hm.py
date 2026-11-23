@@ -73,31 +73,6 @@ def test_breakthrough_in_words():
 
 
 # ---------------------------------------------------------------- on the hello deck (Flow)
-@pytest.fixture
-def hello_run(cfg):
-    """A finished run of the hello deck (models approved and initial state accepted, as a person would)."""
-    pytest.importorskip("opm.simulators")
-    from opmagent.deck.init_review import accept, state
-    from opmagent.hello.run import hello, latest_demo
-    from opmagent.servers.data_server import DataService
-    from opmagent.servers.sim_server import SimService
-    from opmagent.servers.sim_server import wrap as swrap
-    hello(cfg, log=lambda *_: None)
-    rv = DataService("reviewer", cfg)
-    for kind, m in latest_demo(rv.con).items():
-        rid = rv.get_qc_report(kind=kind, version_id=m["version_id"])["qc_report"]["id"]
-        rv.approve(kind=kind, version_id=m["version_id"], qc_report_file_id=rid)
-    deck = hello(cfg, log=lambda *_: None)["deck"]["deck_id"]
-    if state(rv.con, deck) == "waiting":
-        accept(cfg, rv.con, deck, "tester")
-    sim = SimService(cfg)
-    a = swrap(sim, "run_simulation")(deck_id=deck)
-    assert a["ok"], a
-    done = swrap(sim, "wait")(run_id=a["run_id"], timeout_s=300)
-    assert done["ok"], done
-    return a["run_id"]
-
-
 def _study_with_history(cfg, con, run_id, scale=1.0):
     """A study whose measured history is the run's own simulated monthly volumes (× scale)."""
     from opmagent.hm.service import run_row

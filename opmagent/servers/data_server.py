@@ -1,6 +1,6 @@
 """Data MCP server. Start with a profile; it registers only that profile's tools.
 
-    opmagent-data --profile fluid|geo|res|well|import|deck|run|data|view|reviewer [--config opmagent.toml]
+    opmagent-data --profile fluid|geo|res|well|import|deck|run|data|view|hm|reviewer [--config opmagent.toml]
 
 Every tool returns a dict with "ok", a short "spoken_summary" and its result, or
 {"ok": false, "code", "message", "details"} on failure. Write tools are recorded in audit_log.
@@ -22,7 +22,7 @@ from ..core import db, files, models, review, studies
 from ..core.errors import FORBIDDEN, INVALID_INPUT, ToolError
 from ..notebooks import runner
 
-PROFILES = ("fluid", "geo", "res", "well", "import", "deck", "run", "data", "view", "reviewer")
+PROFILES = ("fluid", "geo", "res", "well", "import", "deck", "run", "data", "view", "hm", "reviewer")
 MODELER_KIND = {"fluid": "fluid", "geo": "geo", "res": "res", "well": "well"}
 READS = {"res": {"res", "geo"}}   # a modeler reads its own kind; the res modeler also reads the geo grid it builds on
 STUDY_TASK = {p: p for p in ("data", "fluid", "geo", "res", "well", "deck", "run", "view")}   # profile -> its study task
@@ -516,6 +516,10 @@ TOOLS = {
     "run": COMMON + ["list_decks", "get_deck", "init_view"] + STUDY,
     "data": COMMON + ["register_file", "load_study_data", "load_deck_data", "load_study_input"] + DATA_READ + STUDY,
     "view": COMMON + ["list_decks", "get_deck", "static_view", "init_view"] + STUDY,
+    # history matcher: reads every model, the decks and the study data; writes nothing here (its tables are the
+    # HM server's). The study task 'match' and its requests come with the match proposals (phase 3).
+    "hm": COMMON + ["list_decks", "get_deck", "init_view", "study_status", "list_studies", "study_data",
+                    "study_data_rows"],
     "reviewer": COMMON + ["list_pending_reviews", "get_qc_report", "approve", "reject", "add_review_comment",
                           "accept_init_view", "reject_init_view",
                           "get_review_feedback", "list_decks", "get_deck", "study_status", "list_studies",

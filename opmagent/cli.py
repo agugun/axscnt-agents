@@ -897,13 +897,19 @@ def cmd_results(args):
 
 
 def cmd_hm(args):
-    """History matching (phase 1): observations, misfit and the HM report on finished runs. Read only."""
+    """History matching: observations, misfit and the HM report on finished runs; setups, variants, sensitivities."""
     import json as _json
 
     from .core.errors import ToolError
     from .hm import service
     cfg = cfgmod.load(args.config)
     con = db.connect(cfg.database)
+    if args.hcmd in HM_PHASE2:
+        try:
+            _cmd_hm2(args, cfg, con)
+        except ToolError as e:
+            raise SystemExit(f"{e.code}: {e.message}") from None
+        return
     obj = _json.loads(Path(args.objective).read_text()) if getattr(args, "objective", None) else None
     kw = dict(study=args.study, source=args.source, truth_run_id=args.truth_run)
     try:
@@ -938,6 +944,79 @@ def cmd_hm(args):
             raise SystemExit(0 if r["report_ok"] else 2)
     except ToolError as e:
         raise SystemExit(f"{e.code}: {e.message}") from None
+
+
+HM_PHASE2 = ("targets", "setup", "base", "sensitivity", "status", "stop", "cases", "case", "match-report")
+
+
+def _cmd_hm2(args, cfg, con):
+    import json as _json
+
+    from .hm import jobs, params
+    out = lambda r: print(_json.dumps(r, indent=2, default=str))  # noqa: E731
+    c = args.hcmd
+    if c == "targets":
+        t = params.targets(con, args.deck)
+        if args.json:
+            return out(t)
+        print(f"grid {' x '.join(map(str, t['grid']))}")
+        for z in t["zones"]:
+            print(f"  zone {z['zone']:<12} layers {z['layers']:<7} PERMX {z['mean_permx']}")
+        for f in t["faults"]:
+            print(f"  fault {f['fault']:<12} MULTFLT {f['multflt']:g}")
+        for st in t["satnums"]:
+            print(f"  SATNUM {st['satnum']}: " + ("tabulated" if st["tabulated"] else _json.dumps(st["corey"])))
+        for a in t["aquifers"]:
+            print(f"  aquifer {a['aquifer']} {a['type']} volume {a['water_volume']} PI {a['productivity_index']}")
+        print("kinds: " + ", ".join(t["kinds"]))
+        return
+    if c == "setup":
+        spec = _json.loads(Path(args.params).read_text())
+        ps = spec["parameters"] if isinstance(spec, dict) else spec
+        obj = spec.get("objective") if isinstance(spec, dict) else None
+        r = jobs.setup(con, args.name, args.deck, ps, study=args.study, source=args.source,
+                       truth_run_id=args.truth_run, objective=obj)
+        print(r["read_back"])
+        print(f"hm id {r['hm_id']}, revision {r['revision']}")
+        return
+    if c in ("base", "sensitivity"):
+        h = jobs.get_hm(con, args.hm)
+        job = jobs.create_job(con, h, c)
+        print(f"job {job}: {len(jobs.plan(h, c))} case(s), {jobs.slots(cfg)} at a time")
+        j = jobs.Runner(cfg, job, log=lambda m: print("  " + m)).run()
+        print(jobs.spoken_job(j))
+        if c == "sensitivity" and j.get("result"):
+            for d in j["result"]["tornado"]:
+                lo = "failed" if d["misfit_low"] is None else f"{d['misfit_low']:.4g}"
+                hi = "failed" if d["misfit_high"] is None else f"{d['misfit_high']:.4g}"
+                print(f"  {d['rank']:>2}. {d['name']:<16} low {lo:>10}  high {hi:>10}  "
+                      f"best reduction {d['best_reduction']:.4g}")
+        return
+    if c == "status":
+        j = jobs.get_job(con, args.job)
+        return out(j) if args.json else print(jobs.spoken_job(j))
+    if c == "stop":
+        jobs.stop_job(con, args.job, args.now)
+        print(f"job {args.job} will stop" + (" now" if args.now else " after its running cases"))
+        return
+    if c == "cases":
+        h = jobs.get_hm(con, args.hm)
+        rows = jobs.cases(con, h["id"], args.order, args.limit)
+        if args.json:
+            return out(rows)
+        for r in rows:
+            m = "-" if r["misfit"] is None else f"{r['misfit']:.4g}"
+            vals = ", ".join(f"{k}={v:.4g}" for k, v in r["values"].items())
+            print(f"  case {r['case_no']:>3} {r['status']:<7} misfit {m:>10}  {r['label'] or ''}  [{vals}]")
+        return
+    if c == "case":
+        h = jobs.get_hm(con, args.hm)
+        return out(jobs.case_detail(con, h["id"], args.case))
+    if c == "match-report":
+        r = jobs.write_match_report(cfg, con, args.hm)
+        print(r["spoken_summary"])
+        print(r["report"])
+        raise SystemExit(0 if r["report_ok"] else 2)
 
 
 def cmd_setup(args):
@@ -1291,6 +1370,38 @@ def main(argv=None):
             x.add_argument("--json", action="store_true")
         if name == "misfit":
             x.add_argument("--terms", type=int, default=20, help="how many terms to list (worst first)")
+        x.set_defaults(fn=cmd_hm)
+    x = hm.add_parser("targets", help="what parameters can act on in a deck: zones, layers, faults, SATNUMs, aquifers")
+    x.add_argument("--deck", type=int, required=True)
+    x.add_argument("--json", action="store_true")
+    x = hm.add_parser("setup", help="check and store a history-match setup (prints the read-back)")
+    x.add_argument("name")
+    x.add_argument("--deck", type=int, required=True)
+    x.add_argument("--params", required=True, help='JSON: [parameters] or {"parameters": [...], "objective": {...}}')
+    x.add_argument("--study")
+    x.add_argument("--source", default="auto", choices=("auto", "data_production", "deck_history", "run"))
+    x.add_argument("--truth-run", dest="truth_run", type=int)
+    for name, hlp in (("base", "the base case's misfit (runs the base deck if it has no finished run)"),
+                      ("sensitivity", "each parameter at its low and high end; prints the tornado")):
+        x = hm.add_parser(name, help=hlp)
+        x.add_argument("hm", help="history match name or id")
+    x = hm.add_parser("status", help="a history-match job's progress or result")
+    x.add_argument("job", type=int)
+    x.add_argument("--json", action="store_true")
+    x = hm.add_parser("stop", help="stop a job (continues where it stopped when started again)")
+    x.add_argument("job", type=int)
+    x.add_argument("--now", action="store_true", help="kill the running cases")
+    x = hm.add_parser("cases", help="the evaluated cases, best first")
+    x.add_argument("hm")
+    x.add_argument("--order", default="misfit", choices=("misfit", "case"))
+    x.add_argument("--limit", type=int, default=20)
+    x.add_argument("--json", action="store_true")
+    x = hm.add_parser("case", help="one case in detail (JSON)")
+    x.add_argument("hm")
+    x.add_argument("case", type=int)
+    x = hm.add_parser("match-report", help="the HM report of a history match (best and base case, tornado)")
+    x.add_argument("hm")
+    for x in hm.choices.values():
         x.set_defaults(fn=cmd_hm)
     x = sub.add_parser("hello", help="end-to-end demo: models, approval, deck, run")
     x.add_argument("--clean", action="store_true")
