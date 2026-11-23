@@ -131,8 +131,21 @@ def validate(con, vid: int) -> list[dict]:
             if c["goc_depth"] is not None and c["goc_depth"] > z1:
                 iss.warn("contacts", "GOC is below the grid", f"EQLNUM {c['eqlnum']}")
 
-    # --- aquifer connections inside the grid
-    for a in rows(con, "SELECT * FROM aquifer_connections WHERE version_id=?", vid):
+    # --- aquifers: connections inside the grid, every aquifer connected, ids 1..n (AQUDIMS counts them)
+    aqs = rows(con, "SELECT * FROM aquifers WHERE version_id=?", vid)
+    conns = rows(con, "SELECT * FROM aquifer_connections WHERE version_id=?", vid)
+    for a in conns:
         if a["i2"] > nx or a["j2"] > ny or a["k2"] > nz:
             iss.error("aquifer_range", "aquifer connection outside the grid", f"aquifer {a['aquifer_id']}")
+    for a in aqs:
+        where = f"aquifer {a['aquifer_id']}"
+        if not any(c["aquifer_id"] == a["aquifer_id"] for c in conns):
+            iss.error("aquifer_connections", "aquifer has no grid connections", where)
+        if a["aq_type"] == "CARTER_TRACY" and (a["influence_table"] or 1) != 1:
+            iss.error("aquifer_table", "only the built-in influence table 1 is rendered (no AQUTAB yet)", where)
+        if g["grid_type"] == "cartesian" and g["tops"] is not None and g["dz"] is not None \
+                and a["datum_depth"] < g["tops"]:
+            iss.warn("aquifer_datum", f"aquifer datum {a['datum_depth']:g} is above the top of the grid", where)
+    if aqs and sorted(a["aquifer_id"] for a in aqs) != list(range(1, len(aqs) + 1)):
+        iss.error("aquifer_ids", "aquifer ids must run 1..n")
     return iss

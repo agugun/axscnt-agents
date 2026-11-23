@@ -237,7 +237,8 @@ def logs(con, study, curves: dict | None = None) -> pd.DataFrame:
 
 def res_spec(con, study) -> dict | None:
     """The res modeler's spec from the study data: contacts, the SCAL workbook's rock types (else the geo spec's
-    'scal'), and the rock and region choices the engineer put in the geo spec (geo.json 'rock', 'regions').
+    'scal'), and the rock, region and aquifer choices the engineer put in the geo spec (geo.json 'rock', 'regions',
+    'aquifers').
     None when no contacts are loaded."""
     sid = study_id(con, study)
     c = con.execute("SELECT datum_depth, datum_pressure, owc_depth, goc_depth FROM data_contacts WHERE study_id = ?",
@@ -247,7 +248,7 @@ def res_spec(con, study) -> dict | None:
     g = con.execute("SELECT spec_json FROM data_geo_spec WHERE study_id = ?", (sid,)).fetchone()
     g = json.loads(g[0]) if g else {}
     spec = {"contacts": {k: c[k] for k in c.keys() if c[k] is not None},
-            **{k: g[k] for k in ("scal", "rock", "regions") if k in g}}
+            **{k: g[k] for k in ("scal", "rock", "regions", "aquifers") if k in g}}
     w = con.execute("SELECT scal_json FROM data_scal WHERE study_id = ?", (sid,)).fetchone()
     if w:   # the SCAL workbook wins over a 'scal' typed into geo.json
         spec["scal"] = json.loads(w[0])

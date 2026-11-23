@@ -141,7 +141,7 @@ def cmd_model_notebook(args):
     cfg = cfgmod.load(args.config)
     kind = getattr(args, "nb_kind", "fluid")
     svc = DataService(kind, cfg)
-    cmd = {"fluid": "fcmd", "geo": "gcmd", "well": "wcmd"}[kind]
+    cmd = {"fluid": "fcmd", "geo": "gcmd", "res": "rscmd", "well": "wcmd"}[kind]
     cmd = getattr(args, cmd)
     if cmd == "qc":
         r = wrap(svc, "run_qc_notebook")(version_id=args.version_id)
@@ -1140,6 +1140,17 @@ def main(argv=None):
     x.add_argument("--description")
     x.add_argument("--scal", help="a SCAL workbook (opmagent res template): its rock types replace the spec's scal")
     x.set_defaults(fn=cmd_res_build)
+    x = rs.add_parser("qc", help="re-run the standard QC notebook for a draft res version")
+    x.add_argument("version_id", type=int)
+    x.set_defaults(fn=cmd_model_notebook, nb_kind="res")
+    x = rs.add_parser("investigate", help="start an investigation notebook for a res version")
+    x.add_argument("version_id", type=int)
+    x.add_argument("--purpose", required=True, help='what to look into, e.g. "water below the OWC in EQLNUM 2"')
+    x.add_argument("--open", action="store_true", help="open it in VS Code ([debug] vscode_bin)")
+    x.set_defaults(fn=cmd_model_notebook, nb_kind="res")
+    x = rs.add_parser("run-notebook", help="execute an investigation notebook and export it to HTML")
+    x.add_argument("path")
+    x.set_defaults(fn=cmd_model_notebook, nb_kind="res")
     x = rs.add_parser("template", help="write the SCAL workbook template (rock types: Corey or measured tables)")
     x.add_argument("out")
     x.add_argument("--example", action="store_true", help="fill in an example: one Corey and one measured rock type")

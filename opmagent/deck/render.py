@@ -243,6 +243,13 @@ def render(spec: dict, fluid: dict, geo: dict, well: dict, file_paths: dict[int,
     a(f"WELLDIMS\n {len(wells)} {max_conn} {len(groups) + 1} {len(wells)} /\n")
     a(f"TABDIMS\n {nsat} {npvt} {max_sat_rows} {max_p_rows} 1 {max_rs} /\n")
     a(f"EQLDIMS\n {neql} /\n")
+    aqs = sorted(gt.get("aquifers") or [], key=lambda r: r["aquifer_id"])
+    aq_conns = gt.get("aquifer_connections") or []
+    if aqs:
+        cells = {x["aquifer_id"]: 0 for x in aqs}
+        for c in aq_conns:
+            cells[c["aquifer_id"]] += (c["i2"] - c["i1"] + 1) * (c["j2"] - c["j1"] + 1) * (c["k2"] - c["k1"] + 1)
+        a(f"AQUDIMS\n 0 0 1 36 {len(aqs)} {max(cells.values())} /\n")
     a("UNIFOUT\n")
     passthrough("RUNSPEC")
 
@@ -346,6 +353,29 @@ def render(spec: dict, fluid: dict, geo: dict, well: dict, file_paths: dict[int,
                     a(f" {_num(r['depth'])} {_num(r[col])}")
                 a("/")
             a("")
+    d = lambda x: "1*" if x is None else _num(x)  # noqa: E731
+    fet = [r for r in aqs if r["aq_type"] == "FETKOVICH"]
+    ct = [r for r in aqs if r["aq_type"] == "CARTER_TRACY"]
+    if fet:
+        a("AQUFETP")
+        for r in fet:
+            a(f" {r['aquifer_id']} {_num(r['datum_depth'])} {d(r['init_pressure'])} {_num(r['water_volume'])} "
+              f"{_num(r['total_compressibility'])} {_num(r['productivity_index'])} {r['pvtw_table']} /")
+        a("/\n")
+    if ct:
+        a("AQUCT")
+        for r in ct:
+            a(f" {r['aquifer_id']} {_num(r['datum_depth'])} {d(r['init_pressure'])} {_num(r['permeability'])} "
+              f"{_num(r['porosity'])} {_num(r['total_compressibility'])} {_num(r['inner_radius'])} "
+              f"{_num(r['thickness'])} {_num(r['angle_deg'] if r['angle_deg'] is not None else 360)} "
+              f"{r['pvtw_table']} {r['influence_table'] or 1} /")
+        a("/\n")
+    if aqs:
+        a("AQUANCON")
+        for c in sorted(aq_conns, key=lambda c: (c["aquifer_id"], c["id"] if c.get("id") else 0)):
+            a(f" {c['aquifer_id']} {c['i1']} {c['i2']} {c['j1']} {c['j2']} {c['k1']} {c['k2']} '{c['face']}' "
+              f"{d(c.get('influx_coeff'))} {_num(c['influx_mult'])} /")
+        a("/\n")
     if pt.get("SOLUTION"):
         passthrough("SOLUTION")
     else:
@@ -359,6 +389,10 @@ def render(spec: dict, fluid: dict, geo: dict, well: dict, file_paths: dict[int,
     else:
         for v in spec.get("summary") or DEFAULT_SUMMARY:
             a(v if v.startswith("F") else f"{v}\n/")
+        if aqs:   # influx rate, cumulative and pressure per aquifer
+            ids = " ".join(str(r["aquifer_id"]) for r in aqs)
+            for v in ("AAQR", "AAQT", "AAQP"):
+                a(f"{v}\n {ids} /")
     a("")
 
     # ---------------- SCHEDULE

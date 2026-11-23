@@ -55,6 +55,19 @@ No approvals are carried over. Design: [docs/design/res-model.md](docs/design/re
   for per-user application data, instead of `~/opmagent/open-data`: `tools/fetch_open_data.sh`, `tools/install.sh`,
   the testing scripts and the docs. To move an existing checkout: `mkdir -p ~/.local/share/opmagent &&
   mv ~/opmagent/open-data ~/.local/share/opmagent/` (the tests keep reading `OPM_TESTS_DIR`).
+- **Res QC notebook** (`res_qc.ipynb`, `res_qc_lib`): every res build runs it on the geo version's static view
+  made with the version's regions (Flow's PORV, DEPTH and region arrays). Checks: SCAL end points, mobile oil window,
+  kro at connate water SWOF vs SGOF, SGOF within 1 - Swc, Pcow; SATNUM/EQLNUM values against tables, unused tables,
+  pore volume per FIPNUM; datum and contacts against the cells' faces; rock compressibility; aquifer connections on
+  active cells and aquifer size against the reservoir. `opmagent res qc / investigate / run-notebook`, and the
+  notebook tools on the res profile. The static page stays for `[qc] report = "html"`. The static view is now made
+  before the QC step.
+- **Analytical aquifers** in the res model: `"aquifers"` in the res spec (or geo.json in a study), Fetkovich or
+  Carter-Tracy, connected to grid faces (a face alone = that edge of the grid; `i`, `j`, `layers` or `zone`
+  narrow it; datum defaults to the OWC, initial pressure to equilibrium). Written to `aquifers` /
+  `aquifer_connections`, checked (every aquifer connected, ids 1..n, built-in influence table, datum not above
+  the grid), shown on the res QC page, and rendered: `AQUDIMS`, `AQUFETP`, `AQUCT`, `AQUANCON`, and the summary
+  `AAQR`, `AAQT`, `AAQP` per aquifer. Imported decks' aquifers stay passthrough.
 - **SCAL workbook** (`opmagent res template [--example]`): Info, RockTypes (per SATNUM: Corey parameters or
   `tables`, with the source), SWOF, SGOF. The data manager recognises it in a study's inbox (its RockTypes sheet),
   files it in `data/scal/` and loads it into `data_scal` (new table); the res modeler takes its rock types in
