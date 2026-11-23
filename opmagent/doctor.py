@@ -226,6 +226,11 @@ def agents_report(ws: Path, cfg, repo_skills: Path, *, deep: bool = False) -> di
     bad = [a["agent"] for a in agents if a["status"] != "ok"]
     say = ("All agents are ready." if status == "ok" else
            f"{len(bad)} agent(s) need attention: {', '.join(bad)}.")
+    details = [c["detail"] for a in agents for c in a.get("checks", [])]
+    if any(d.startswith("disabled in .claude/settings.local.json") for d in details):
+        say += (" Servers were declined in Claude Code (\"don't use\" at its first start); /mcp can't turn them back on."
+                " Close Claude Code, then in the workspace: sed -i 's/\"disabledMcpjsonServers\"/\"enabledMcpjsonServers\"/'"
+                " .claude/settings.local.json (or re-create it with APPROVE_SERVERS=1), and start Claude Code again.")
     return {"workspace": str(ws), "status": status, "agents": agents, "checks": workspace, "spoken_summary": say}
 
 

@@ -56,6 +56,7 @@ def test_what_breaks_an_agent_is_named(ws):
     assert check(r, "run-agent", "server opm-data-run")["status"] == "fail"             # disabled
     assert agent(r, "fluid-modeler")["status"] == "ok"
     assert "geo-modeler" in r["spoken_summary"]
+    assert "enabledMcpjsonServers" in r["spoken_summary"]                              # how to undo "don't use"
 
 
 def test_reviewer_in_the_agents_workspace_fails(ws):

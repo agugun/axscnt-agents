@@ -55,7 +55,9 @@ tools/create_workspace.sh ~/opm-agents   # the agents' workspace, checked with o
   isn't on PATH or in `/opt/ResInsight`), `SKIP_HELLO=1`. Without auto-approve, hello stops for your review:
   `opmagent review approve-hello` (you type `approve`), then `opmagent hello` again. On a new workspace the doctor warns
   "server not approved" for every agent until Claude Code approves the servers at its first start (it asks once per
-  server), or `APPROVE_SERVERS=1` approves them up front.
+  server), or `APPROVE_SERVERS=1` approves them up front. Answered "don't use", the servers are recorded as
+  disabled in `.claude/settings.local.json`, the doctor fails every agent, and `/mcp` no longer lists them: close
+  Claude Code, rename `disabledMcpjsonServers` to `enabledMcpjsonServers` in that file, and start it again.
 - The first workspace becomes the **default workspace**: `~/.config/opmagent/opmagent.toml` links to its config, so
   `opmagent` works on it from any folder (the config is found from `--config`, then `OPMAGENT_CONFIG`, then
   `opmagent.toml` in the current folder, then the default). A later workspace leaves the link as it is

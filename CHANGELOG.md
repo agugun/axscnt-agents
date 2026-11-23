@@ -60,6 +60,8 @@ No approvals are carried over. Design: [docs/design/res-model.md](docs/design/re
   files it in `data/scal/` and loads it into `data_scal` (new table); the res modeler takes its rock types in
   preference to geo.json's `scal`. `opmagent res build --scal <workbook>` uses one directly. The reader stops on
   required gaps (unit system, SATNUM 1..n, increasing saturation, kr in 0-1, Swc + Sorw < 1, missing tables).
+- **`opmagent doctor`** says how to undo servers declined in Claude Code ("don't use" at its first start), which
+  `/mcp` can't turn back on.
 - **`tools/install_resinsight.sh`**: the latest ResInsight release from GitHub (the el8 build, self-contained) into
   `~/.local/opt/ResInsight`, or `/opt/ResInsight` and `/usr/local/bin/resinsight` with `SYSTEM=1`; a downloaded
   archive, `VERSION=`, `BUILD=ubuntu`, `FORCE=1` (the old install kept as `.old`). `tools/install.sh` runs it when
