@@ -55,6 +55,10 @@ No approvals are carried over. Design: [docs/design/res-model.md](docs/design/re
   for per-user application data, instead of `~/opmagent/open-data`: `tools/fetch_open_data.sh`, `tools/install.sh`,
   the testing scripts and the docs. To move an existing checkout: `mkdir -p ~/.local/share/opmagent &&
   mv ~/opmagent/open-data ~/.local/share/opmagent/` (the tests keep reading `OPM_TESTS_DIR`).
+- **Fix: QC notebook kernels are shut down.** Each QC notebook run left its Jupyter kernel running (about 200 MB):
+  nbclient doesn't stop a kernel manager it is given. A long session (the MCP data server, or the test suite, which
+  runs over a hundred notebooks) ran the machine out of memory. The runner now shuts the kernel down after every
+  run, passed or failed; a test checks no kernel is left.
 - **Imported aquifers**: the deck importer (and a study from a deck) maps `AQUFETP`, `AQUCT` and `AQUANCON` into the
   res model's `aquifers` / `aquifer_connections` (deck units), and `AQUDIMS` is regenerated. A deck with any other
   aquifer form (`AQUFET`, `AQUNUM`/`AQUCON`, `AQUTAB`, salinity or temperature items, internal connections) keeps

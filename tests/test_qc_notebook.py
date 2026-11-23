@@ -100,3 +100,36 @@ def test_table_checks_flag_what_opm_rejects():
     top_only["pvto"] = [r for r in top_only["pvto"] if not (r["rs"] == 100 and not r["is_saturated"])]
     res = {f["check"]: f["status"] for f in qc_lib.table_checks(_data(top_only))}
     assert res["Highest Rs block has an undersaturated branch"] == "fail"
+
+
+def _kernel_children() -> list[int]:
+    """ipykernel processes started by this test process (its children)."""
+    import os
+    from pathlib import Path
+    me, out = os.getpid(), []
+    for p in Path("/proc").iterdir():
+        if not p.name.isdigit():
+            continue
+        try:
+            stat = (p / "stat").read_text()
+            cmd = (p / "cmdline").read_bytes().replace(b"\0", b" ")
+        except OSError:
+            continue
+        if int(stat.rsplit(")", 1)[1].split()[1]) == me and b"ipykernel_launcher" in cmd:
+            out.append(int(p.name))
+    return out
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_no_kernel_left_running(tmp_path, fail):
+    """Each notebook run shuts its kernel down, passed or failed (a leak ran long sessions out of memory)."""
+    from opmagent.notebooks import runner
+    nb = nbformat.v4.new_notebook()
+    nb.cells = [nbformat.v4.new_code_cell("x = 1" if not fail else "raise ValueError('boom')")]
+    src = tmp_path / "t.ipynb"
+    nbformat.write(nb, src)
+    before = set(_kernel_children())
+    for _ in range(3):
+        r = runner.execute(src, tmp_path / "out.ipynb")
+        assert r["ok"] is (not fail)
+    assert set(_kernel_children()) - before == set()
