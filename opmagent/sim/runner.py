@@ -48,14 +48,22 @@ def prepare(deck_path: str | Path, out_dir: str | Path) -> Path:
     return dst
 
 
-def start(deck_path: str | Path, out_dir: str | Path, flow_bin: str = "flow") -> tuple[subprocess.Popen, str, Path]:
-    """Start a run in the background. Returns (process, engine, log path)."""
+def start(deck_path: str | Path, out_dir: str | Path, flow_bin: str = "flow",
+          threads: int | None = None) -> tuple[subprocess.Popen, str, Path]:
+    """Start a run in the background (threads: OpenMP threads, default Flow's own). Returns (process, engine, log
+    path)."""
     out_dir = Path(out_dir)
     deck = prepare(deck_path, out_dir)
     cmd, engine = command(deck, out_dir, flow_bin)
     log = out_dir / "run.log"
     fh = open(log, "w")
-    proc = subprocess.Popen(cmd, stdout=fh, stderr=subprocess.STDOUT, cwd=out_dir)
+    env = None
+    if threads:
+        import os
+        env = {**os.environ, "OMP_NUM_THREADS": str(threads)}
+        if engine == "flow":
+            cmd.append(f"--threads-per-process={threads}")
+    proc = subprocess.Popen(cmd, stdout=fh, stderr=subprocess.STDOUT, cwd=out_dir, env=env)
     return proc, engine, log
 
 

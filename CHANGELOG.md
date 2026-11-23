@@ -9,6 +9,14 @@ to the res model, and SQLite can't change the existing tables in place. `opmagen
 so; move it aside and run `opmagent init-db` (or `opmagent setup <workspace>`), then rebuild the studies.
 No approvals are carried over. Design: [docs/design/res-model.md](docs/design/res-model.md).
 
+- **History matching, phase 2**: setups with parameters (PERMX / PERMZ / PORO multipliers by zone or layer,
+  MULTFLT, Corey parameters per SATNUM, aquifer volume and PI), checked against the deck's models
+  (`hm_targets`). Variant decks render the approved deck with the values applied in memory; they write no model,
+  deck or run. Variants run in Flow in parallel within `[hm]` capacity, after a memory check. The base case and
+  the sensitivity (tornado) are background jobs that can be stopped and restarted; no case runs twice. New tables
+  `hm_*`, new HM server tools, `opmagent hm targets / setup / base / sensitivity / status / stop / cases / case /
+  match-report`, the `history-matcher` agent (`hm` profile) and skill.
+- Fix: Corey SWOF/SGOF with non-integer exponents (e.g. 1.5) no longer produce complex numbers at the end point.
 - **History matching, phase 1** ([docs/design/history-match.md](docs/design/history-match.md)): a read-only
   `opmagent-hm` MCP server and `opmagent hm observations / misfit / report`. Misfit of a finished run per well and
   quantity against the study's measured production (`data_production`), the deck's history (`WOPRH` ...) or another

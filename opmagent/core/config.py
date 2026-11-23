@@ -41,6 +41,11 @@ class Config:
     resinsight_bin: str | None = None   # [viewer] resinsight_bin: ResInsight launcher (bin/resinsight)
     qc_report: str = "notebook"         # [qc] report: "notebook" (executed Jupyter template) or "html" (static report)
     qc_timeout_s: int = 600             # [qc] timeout_s: per-cell timeout for QC notebooks
+    hm_parallel: int | None = None      # [hm] parallel: variants at once (default: cores / (2 x threads), at least 1)
+    hm_threads: int = 2                 # [hm] threads: OpenMP threads per variant run
+    hm_min_free_mb: int = 1024          # [hm] min_free_mb: memory left free when starting a variant
+    hm_case_memory_mb: int | None = None  # [hm] case_memory_mb: memory one variant needs (default: from the grid)
+    hm_case_timeout_s: int = 3600       # [hm] case_timeout_s: a variant run longer than this is stopped and failed
 
     @property
     def inbox(self) -> Path:
@@ -71,6 +76,7 @@ def load(path: str | os.PathLike | None = None) -> Config:
         )
     paths, d, sim, dbg, st, vw = (data.get(k, {}) for k in ("paths", "defaults", "simulation", "debug", "study", "viewer"))
     qc = data.get("qc", {})
+    hm = data.get("hm", {})
     if qc.get("report", "notebook") not in ("notebook", "html"):
         raise ValueError('[qc] report must be "notebook" or "html"')
     cfg = Config(
@@ -90,6 +96,11 @@ def load(path: str | os.PathLike | None = None) -> Config:
         resinsight_bin=os.path.expanduser(vw["resinsight_bin"]) if vw.get("resinsight_bin") else None,
         qc_report=qc.get("report", "notebook"),
         qc_timeout_s=int(qc.get("timeout_s", 600)),
+        hm_parallel=int(hm["parallel"]) if hm.get("parallel") else None,
+        hm_threads=int(hm.get("threads", 2)),
+        hm_min_free_mb=int(hm.get("min_free_mb", 1024)),
+        hm_case_memory_mb=int(hm["case_memory_mb"]) if hm.get("case_memory_mb") else None,
+        hm_case_timeout_s=int(hm.get("case_timeout_s", 3600)),
     )
     _check_release_flow(cfg)
     return cfg

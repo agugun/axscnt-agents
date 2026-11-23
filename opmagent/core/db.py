@@ -215,6 +215,55 @@ MIGRATIONS = [
         CREATE TRIGGER init_reviews_validated_deck BEFORE INSERT ON init_reviews
         BEGIN SELECT RAISE(ABORT, 'only a validated deck has an initial state to review')
               WHERE (SELECT status FROM decks WHERE id = NEW.deck_id) IS NOT 'validated'; END;"""),
+    # History matching (docs/design/history-match.md): a match setup, its parameters, jobs, evaluated cases and
+    # their misfit terms. Written only by the HM functions (opmagent-hm, `opmagent hm`); never a model or a deck.
+    ("hm_studies", """CREATE TABLE hm_studies (
+        id INTEGER PRIMARY KEY, name TEXT NOT NULL CHECK (name GLOB '[A-Za-z0-9_-]*' AND length(name) > 0),
+        revision INTEGER NOT NULL DEFAULT 1, study TEXT, deck_id INTEGER NOT NULL REFERENCES decks(id),
+        base_run_id INTEGER REFERENCES runs(id),
+        source TEXT NOT NULL CHECK (source IN ('data_production','deck_history','run')),
+        truth_run_id INTEGER REFERENCES runs(id), objective_json TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'setup'
+          CHECK (status IN ('setup','frozen','proposed','confirmed','abandoned','superseded')),
+        created_at TEXT NOT NULL DEFAULT (datetime('now')), UNIQUE (name, revision),
+        CHECK (source <> 'run' OR truth_run_id IS NOT NULL));
+        CREATE TABLE hm_parameters (
+        hm_id INTEGER NOT NULL REFERENCES hm_studies(id) ON DELETE CASCADE, position INTEGER NOT NULL,
+        name TEXT NOT NULL, kind TEXT NOT NULL, owner TEXT NOT NULL CHECK (owner IN ('geo','res','well')),
+        type TEXT NOT NULL CHECK (type IN ('mult','value')), target_json TEXT NOT NULL,
+        low REAL NOT NULL, high REAL NOT NULL, start REAL NOT NULL,
+        scale TEXT NOT NULL CHECK (scale IN ('lin','log')), active INTEGER NOT NULL DEFAULT 1,
+        PRIMARY KEY (hm_id, name), CHECK (low < high AND start BETWEEN low AND high));
+        CREATE TABLE hm_jobs (
+        id INTEGER PRIMARY KEY, hm_id INTEGER NOT NULL REFERENCES hm_studies(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL CHECK (kind IN ('base','sensitivity','optimise')), method TEXT,
+        options_json TEXT NOT NULL DEFAULT '{}', status TEXT NOT NULL DEFAULT 'queued'
+          CHECK (status IN ('queued','running','stopped','done','failed')),
+        stop_requested INTEGER NOT NULL DEFAULT 0, progress_json TEXT, result_json TEXT, error TEXT,
+        started_at TEXT, finished_at TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')));
+        CREATE TABLE hm_cases (
+        id INTEGER PRIMARY KEY, hm_id INTEGER NOT NULL REFERENCES hm_studies(id) ON DELETE CASCADE,
+        job_id INTEGER REFERENCES hm_jobs(id), case_no INTEGER NOT NULL, values_json TEXT NOT NULL,
+        values_key TEXT NOT NULL, label TEXT, status TEXT NOT NULL DEFAULT 'queued'
+          CHECK (status IN ('queued','running','done','failed')),
+        run_id INTEGER REFERENCES runs(id), run_dir TEXT, smspec_path TEXT, pid INTEGER, returncode INTEGER,
+        misfit REAL, points INTEGER, wall_s REAL, error TEXT, started_at TEXT, finished_at TEXT,
+        UNIQUE (hm_id, values_key), UNIQUE (hm_id, case_no));
+        CREATE TABLE hm_misfits (
+        case_id INTEGER NOT NULL REFERENCES hm_cases(id) ON DELETE CASCADE, well TEXT NOT NULL,
+        quantity TEXT NOT NULL, n INTEGER NOT NULL, misfit REAL NOT NULL, sum_sq REAL NOT NULL,
+        in_total INTEGER NOT NULL, detail_json TEXT, PRIMARY KEY (case_id, well, quantity));
+        CREATE TRIGGER hm_parameters_frozen BEFORE UPDATE ON hm_parameters
+        WHEN (SELECT status FROM hm_studies WHERE id = OLD.hm_id) <> 'setup'
+             AND (NEW.low <> OLD.low OR NEW.high <> OLD.high OR NEW.start <> OLD.start OR NEW.scale <> OLD.scale
+                  OR NEW.kind <> OLD.kind OR NEW.target_json <> OLD.target_json)
+        BEGIN SELECT RAISE(ABORT, 'the setup is frozen once a search has run; make a new revision'); END;
+        CREATE TRIGGER hm_parameters_frozen_insert BEFORE INSERT ON hm_parameters
+        WHEN (SELECT status FROM hm_studies WHERE id = NEW.hm_id) <> 'setup'
+        BEGIN SELECT RAISE(ABORT, 'the setup is frozen once a search has run; make a new revision'); END;
+        CREATE TRIGGER hm_objective_frozen BEFORE UPDATE OF objective_json, source, truth_run_id, deck_id
+        ON hm_studies WHEN OLD.status <> 'setup'
+        BEGIN SELECT RAISE(ABORT, 'the setup is frozen once a search has run; make a new revision'); END;"""),
 ]
 
 
