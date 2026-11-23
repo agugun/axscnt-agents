@@ -55,6 +55,11 @@ No approvals are carried over. Design: [docs/design/res-model.md](docs/design/re
   for per-user application data, instead of `~/opmagent/open-data`: `tools/fetch_open_data.sh`, `tools/install.sh`,
   the testing scripts and the docs. To move an existing checkout: `mkdir -p ~/.local/share/opmagent &&
   mv ~/opmagent/open-data ~/.local/share/opmagent/` (the tests keep reading `OPM_TESTS_DIR`).
+- **SCAL workbook** (`opmagent res template [--example]`): Info, RockTypes (per SATNUM: Corey parameters or
+  `tables`, with the source), SWOF, SGOF. The data manager recognises it in a study's inbox (its RockTypes sheet),
+  files it in `data/scal/` and loads it into `data_scal` (new table); the res modeler takes its rock types in
+  preference to geo.json's `scal`. `opmagent res build --scal <workbook>` uses one directly. The reader stops on
+  required gaps (unit system, SATNUM 1..n, increasing saturation, kr in 0-1, Swc + Sorw < 1, missing tables).
 - **`tools/install_resinsight.sh`**: the latest ResInsight release from GitHub (the el8 build, self-contained) into
   `~/.local/opt/ResInsight`, or `/opt/ResInsight` and `/usr/local/bin/resinsight` with `SYSTEM=1`; a downloaded
   archive, `VERSION=`, `BUILD=ubuntu`, `FORCE=1` (the old install kept as `.old`). `tools/install.sh` runs it when

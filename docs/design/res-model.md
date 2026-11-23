@@ -127,3 +127,9 @@ densities, aquifer volume and productivity against the reservoir pore volume, co
 3. **Scope of `feat/res-model`: phases 1-3** (the split working end to end with the current inputs, round trips
    green). The SCAL workbook, aquifer building and rendering, and the res QC notebook follow in a later branch;
    until then the res QC report is a static page and aquifers in imported decks stay passthrough.
+
+## Status (2026-11-23)
+
+- Phases 1-3: done (0.3).
+- SCAL workbook and loader: done (`opmagent res template`, `data_scal`, `res build --scal`).
+- Aquifers (build and render) and the res QC notebook: next.

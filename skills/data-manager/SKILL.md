@@ -30,11 +30,13 @@ The original of every table is filed too (`data/tables/`, `data/pvt/`, `data/spe
   - `opmagent data show <study> [dataset|files] [--well W]`
   - `opmagent data verify <study>`
   - `opmagent fluid template <file> [--example]` (the lab report template)
+  - `opmagent res template <file> [--example]` (the SCAL workbook template)
 
 ## Where the data goes (recognised by content, any file name, CSV or any Excel sheet)
 | Source | Tables | Read by |
 | --- | --- | --- |
 | PVT lab report workbook in the template format (`opmagent fluid template`); a PDF report must be typed into it | `data_pvt_samples`, `_composition`, `_tests` (separator, CCE, DL, viscosity) | fluid |
+| SCAL workbook in the template format (`opmagent res template`; recognised by its RockTypes sheet): per SATNUM Corey parameters or measured SWOF/SGOF points, with the source | `data_scal` (filed in `data/scal/`) | res |
 | tops table (well_name, surface, x, y, tvd) | `data_tops` | geo |
 | LAS logs; porosity (PHIE/PHIT/PORO) is needed, PERM and VSH ideally | kept as files in `data/logs/`, catalogued in `data_files`, `data_log_curves` | geo |
 | grid spec `geo.json` (surfaces in order, layers per zone, areal grid) and contacts (datum depth and pressure, OWC/GOC) | `data_geo_spec`, `data_contacts` | geo |

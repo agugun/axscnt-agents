@@ -20,7 +20,7 @@ Design: see the architecture and user-guide docs (links in `docs/README.md`).
 | Results viewer (ResInsight) | `opmagent results open` | done, tested |
 | Fluid modeler (NeqSim, Excel lab report) | MCP `opmagent-pvt` + `opmagent fluid build` | done, tested |
 | Geo modeler (tops + LAS -> corner-point grid, kriging, QC notebook) | `opmagent geo build / qc / investigate` | done, tested |
-| Res modeler (SCAL, rock, contacts and initial pressure, region arrays on a geo grid) | `opmagent res build` | done, tested; SCAL workbook, aquifers and QC notebook to come |
+| Res modeler (SCAL, rock, contacts and initial pressure, region arrays on a geo grid) | `opmagent res build` | done, tested; SCAL workbook done; aquifers and QC notebook to come |
 | Well modeler (surveys, perforations, history incl. Volve, controls, QC notebook) | `opmagent well build / qc / investigate` | done, tested |
 | Deck builder | `opmagent deck build` | done, tested |
 | Run agent (runs, results, compare, VS Code debug) | MCP `opmagent-sim` | done, tested |
@@ -290,7 +290,9 @@ be defined on the deck's geo version.
 
 ```bash
 opmagent res build --spec res.json --geo-version 7 --name FieldX_Res
-opmagent study build res FieldA_WF     # in a study: after geo, from the study's contacts and the geo.json scal/rock/regions
+opmagent study build res FieldA_WF     # in a study: after geo, from the study's contacts, SCAL workbook, geo.json rock/regions
+opmagent res template scal.xlsx --example   # the SCAL workbook: Info, RockTypes (one row per SATNUM), SWOF, SGOF
+opmagent res build --spec res.json --geo-version 7 --name FieldX_Res --scal scal.xlsx   # its rock types replace the spec's scal
 ```
 
 ```json
@@ -302,8 +304,16 @@ opmagent study build res FieldA_WF     # in a study: after geo, from the study's
 
 SCAL is Corey per rock type or measured tables (`"scal": [{"satnum": 1, "swof": [...], "sgof": [...]}, ...]`);
 Corey parameters left out are listed as defaults in the assumptions. Regions go by geo zone, by layer range, or one
-value. The QC report is a static page for now (curves and end points, contacts, rock, regions). Next: a SCAL
-workbook for the data manager, aquifers (build and render) and a res QC notebook
+value. The QC report is a static page for now (curves and end points, contacts, rock, regions).
+
+**SCAL workbook.** `opmagent res template` writes it: `Info` (unit system: METRIC with Pc in bar, or FIELD with Pc
+in psi), `RockTypes` (one row per SATNUM: name, method `corey` or `tables`, source, and the Corey Swc, Sorw, Sorg,
+Sgc, exponents and kr end points; blanks take the defaults and are noted), `SWOF` and `SGOF` (measured points per
+SATNUM, for method `tables`). In a study's inbox the data manager recognises it by its RockTypes sheet, files it in
+`data/scal/` and loads it into `data_scal`; the res modeler then takes the SCAL from it rather than from geo.json.
+The reader stops on what would break the tables (no unit system, SATNUMs not 1..n, saturation not increasing, kr
+outside 0-1, Swc + Sorw ≥ 1, a `tables` rock type without SWOF or SGOF rows) and warns on the rest (no source,
+kr not starting or ending at 0). Next: aquifers (build and render) and a res QC notebook
 ([design](docs/design/res-model.md)).
 
 ## Well modeler
