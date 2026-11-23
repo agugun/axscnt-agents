@@ -11,7 +11,10 @@ from datetime import date
 
 MONTHS = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"]
 DEFAULT_SUMMARY = ["FOPR", "FWPR", "FGPR", "FWIR", "FOPT", "FWPT", "FWIT", "FPR", "FWCT", "FGOR",
-                   "WOPR", "WWPR", "WWIR", "WBHP", "WWCT", "WGOR"]
+                   "WOPR", "WWPR", "WWIR", "WBHP", "WWCT", "WGOR",
+                   # for history matching: gas and gas injection, and the observations Flow is given (WCONHIST /
+                   # WCONINJH); zero for wells without history
+                   "WGPR", "WGIR", "WOPRH", "WWPRH", "WGPRH", "WWIRH", "WGIRH", "WBHPH"]
 
 
 class RenderError(ValueError):

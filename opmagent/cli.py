@@ -896,6 +896,50 @@ def cmd_results(args):
     raise SystemExit(0 if r["ok"] else 2)
 
 
+def cmd_hm(args):
+    """History matching (phase 1): observations, misfit and the HM report on finished runs. Read only."""
+    import json as _json
+
+    from .core.errors import ToolError
+    from .hm import service
+    cfg = cfgmod.load(args.config)
+    con = db.connect(cfg.database)
+    obj = _json.loads(Path(args.objective).read_text()) if getattr(args, "objective", None) else None
+    kw = dict(study=args.study, source=args.source, truth_run_id=args.truth_run)
+    try:
+        if args.hcmd == "observations":
+            r = service.observation_inventory(con, run_id=args.run, **kw)
+            if args.json:
+                print(_json.dumps(r, indent=2, default=str))
+                return
+            print(f"source {r['source']}, {r['period'][0]} to {r['period'][1]}, {r['points']} points")
+            for w in r["wells"]:
+                qs = ", ".join(f"{q} {d['non_zero']}/{d['points']}" for q, d in w["quantities"].items())
+                ctl = f"  control {'/'.join(w['controls'])}, honoured {', '.join(w['honoured']) or '-'}" \
+                    if w["controls"] else ""
+                print(f"  {w['well']:<8} {qs}{ctl}")
+            return
+        if args.hcmd == "misfit":
+            r = service.public(service.run_misfit(con, args.run, objective=obj, **kw), max_terms=args.terms)
+            if args.json:
+                print(_json.dumps(r, indent=2, default=str))
+                return
+            print(r["spoken_summary"])
+            for t in r["terms"]:
+                extra = (f"cum {t['cum_error_pct']:+.1f} %" if t.get("cum_error_pct") is not None else
+                         f"last {t['last_error']:+.1f}" if "last_error" in t else "")
+                flag = "" if t["in_total"] else "  (honoured, not in total)"
+                print(f"  {t['well']:<8} {t['quantity']:<9} misfit {t['misfit']:10.3f}  n {t['n']:4d}  {extra}{flag}")
+            return
+        if args.hcmd == "report":
+            r = service.write_report(cfg, con, args.run, objective=obj, **kw)
+            print(r["spoken_summary"])
+            print(r["report"])
+            raise SystemExit(0 if r["report_ok"] else 2)
+    except ToolError as e:
+        raise SystemExit(f"{e.code}: {e.message}") from None
+
+
 def cmd_setup(args):
     from pathlib import Path
     from .core import db as dbmod
@@ -1229,6 +1273,25 @@ def main(argv=None):
     x = im.add_parser("verify", help="after approval: rebuild, run both, compare")
     x.add_argument("--name", required=True)
     x.set_defaults(fn=cmd_import)
+    hm = sub.add_parser("hm", help="history matching: observations, misfit and the HM report (read only)") \
+        .add_subparsers(dest="hcmd", required=True)
+    for name, hlp in (("observations", "what can be matched: per well the quantities with data, the history control"),
+                      ("misfit", "misfit of a finished run per well and quantity"),
+                      ("report", "the HM report of a run (notebook, HTML)")):
+        x = hm.add_parser(name, help=hlp)
+        if name == "observations":
+            x.add_argument("--run", type=int, help="a run: its deck's history and controls")
+        else:
+            x.add_argument("run", type=int)
+            x.add_argument("--objective", help="JSON: weights, sigma, period, exclude_wells, include_honoured")
+        x.add_argument("--study", help="the study whose measured production history is the observation")
+        x.add_argument("--source", default="auto", choices=("auto", "data_production", "deck_history", "run"))
+        x.add_argument("--truth-run", dest="truth_run", type=int, help="with --source run: the run taken as truth")
+        if name != "report":
+            x.add_argument("--json", action="store_true")
+        if name == "misfit":
+            x.add_argument("--terms", type=int, default=20, help="how many terms to list (worst first)")
+        x.set_defaults(fn=cmd_hm)
     x = sub.add_parser("hello", help="end-to-end demo: models, approval, deck, run")
     x.add_argument("--clean", action="store_true")
     x.add_argument("--json", action="store_true")

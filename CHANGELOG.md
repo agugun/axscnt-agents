@@ -9,6 +9,12 @@ to the res model, and SQLite can't change the existing tables in place. `opmagen
 so; move it aside and run `opmagent init-db` (or `opmagent setup <workspace>`), then rebuild the studies.
 No approvals are carried over. Design: [docs/design/res-model.md](docs/design/res-model.md).
 
+- **History matching, phase 1** ([docs/design/history-match.md](docs/design/history-match.md)): a read-only
+  `opmagent-hm` MCP server and `opmagent hm observations / misfit / report`. Misfit of a finished run per well and
+  quantity against the study's measured production (`data_production`), the deck's history (`WOPRH` ...) or another
+  run; quantities the history control honours are reported but not counted. The HM report notebook plots observed
+  against simulated per well, field cumulatives and misfit per well. Decks now also write `WGPR`, `WGIR` and the
+  `W*H` history vectors.
 - **Res model** (`res_models`, `res_model_versions`, `res_properties`; `swof`, `sgof`, `rock`, `contacts`,
   `aquifers`, `aquifer_connections` now belong to it): the dynamic half of the reservoir model, defined on one geo
   version (`geo_version_id`, required). Region arrays SATNUM, EQLNUM, FIPNUM, ROCKNUM and SWATINIT moved with it;
