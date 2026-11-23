@@ -23,3 +23,4 @@ INVALID_INPUT = "INVALID_INPUT"
 VALIDATION_FAILED = "VALIDATION_FAILED"
 DB_RULE = "DB_RULE"            # a schema trigger/constraint refused the write
 AMBIGUOUS = "AMBIGUOUS"
+NO_HISTORY = "NO_HISTORY"    # no observations to match (history matcher)

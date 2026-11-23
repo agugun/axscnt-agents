@@ -53,9 +53,9 @@ makes (`control` on the HISTORY events):
 
 | Control | Honoured by Flow | Matched |
 | --- | --- | --- |
-| `ORAT` | oil rate | water rate, gas rate, BHP (and THP) |
+| `ORAT` (the well modeler's default when a month has oil) | oil rate | water rate, gas rate, BHP (and THP) |
 | `LRAT` | liquid rate | water cut, GOR, BHP |
-| `RESV` (today's default) | reservoir voidage | oil, water, gas, BHP |
+| `RESV` | reservoir voidage | oil, water, gas, BHP |
 
 The matcher reports which control the deck uses, and what it therefore can and can't match.
 
@@ -262,6 +262,25 @@ imported deck) is refused by `hm_setup` until its data has a model home.
 | 3. Optimisation and proposal | `least_squares` with finite differences, restartable `hm_runs`, the match proposal and its review, requests to the modelers | the synthetic truth: both parameters recovered within 5 %, the misfit near 0; after the modelers' versions, the Flow run equals the best case |
 | 4. Norne | The Norne study from its deck: base misfit against its WCONHIST history, a sensitivity on zone PERMX multipliers, MULTFLT and aquifer support | reported, not a pass mark: the base case is the benchmark's starting model |
 | 5. Ensemble (optional) | ES-MDA, the parameter and forecast spread | the synthetic truth inside the ensemble's spread |
+
+**Phase 1 as built** (`opmagent/hm/`, `opmagent/servers/hm_server.py`, `opmagent hm`):
+
+- `opmagent-hm` serves `hm_observations`, `hm_misfit` and `hm_report`, read only. `hm_observations` is on the HM
+  server rather than the data server for now: the `deck_history` source reads the run's summary file. The data
+  server's `hm` profile and `hm_targets` come with the parameters in phase 2.
+- `opmagent setup` doesn't add `opm-hm` to a workspace's `.mcp.json` yet: no agent uses it until the
+  `history-matcher` agent and its profile exist (phase 2). Phase 1 is used through `opmagent hm`.
+- `hm_misfit(run_id, ...)` is the misfit of any finished run. `hm_base` (case 0 of a setup) wraps it once setups and
+  the `hm_*` tables exist (phase 2).
+- Observation sources: `data_production` (volumes to monthly rates on producing days, as `monthly_history`),
+  `deck_history` (`WOPRH` ... from the run, only for wells with HISTORY events: Flow also writes prediction targets
+  into those vectors), and `run` (another run as a synthetic truth).
+- Simulated rates are the time-weighted monthly mean of the summary rate over the calendar month.
+- The deck builder's default summary gains `WGPR`, `WGIR` and the history vectors `WOPRH`, `WWPRH`, `WGPRH`,
+  `WWIRH`, `WGIRH`, `WBHPH`.
+- Gate: `tests/test_hm.py` runs hello and gets misfit 0 against itself, both as a `run` truth and through
+  `data_production` built from its own monthly volumes. The `deck_history` path has no end-to-end test yet (no small
+  deck with WCONHIST); Norne in phase 4 is its test.
 
 ## Decisions
 
