@@ -132,4 +132,7 @@ densities, aquifer volume and productivity against the reservoir pore volume, co
 
 - Phases 1-3: done (0.3).
 - SCAL workbook and loader: done (`opmagent res template`, `data_scal`, `res build --scal`).
-- Aquifers (build and render) and the res QC notebook: next.
+- Analytical aquifers, build and render: done (Fetkovich, Carter-Tracy with the built-in influence table;
+  AQUDIMS, AQUFETP, AQUCT, AQUANCON; AAQR/AAQT/AAQP). Imported decks' aquifers stay passthrough.
+- Res QC notebook: done (`res_qc.ipynb` on the static view with the version's regions: SCAL end points and
+  consistency, regions against tables, pore volume per region, contacts against the cells, rock, aquifers).

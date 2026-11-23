@@ -28,6 +28,13 @@ builder uses them together.
 - Several equilibration regions: `"contacts": [{"eqlnum": 1, ...}, {"eqlnum": 2, ...}]` with an EQLNUM region rule.
 - Region rules: `{"by": "zone", "values": {zone: n}}` (geo modeler grids), `{"by": "layer", "values": {"1-3": 1}}`,
   or `{"value": 1}`.
+- Analytical aquifers: `"aquifers": [...]`, each Fetkovich `{"type": "fetkovich", "ct", "water_volume",
+  "productivity_index"}` or Carter-Tracy `{"type": "carter_tracy", "ct", "permeability", "porosity",
+  "inner_radius", "thickness", "angle"}`, with `"connections": [{"face": "I-"|"I+"|"J-"|"J+"|"K-"|"K+",
+  "i"?, "j"?, "layers"? | "zone"?, "influx_mult"?}]` (a face alone means that whole edge of the grid). Optional:
+  `datum_depth` (default the OWC), `init_pressure` (default equilibrated), `pvtw_table`, `source`. Units are the
+  deck's (METRIC: sm3, sm3/day/bar, 1/bar, mD, m). Never invent an aquifer's size or productivity: ask, and say
+  where the numbers come from (material balance, analogue, history match).
 - SCAL from a workbook: `opmagent res template scal.xlsx` gives the engineer the template (sheets Info, RockTypes,
   SWOF, SGOF); `opmagent res build ... --scal scal.xlsx` uses its rock types in place of the spec's `scal`, and
   says what it had to assume. A required gap (no unit system, Sw not increasing, a SATNUM with no rows) stops it.
@@ -38,7 +45,10 @@ builder uses them together.
 1. Find the geo version the model is for (`list_models(kind="geo")`; in a study, the geo task's result).
 2. Write the spec from the user's words and data, read it back briefly.
 3. `opmagent res build --spec res.json --geo-version <id> --name <Name>`
-4. Report: SATNUM / EQLNUM counts, datum and contacts, the QC report path, and the assumptions. It is then
+4. Report: SATNUM / EQLNUM counts, datum and contacts, the QC notebook's fail and warn findings, the QC report
+   path, and the assumptions. To dig into a finding: `create_investigation_notebook(version_id, purpose)`, add
+   cells, `run_investigation_notebook(path)` (read only; `qc.end_points(data)`, `qc.region_volumes(data, "FIPNUM")`,
+   `data['grid']` is the static view). After return_to_draft, `run_qc_notebook(version_id)`. It is then
    waiting for review. Never approve.
 
 ## In a study

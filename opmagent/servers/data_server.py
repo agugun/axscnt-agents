@@ -377,7 +377,7 @@ class DataService:
         return {"ok": True, "feedback": f, "spoken_summary": f"Comment {f['id']} added to {kind} "
                                                              f"{f['model_name']} v{f['version']}."}
 
-    # ------------------------------------------------------------ QC notebooks (fluid, geo and well modelers)
+    # ------------------------------------------------------------ QC notebooks (fluid, geo, res and well modelers)
     def _qc_folder(self, version_id: int):
         kind = MODELER_KIND.get(self.profile)
         if kind not in runner.KINDS:
@@ -386,7 +386,7 @@ class DataService:
         return kind, h, runner.qc_dir(self.cfg.file_store, h["model_name"], h["version"], kind)
 
     def run_qc_notebook(self, version_id: int) -> dict:
-        """Re-run the standard QC notebook (fluid, geo or well, by your profile) for a draft version (e.g. after
+        """Re-run the standard QC notebook (fluid, geo, res or well, by your profile) for a draft version (e.g. after
         return_to_draft) and register the new report. Pass the returned qc_report_file_id to submit_for_review.
         Versions under review or approved keep the report they were reviewed with."""
         kind, h, folder = self._qc_folder(version_id)
@@ -406,7 +406,7 @@ class DataService:
                                   f"{s['counts']['warn']} warn finding(s)."}
 
     def create_investigation_notebook(self, version_id: int, purpose: str) -> dict:
-        """Start a free-form investigation notebook for a fluid, geo or well version (any status): purpose, parameters and
+        """Start a free-form investigation notebook for a fluid, geo, res or well version (any status): purpose, parameters and
         data-loading cells are written for you. Add analysis cells to the returned path (read only: load,
         compute, plot; model changes go through a new build), then call run_investigation_notebook."""
         kind, _, folder = self._qc_folder(version_id)
@@ -489,7 +489,7 @@ QC_NOTEBOOKS = ["run_qc_notebook", "create_investigation_notebook", "run_investi
 TOOLS = {
     "fluid": COMMON + WRITER + STUDY + DATA_READ + FEEDBACK + QC_NOTEBOOKS, "geo": COMMON + WRITER + STUDY + DATA_READ + FEEDBACK + QC_NOTEBOOKS + ["static_view"],
     "well": COMMON + WRITER + STUDY + DATA_READ + FEEDBACK + QC_NOTEBOOKS,
-    "res": COMMON + WRITER + STUDY + DATA_READ + FEEDBACK,
+    "res": COMMON + WRITER + STUDY + DATA_READ + FEEDBACK + QC_NOTEBOOKS,
     "import": COMMON + WRITER,
     "deck": COMMON + ["create_deck", "add_deck_file", "set_deck_status", "list_decks", "get_deck", "init_study",
                       "init_view"] + STUDY,

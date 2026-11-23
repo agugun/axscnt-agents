@@ -20,7 +20,7 @@ Design: see the architecture and user-guide docs (links in `docs/README.md`).
 | Results viewer (ResInsight) | `opmagent results open` | done, tested |
 | Fluid modeler (NeqSim, Excel lab report) | MCP `opmagent-pvt` + `opmagent fluid build` | done, tested |
 | Geo modeler (tops + LAS -> corner-point grid, kriging, QC notebook) | `opmagent geo build / qc / investigate` | done, tested |
-| Res modeler (SCAL, rock, contacts and initial pressure, region arrays on a geo grid) | `opmagent res build` | done, tested; SCAL workbook done; aquifers and QC notebook to come |
+| Res modeler (SCAL, rock, contacts and initial pressure, region arrays on a geo grid) | `opmagent res build / qc / investigate` | done, tested (SCAL workbook, analytical aquifers, QC notebook) |
 | Well modeler (surveys, perforations, history incl. Volve, controls, QC notebook) | `opmagent well build / qc / investigate` | done, tested |
 | Deck builder | `opmagent deck build` | done, tested |
 | Run agent (runs, results, compare, VS Code debug) | MCP `opmagent-sim` | done, tested |
@@ -306,7 +306,21 @@ opmagent res build --spec res.json --geo-version 7 --name FieldX_Res --scal scal
 
 SCAL is Corey per rock type or measured tables (`"scal": [{"satnum": 1, "swof": [...], "sgof": [...]}, ...]`);
 Corey parameters left out are listed as defaults in the assumptions. Regions go by geo zone, by layer range, or one
-value. The QC report is a static page for now (curves and end points, contacts, rock, regions).
+value.
+
+**Res QC notebook** (`res_qc.ipynb`, run by every res build, like the others). It reads the geo version's static
+view made with this version's regions, so it checks what Flow sees on any grid (pore volume, depth, SATNUM, EQLNUM,
+FIPNUM per cell):
+- SCAL per SATNUM: end points (Swc, Sorw, krw there, Sgc, Sorg), the mobile oil window, kro at connate water in
+  SWOF against SGOF, SGOF within 1 - Swc, Pcow not rising with Sw; kr and Pc plots;
+- regions: every SATNUM and EQLNUM value has its table and every table is used; cells and pore volume per region;
+- contacts: datum within each region's cells, GOC above OWC, where each contact lies; rock compressibility range;
+- aquifers: connected cells active, size against the reservoir's pore volume; a plan view of the connections.
+
+```bash
+opmagent res qc 12                                     # re-run it for a draft version
+opmagent res investigate 12 --purpose "kr end points" --open
+```
 
 **SCAL workbook.** `opmagent res template` writes it: `Info` (unit system: METRIC with Pc in bar, or FIELD with Pc
 in psi), `RockTypes` (one row per SATNUM: name, method `corey` or `tables`, source, and the Corey Swc, Sorw, Sorg,
@@ -315,7 +329,23 @@ SATNUM, for method `tables`). In a study's inbox the data manager recognises it 
 `data/scal/` and loads it into `data_scal`; the res modeler then takes the SCAL from it rather than from geo.json.
 The reader stops on what would break the tables (no unit system, SATNUMs not 1..n, saturation not increasing, kr
 outside 0-1, Swc + Sorw ≥ 1, a `tables` rock type without SWOF or SGOF rows) and warns on the rest (no source,
-kr not starting or ending at 0). Next: aquifers (build and render) and a res QC notebook
+kr not starting or ending at 0).
+
+**Analytical aquifers.** `"aquifers"` in the res spec (or geo.json in a study): Fetkovich (`ct`, `water_volume`,
+`productivity_index`) or Carter-Tracy (`ct`, `permeability`, `porosity`, `inner_radius`, `thickness`, `angle`),
+each with its connections to grid faces:
+
+```json
+"aquifers": [{"type": "fetkovich", "ct": 1e-4, "water_volume": 5e8, "productivity_index": 50,
+              "connections": [{"face": "I-", "layers": "2-3"}], "source": "material balance"},
+             {"type": "carter_tracy", "ct": 1e-4, "permeability": 200, "porosity": 0.25, "inner_radius": 2000,
+              "thickness": 30, "connections": [{"face": "J+", "zone": "Lower", "i": "3-8"}]}]
+```
+
+A face alone connects that whole edge of the grid; `i`, `j`, `layers` or `zone` narrow it. The datum defaults to
+the OWC and the initial pressure to equilibrium with the reservoir (both noted in the assumptions). The deck gets
+`AQUDIMS`, `AQUFETP` / `AQUCT` (built-in influence table) and `AQUANCON`, and the summary `AAQR`, `AAQT`, `AAQP`
+per aquifer. Aquifers in imported decks are still carried through unchanged
 ([design](docs/design/res-model.md)).
 
 ## Well modeler
@@ -484,7 +514,7 @@ opmagent/
   servers/      data_server, pvt_server, sim_server (MCP)
   data/         study data: inbox load, checks, store (one read layer, checksums), deck and study input
   reports/      static QC reports ([qc] report = "html"), model views of deck data
-  notebooks/    QC notebook templates (fluid, geo, well), qc_lib / geo_qc_lib / well_qc_lib, headless runner
+  notebooks/    QC notebook templates (fluid, geo, res, well), qc_lib / geo_qc_lib / res_qc_lib / well_qc_lib, headless runner
   pvt/          NeqSim engine, demo oil
   fluid/        Excel lab report, fluid pipeline
   geo/          geo modeler (gridding, kriging)
