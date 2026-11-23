@@ -82,6 +82,8 @@ def _permissions(ws: Path, servers: dict) -> Path:
     perms = s.setdefault("permissions", {})
     want = ["Bash(opmagent:*)"] + [f"mcp__{name}" for name in sorted(servers) if "reviewer" not in name]
     perms["allow"] = list(dict.fromkeys(list(perms.get("allow", [])) + want))
+    # removing files asks you first, even though opmagent is allowed (in Claude Code, ask wins over allow)
+    perms["ask"] = list(dict.fromkeys(list(perms.get("ask", [])) + ["Bash(opmagent clean:*)"]))
     p.write_text(json.dumps(s, indent=2) + "\n")
     return p
 

@@ -44,8 +44,10 @@ tools/create_workspace.sh ~/opm-agents   # the agents' workspace, checked with o
   `pip install -e ".[dev,geo,opm]"`; fetches SPE1, SPE9 and Norne into `~/.local/share/opmagent/open-data` (`tools/fetch_open_data.sh`).
   The venv is made from the system `/usr/bin/python3` (a conda or pyenv Python breaks the venv when it's updated);
   `opmagent` is linked into `~/.local/bin`, so it works without activating the venv.
+  If ResInsight isn't found, it installs the latest release into `~/.local/opt/ResInsight`
+  (`tools/install_resinsight.sh`, below).
   `SKIP_APT=1` (no sudo), `SKIP_DATA=1`, `RUN_TESTS=1` (the test suite at the end), `PYTHON=<python 3.11+>`,
-  `NO_LINK=1`.
+  `NO_LINK=1`, `SKIP_RESINSIGHT=1`.
 - `tools/create_workspace.sh [folder]` (default `~/opm-agents`; the folder must not exist yet): `opmagent setup`
   (config, database, file store, `.mcp.json`, `.claude/agents` and skills, `CLAUDE.md`, `reviewer-mcp.json`), then
   `opmagent doctor` and `opmagent hello`. `AUTO_APPROVE=1` (models that pass their validator are approved; hello then
@@ -176,19 +178,21 @@ ResInsight and gives SPE9's and Norne's own INIT.
 validator, recorded in `approvals` as `auto (approval disabled)`; models with validator errors still stop.
 With `false` (the default) you approve each model as before, and the study waits for it.
 
-**ResInsight.** Install the Linux release in `/opt/ResInsight`, outside any workspace; opmagent then finds it
-without a setting (`opmagent doctor` shows where). To start it as `resinsight` from anywhere, add a small wrapper:
-the release's launcher finds its files from its own folder, so a symlink to it would not work.
+**ResInsight.** `tools/install_resinsight.sh` installs the latest release from github.com/OPM/ResInsight (its el8
+build, which brings its own Qt) outside any workspace, where opmagent finds it without a setting (`opmagent doctor`
+shows where). `tools/install.sh` runs it when ResInsight isn't found.
 
 ```bash
-sudo tar -xzf ResInsight-<version>_Ubuntu_<release>.tar.gz -C /opt && sudo mv /opt/ResInsight-* /opt/ResInsight
-printf '#!/bin/sh\nexec /opt/ResInsight/bin/resinsight "$@"\n' | sudo tee /usr/local/bin/resinsight >/dev/null
-sudo chmod 755 /usr/local/bin/resinsight
+tools/install_resinsight.sh                       # ~/.local/opt/ResInsight, no sudo
+SYSTEM=1 tools/install_resinsight.sh              # /opt/ResInsight and /usr/local/bin/resinsight, with sudo
+tools/install_resinsight.sh ~/Downloads/ResInsight-2026.11.1_el8.tar.gz   # a release you downloaded
+FORCE=1 tools/install_resinsight.sh               # replace (upgrade) an install; the old one is kept as .old
 ```
 
-Elsewhere, set `[viewer] resinsight_bin` to the launcher (`bin/resinsight` of the release); without `sudo`,
-`~/.local/opt/ResInsight` is looked at too. On a Wayland desktop the viewer runs it with `QT_QPA_PLATFORM=xcb` (the bundled Qt has only the X11
-plugin).
+`VERSION=<tag>` installs a given release, `BUILD=ubuntu` the Ubuntu build (it needs `sudo apt install libomp5`).
+Elsewhere, set `[viewer] resinsight_bin` to the launcher (`bin/resinsight` of the release: a symlink to it would not
+work, the launcher finds its files from its own folder). On a Wayland desktop the viewer runs it with
+`QT_QPA_PLATFORM=xcb` (the bundled Qt has only the X11 plugin).
 
 ## Fluid modeler
 
@@ -378,6 +382,25 @@ Run it in the workspace (or pass `--workspace`). In Claude Code, the `opm-doctor
 
 It also fails if the reviewer server is in the agents' `.mcp.json`. The exit code is 1 when an agent can't work as
 set up; warnings (a skill out of date, a server not approved yet, failed writes) leave it at 0. Read only.
+
+## Backup and clean
+
+```bash
+opmagent backup                  # ~/.local/share/opmagent/backups/<workspace>-<time>.tar.gz: opm.db, opmagent.toml, manifest.json
+opmagent backup --files          # also the file store (data/files), without the views
+opmagent clean                   # lists what can go, with sizes, and the size of each file-store folder; removes nothing
+opmagent clean --yes             # removes it (--runs, --imports, --views: only those)
+```
+
+- **backup** copies the database with SQLite's online backup, so it is consistent while agents write. `--out <dir>`
+  puts the archive elsewhere. To restore into the same workspace (the database keeps absolute paths into it): close
+  Claude Code, `mv data/opm.db data/opm.db.before-restore`, then `tar -xzf <archive> -C /tmp/restore` and copy
+  `opm.db` (and `files/` for a `--files` backup) back into `data/`.
+- **clean** removes only what is safe to remove, inside the file store:
+  - **runs**: the output folders of failed runs; the run rows stay, noted "files removed by opmagent clean";
+  - **imports**: older import folders none of whose models are approved; the newest import of each deck is kept;
+  - **views**: initialisation views and geo static views, made again when opened (`opmagent results open`).
+- The workspace's `.claude/settings.json` makes the agents ask you before `opmagent clean`.
 
 ## Registering the data server
 

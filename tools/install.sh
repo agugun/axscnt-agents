@@ -9,6 +9,8 @@
 #   PYTHON=<python>   the interpreter for the virtual environment (default: the system's /usr/bin/python3, else
 #                     python3 on PATH; needs 3.11 or newer). An existing .venv is kept: remove it to rebuild.
 #   NO_LINK=1         don't link opmagent into ~/.local/bin (then activate .venv to use it)
+#   SKIP_RESINSIGHT=1 don't install ResInsight (otherwise, if it isn't found: the latest release into
+#                     ~/.local/opt/ResInsight, by tools/install_resinsight.sh)
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
@@ -64,6 +66,19 @@ if [ -z "${NO_LINK:-}" ]; then
     ok "opmagent on PATH: $BIN/opmagent -> $REPO/.venv/bin/opmagent"
     case ":$PATH:" in *":$BIN:"*) ;; *) warn "$BIN isn't on PATH: add it (e.g. in ~/.profile), or activate .venv" ;; esac
   fi
+fi
+
+# ------------------------------------------------------------------ ResInsight (the results viewer)
+if [ -z "${SKIP_RESINSIGHT:-}" ]; then
+  RI="$(python -c 'from opmagent.viewer import find_resinsight; print(find_resinsight() or "")')"
+  if [ -n "$RI" ]; then
+    step "ResInsight"; ok "ResInsight: $RI"
+  else
+    step "ResInsight: not found, installing the latest release"
+    "$REPO/tools/install_resinsight.sh" || warn "ResInsight not installed: opmagent works without it, only the viewer needs it"
+  fi
+else
+  step "ResInsight: skipped (SKIP_RESINSIGHT=1)"
 fi
 
 # ------------------------------------------------------------------ open test decks
