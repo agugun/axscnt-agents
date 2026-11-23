@@ -9,6 +9,12 @@ to the res model, and SQLite can't change the existing tables in place. `opmagen
 so; move it aside and run `opmagent init-db` (or `opmagent setup <workspace>`), then rebuild the studies.
 No approvals are carried over. Design: [docs/design/res-model.md](docs/design/res-model.md).
 
+- **History matching, phase 4 (Norne)**: `testing/hm_norne.py` and `testing/history-match-norne.md` import,
+  rebuild and run Norne, give its misfit against its own 1997-2006 history, and run a sensitivity on PERMX per
+  formation and four faults. Controls are now judged month by month (wells switch between ORAT and RESV). A
+  parameter is refused when the deck's own passthrough rewrites its keyword (Norne's PERMZ comes from PERMX).
+  Variants keep only their summary unless `[hm] keep_grid_output`. A free-disk check (`[hm] min_free_disk_mb`)
+  runs before each case, and the next job retries a failed case.
 - **History matching, phase 3**: the search (`hm_optimise`, bounded least squares with a parallel
   finite-difference Jacobian, restartable), match proposals (`hm_propose`: values rounded to what a modeler types,
   run as their own case, changes per owner, flags), the engineer's review (`opmagent review hm show / accept /

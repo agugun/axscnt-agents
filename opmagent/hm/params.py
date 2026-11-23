@@ -177,11 +177,40 @@ def _layer_range(target: dict, geo: dict) -> tuple[int, int]:
     return 1, nz
 
 
+OPS = ("COPY", "MULTIPLY", "EQUALS", "ADD", "MINVALUE", "MAXVALUE")
+
+
+def rewritten(spec: dict, keyword: str) -> list[str]:
+    """Passthrough keywords of the deck (an imported deck's GRID / EDIT / SCHEDULE text) that set `keyword` after
+    the model's array, so a change to the array would not reach Flow: the keyword itself, or COPY / MULTIPLY /
+    EQUALS / ADD ... with it as the target. Returns short descriptions."""
+    out = []
+    for sec in ("GRID", "EDIT", "SCHEDULE"):
+        for item in (spec.get("passthrough") or {}).get(sec, []):
+            kw = (item.get("keyword") or "").upper()
+            raw = item.get("raw_text") or ""
+            if kw == keyword:
+                out.append(f"{sec} {kw}")
+                continue
+            if kw in OPS:
+                for line in raw.splitlines()[1:]:
+                    toks = re.findall(r"'([^']+)'|(\S+)", line)
+                    words = [a or b for a, b in toks]
+                    if not words or words[0] == "/":
+                        continue
+                    target = words[1] if kw == "COPY" and len(words) > 1 else words[0]
+                    if target.upper() == keyword:
+                        out.append(f"{sec} {kw} {' '.join(words[:2])}")
+                        break
+    return out
+
+
 def check(params: list[dict], m: dict) -> list[dict]:
     """Normalised parameters, or INVALID_INPUT naming the first problem. m: deck_models()."""
     if not params:
         raise ToolError(INVALID_INPUT, "give at least one parameter")
     geo, res = m["geo"], m["res"]
+    spec = (m.get("deck") or {}).get("spec_json") or {}
     out, names = [], set()
     corey = corey_types(res)
     for i, p in enumerate(params, start=1):
@@ -201,7 +230,18 @@ def check(params: list[dict], m: dict) -> list[dict]:
         if kind in CELL_KINDS:
             _layer_range(t, geo)
             cur = None
+            kw = CELL_KINDS[kind][0]
+            over = rewritten(spec, kw)
+            if over:
+                raise ToolError(INVALID_INPUT, f"{where}: the deck sets {kw} itself after the model's array "
+                                               f"({'; '.join(over[:3])}{' ...' if len(over) > 3 else ''}), so a "
+                                               f"multiplier would not reach Flow. Multiply what it is made from, or "
+                                               f"bring {kw} into the geo model first")
         elif kind == "multflt":
+            over = rewritten(spec, "MULTFLT")
+            if over:
+                raise ToolError(INVALID_INPUT, f"{where}: the deck sets MULTFLT itself ({'; '.join(over[:3])}), "
+                                               "so a change in the geo model would not reach Flow")
             fl = {f["fault_name"] for f in geo["tables"]["faults"]}
             if t.get("fault") not in fl:
                 raise ToolError(INVALID_INPUT, f"{where}: unknown fault {t.get('fault')}; the faults are {sorted(fl)}")

@@ -49,3 +49,5 @@ threads = 2
 min_free_mb = 1024
 # case_memory_mb = 2000     # default: 300 MB + 20 kB per cell
 case_timeout_s = 3600
+min_free_disk_mb = 2048
+# keep_grid_output = true   # keep each variant's restart/INIT/EGRID (Norne: ~300 MB a case); default: summary only

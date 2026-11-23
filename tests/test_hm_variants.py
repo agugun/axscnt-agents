@@ -180,3 +180,23 @@ def test_capacity(cfg):
     cfg.hm_min_free_mb = 10 ** 9
     assert jobs.memory_ok(cfg, 100) is (jobs.free_mb() is None)
     assert json.loads(pm.values_key({"x": 1})) == {"x": 1.0}
+
+
+def test_failed_case_is_retried_by_the_next_job(cfg, hello_deck, tmp_path):
+    """A case that failed for the machine's sake (here: marked failed by hand) runs again in the next job; the
+    variant's restart and grid files are dropped after scoring."""
+    from opmagent.core import db
+    con = db.connect(cfg.database)
+    truth = _truth_run(cfg, con, hello_deck, tmp_path)
+    s = jobs.setup(con, "RETRY", hello_deck, GATE[:1], source="run", truth_run_id=truth)
+    h = jobs.get_hm(con, s["hm_id"])
+    j = jobs.Runner(cfg, jobs.create_job(con, h, "sensitivity")).run()
+    assert j["progress"]["done"] == 3
+    case = con.execute("SELECT * FROM hm_cases WHERE hm_id = ? AND label = 'kx_L1 low'", (h["id"],)).fetchone()
+    run_dir = jobs.hm_dir(cfg.file_store, h) / f"case_{case['case_no']}" / "run"
+    assert not list(run_dir.glob("*.UNRST")) and list(run_dir.glob("*.SMSPEC"))
+    con.execute("UPDATE hm_cases SET status = 'failed', misfit = NULL, error = 'disk full' WHERE id = ?",
+                (case["id"],))
+    j2 = jobs.Runner(cfg, jobs.create_job(con, h, "sensitivity")).run()
+    again = con.execute("SELECT status, misfit FROM hm_cases WHERE id = ?", (case["id"],)).fetchone()
+    assert j2["status"] == "done" and again["status"] == "done" and again["misfit"] is not None

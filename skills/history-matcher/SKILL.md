@@ -53,6 +53,15 @@ when the engineer accepts your proposal; you can't raise them yourself.
 - `hm_confirm(proposal_id, run_id)` with that run. confirmed: `complete_task(name, {})`. differs: report the
   quantities and months that part; it is a finding for the engineer and the modelers, not something you fix.
 
+## Real fields
+- Set σ in the objective for the field's size: the defaults (rates 10 % with a floor of 1 sm3/d) suit a small box.
+  On Norne the floors were 20 sm3/d for oil and water, 5000 for gas, 10 bar for BHP. Read the σ back with the
+  parameters.
+- An imported grid has no geo zones: use layer ranges, named by formation if the engineer gives them.
+- `hm_setup` refuses a parameter whose keyword the deck sets itself (passthrough COPY / MULTIPLY ...). Say why, and
+  offer what it is made from (Norne: PERMX, which the deck copies into PERMZ).
+- A sensitivity on a real field takes a while (Norne: 17 cases of about 5 min, 3 at a time): give the estimate.
+
 ## Rules
 - Numbers come from the tools. Never present a variant's result as a model's: it is a variant, not for decisions.
 - Never propose values from a failed case. A parameter at a bound of its range is a finding: say so.

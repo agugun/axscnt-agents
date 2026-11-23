@@ -52,14 +52,44 @@ def objective(overrides: dict | None = None) -> dict:
 
 
 def honoured(con, well_version_id: int) -> dict[str, dict]:
-    """Per well: the HISTORY controls it is under and the quantities they honour."""
+    """Per well: the HISTORY controls it is under, the quantities they honour (in any month), and the timeline of
+    controls [(date, control or None)], so each month is judged by the control in force then (a well may switch
+    between ORAT and RESV)."""
     out: dict[str, dict] = {}
-    for r in con.execute("SELECT well_name, control FROM well_events WHERE version_id = ? AND mode = 'HISTORY' "
-                         "AND status = 'OPEN' AND control IS NOT NULL", (well_version_id,)):
-        d = out.setdefault(r["well_name"], {"controls": set(), "honoured": set()})
-        d["controls"].add(r["control"])
-        d["honoured"] |= HONOURS.get(r["control"], set())
-    return {w: {"controls": sorted(d["controls"]), "honoured": sorted(d["honoured"])} for w, d in out.items()}
+    for r in con.execute("SELECT well_name, event_date, mode, status, control FROM well_events WHERE version_id = ? "
+                         "ORDER BY well_name, event_date", (well_version_id,)):
+        d = out.setdefault(r["well_name"], {"controls": set(), "honoured": set(), "timeline": []})
+        ctl = r["control"] if r["mode"] == "HISTORY" and r["status"] == "OPEN" else None
+        d["timeline"].append((r["event_date"], ctl))
+        if ctl:
+            d["controls"].add(ctl)
+            d["honoured"] |= HONOURS.get(ctl, set())
+    return {w: {"controls": sorted(d["controls"]), "honoured": sorted(d["honoured"]), "timeline": d["timeline"]}
+            for w, d in out.items() if d["controls"]}
+
+
+def honoured_mask(df: pd.DataFrame, hon: dict) -> np.ndarray:
+    """Per row (well, quantity, month): is the quantity given to Flow by the control in force that month? The
+    control in force is the last event on or before the 15th of the month."""
+    out = np.zeros(len(df), dtype=bool)
+    if df.empty or not hon:
+        return out
+    for i, (w, q, mo) in enumerate(zip(df["well"], df["quantity"], df["month"])):
+        h = hon.get(w)
+        if not h or q not in h["honoured"]:
+            continue
+        if "timeline" not in h:          # no timeline given: honoured throughout
+            out[i] = True
+            continue
+        cut = str(mo)[:8] + "15"
+        ctl = None
+        for d, c in h.get("timeline", []):
+            if d <= cut:
+                ctl = c
+            else:
+                break
+        out[i] = bool(ctl) and q in HONOURS.get(ctl, set())
+    return out
 
 
 def align(obs: pd.DataFrame, sim: pd.DataFrame, obj: dict) -> pd.DataFrame:
@@ -96,14 +126,17 @@ def compute(obs: pd.DataFrame, sim: pd.DataFrame, obj: dict | None = None,
     obj = obj or objective()
     hon = honoured_by_well or {}
     a = align(obs, sim, obj)
+    a["honoured"] = honoured_mask(a, hon)
     terms = []
     for (w, q), g in a.groupby(["well", "quantity"]):
         if (g["obs"].abs() < ZERO).all() and (g["sim"].abs() < ZERO).all():
             continue
-        is_hon = q in hon.get(w, {}).get("honoured", [])
-        ss = float((g["r"] ** 2).sum())
-        t = {"well": w, "quantity": q, "n": int(len(g)), "sum_sq": ss, "misfit": ss / len(g),
-             "honoured": is_hon, "in_total": (not is_hon) or bool(obj.get("include_honoured")),
+        used = g if obj.get("include_honoured") else g[~g["honoured"]]
+        is_hon = used.empty                      # honoured in every month: shown, not counted
+        u = g if is_hon else used
+        ss = float((u["r"] ** 2).sum())
+        t = {"well": w, "quantity": q, "n": int(len(u)), "sum_sq": ss, "misfit": ss / len(u),
+             "honoured": is_hon, "honoured_months": int(g["honoured"].sum()), "in_total": not is_hon,
              "weight": float(obj["weights"].get(q, 1.0))}
         if q in RATES:
             co, cs = float((g["obs"] * g["days"]).sum()), float((g["sim"] * g["days"]).sum())
