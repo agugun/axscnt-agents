@@ -102,12 +102,21 @@ def execute(nb_path: Path, out_path: Path, params: dict | None = None, *, cwd: P
         nb = _inject_parameters(nb, params)
     nb.metadata["kernelspec"] = {"name": KERNEL_NAME, "display_name": "opmagent QC", "language": "python"}
     cwd = Path(cwd or out_path.parent)
-    client = NotebookClient(nb, km=_kernel_manager(), timeout=timeout, resources={"metadata": {"path": str(cwd)}})
+    km = _kernel_manager()
+    client = NotebookClient(nb, km=km, timeout=timeout, resources={"metadata": {"path": str(cwd)}})
     error = None
     try:
         client.execute()
     except CellExecutionError as e:
         error = str(e).strip().splitlines()[-1] if str(e).strip() else "cell failed"
+    finally:
+        # nbclient leaves a kernel it was given running: shut it down, or every QC run leaves a ~200 MB Python
+        # process behind (long-running MCP servers and test sessions then run out of memory)
+        try:
+            if km.has_kernel:
+                km.shutdown_kernel(now=True)
+        except Exception:  # noqa: BLE001
+            pass
     out_path.parent.mkdir(parents=True, exist_ok=True)
     nb.metadata["kernelspec"] = {"name": "python3", "display_name": "Python 3", "language": "python"}
     nbformat.write(nb, out_path)
