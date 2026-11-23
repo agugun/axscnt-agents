@@ -236,8 +236,9 @@ def logs(con, study, curves: dict | None = None) -> pd.DataFrame:
 
 
 def res_spec(con, study) -> dict | None:
-    """The res modeler's spec from the study data: contacts, and the SCAL, rock and region choices the engineer put in
-    the geo spec (geo.json 'scal', 'rock', 'regions'). None when no contacts are loaded."""
+    """The res modeler's spec from the study data: contacts, the SCAL workbook's rock types (else the geo spec's
+    'scal'), and the rock and region choices the engineer put in the geo spec (geo.json 'rock', 'regions').
+    None when no contacts are loaded."""
     sid = study_id(con, study)
     c = con.execute("SELECT datum_depth, datum_pressure, owc_depth, goc_depth FROM data_contacts WHERE study_id = ?",
                     (sid,)).fetchone()
@@ -245,8 +246,12 @@ def res_spec(con, study) -> dict | None:
         return None
     g = con.execute("SELECT spec_json FROM data_geo_spec WHERE study_id = ?", (sid,)).fetchone()
     g = json.loads(g[0]) if g else {}
-    return {"contacts": {k: c[k] for k in c.keys() if c[k] is not None},
+    spec = {"contacts": {k: c[k] for k in c.keys() if c[k] is not None},
             **{k: g[k] for k in ("scal", "rock", "regions") if k in g}}
+    w = con.execute("SELECT scal_json FROM data_scal WHERE study_id = ?", (sid,)).fetchone()
+    if w:   # the SCAL workbook wins over a 'scal' typed into geo.json
+        spec["scal"] = json.loads(w[0])
+    return spec
 
 
 def geo_spec(con, study) -> dict | None:
@@ -307,6 +312,8 @@ def inventory(con, study) -> dict:
                                                              (sid,))})},
         "geo_spec": {"rows": one("SELECT COUNT(*) FROM data_geo_spec WHERE study_id = ?")},
         "contacts": {"rows": one("SELECT COUNT(*) FROM data_contacts WHERE study_id = ?")},
+        "scal": {"rows": len(json.loads((con.execute("SELECT scal_json FROM data_scal WHERE study_id = ?", (sid,))
+                                         .fetchone() or ["[]"])[0])), "unit": "rock types"},
     }
     for k in ("wells", "surveys", "perforations", "controls", "history"):
         ds[k] = {"rows": one(f"SELECT COUNT(*) FROM {TABLES[k]} WHERE study_id = ?"), "wells": wl(TABLES[k])}
@@ -343,7 +350,11 @@ def inventory(con, study) -> dict:
 
 def rows(con, study, dataset: str, well: str | None = None, limit: int = 500) -> list[dict]:
     """Rows of one dataset (wells, tops, surveys, perforations, controls, history, sources, issues, log_curves,
-    pvt_samples), optionally for one well."""
+    pvt_samples, scal), optionally for one well. scal: the SCAL workbook's rock types, one row each."""
+    if dataset == "scal":
+        r = con.execute("SELECT unit_system, scal_json FROM data_scal WHERE study_id = ?",
+                        (study_id(con, study),)).fetchone()
+        return [dict(t, unit_system=r["unit_system"]) for t in json.loads(r["scal_json"])][:int(limit)] if r else []
     if dataset not in TABLES:
         raise ToolError(INVALID_INPUT, f"dataset must be one of {sorted(TABLES)} (logs: log_stats / log_samples; "
                                        f"pvt: fluid data via pvt_samples and fluid_input)")

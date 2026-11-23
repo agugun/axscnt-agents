@@ -93,6 +93,12 @@ def cmd_doctor(args):
     raise SystemExit(0 if ok else 1)
 
 
+def cmd_res_template(args):
+    from .res.scal_excel import write_template
+    print(f"SCAL template written: {write_template(args.out, example=args.example)}  (put it in the study's inbox, "
+          "then opmagent data load)")
+
+
 def cmd_fluid_template(args):
     from .fluid.excel import write_template
     print(f"template written: {write_template(args.out, example=args.example)}")
@@ -501,6 +507,14 @@ def cmd_res_build(args):
     from .res.pipeline import build_res_model
     cfg = cfgmod.load(args.config)
     spec = json.loads(open(args.spec).read())
+    if args.scal:
+        from .res.scal_excel import read_scal
+        types, _unit, gaps = read_scal(args.scal)
+        for g in gaps:
+            print(f"[{g['severity']}] {g['item']}: {g['message']}")
+        if any(g["severity"] == "required" for g in gaps):
+            raise SystemExit(f"{args.scal}: fix the required items first")
+        spec["scal"] = types
     try:
         r = build_res_model(cfg, spec=spec, name=args.name, geo_version_id=args.geo_version, description=args.description)
     except ToolError as e:
@@ -1124,7 +1138,12 @@ def main(argv=None):
     x.add_argument("--geo-version", dest="geo_version", type=int, required=True, help="the geo version id it is defined on")
     x.add_argument("--name", required=True)
     x.add_argument("--description")
+    x.add_argument("--scal", help="a SCAL workbook (opmagent res template): its rock types replace the spec's scal")
     x.set_defaults(fn=cmd_res_build)
+    x = rs.add_parser("template", help="write the SCAL workbook template (rock types: Corey or measured tables)")
+    x.add_argument("out")
+    x.add_argument("--example", action="store_true", help="fill in an example: one Corey and one measured rock type")
+    x.set_defaults(fn=cmd_res_template)
     im = sub.add_parser("import", help="deck importer (reverse deck)").add_subparsers(dest="icmd", required=True)
     x = im.add_parser("deck", help="import a deck into fluid/geo/well drafts for review")
     x.add_argument("--input", required=True)

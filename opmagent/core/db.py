@@ -195,6 +195,11 @@ MIGRATIONS = [
         CREATE TRIGGER review_feedback_comment_fixed BEFORE UPDATE OF model_kind, version_id, model_name, item,
           comment, severity, reviewer, created_at ON review_feedback
         BEGIN SELECT RAISE(ABORT, 'a review comment cannot be changed; add a new one'); END;"""),
+    # The res modeler's SCAL from a workbook (opmagent res template): rock types as the res spec's 'scal'.
+    ("data_scal", """CREATE TABLE data_scal (
+        study_id INTEGER PRIMARY KEY REFERENCES studies(id) ON DELETE CASCADE,
+        source_id INTEGER REFERENCES data_sources(id) ON DELETE CASCADE,
+        unit_system TEXT, scal_json TEXT NOT NULL);"""),
 ]
 
 

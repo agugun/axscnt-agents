@@ -14,6 +14,7 @@ the rest, check the two together, and say what is missing.
     data_pvt_samples / _composition / _tests      the lab report(s): fluid modeler
     data_tops                                     tops picks: geo modeler
     data_contacts, data_geo_spec                  contacts and the grid spec (engineer's choices): res and geo modelers
+    data_scal                                     the SCAL workbook's rock types (opmagent res template): res modeler
     data_wells, data_surveys, data_perforations,  well modeler (and geo, for the surveys)
     data_controls, data_production
     data_issues                        what is still missing or doubtful, per modeler
@@ -85,7 +86,7 @@ DATASETS = {
     "history": ("data_production", "production_data",
                 ["well_name", "date", "oil", "water", "gas", "water_inj", "gas_inj", "bhp", "thp", "hours"]),
 }
-STUDY_TABLES = ["data_issues", "data_geo_spec", "data_contacts", "data_pvt_samples", "data_production",
+STUDY_TABLES = ["data_issues", "data_scal", "data_geo_spec", "data_contacts", "data_pvt_samples", "data_production",
                 "data_controls", "data_perforations", "data_log_curves", "data_surveys", "data_tops", "data_wells",
                 "data_sources", "data_deck_rows", "data_deck", "data_files"]
 
@@ -145,8 +146,8 @@ def _lab_report(path: Path):
 
 def survey_inbox(inbox: Path) -> dict:
     """Classify every file in the inbox (recursively). Nothing is written."""
-    found = {"lab_reports": [], "las": [], "tables": {}, "volve": [], "geo_spec": [], "decks": [], "files": [],
-             "other": []}
+    found = {"lab_reports": [], "scal": [], "las": [], "tables": {}, "volve": [], "geo_spec": [], "decks": [],
+             "files": [], "other": []}
     for p in sorted(x for x in Path(inbox).rglob("*") if x.is_file()):
         suf = p.suffix.lower()
         fmt = formats.format_of(p)
@@ -164,6 +165,10 @@ def survey_inbox(inbox: Path) -> dict:
             found["decks"].append(p)
         elif suf in (".xlsx", ".xlsm", ".xls", ".csv"):
             if suf != ".csv":
+                from ..res.scal_excel import is_scal_workbook
+                if is_scal_workbook(p):
+                    found["scal"].append(p)
+                    continue
                 lab = _lab_report(p)
                 if lab is not None:
                     found["lab_reports"].append((p, *lab))
@@ -252,7 +257,8 @@ class _Loader:
 
     def source(self, dataset: str, path: Path, label: str, kind: str, rows: int | None = None) -> int:
         """A dataset converted into tables, from a filed original (one per file and sheet)."""
-        category, fmt = {"pvt": ("pvt", "lab_report"), "geo_spec": ("specs", "json")}.get(dataset, ("tables", "table"))
+        category, fmt = {"pvt": ("pvt", "lab_report"), "geo_spec": ("specs", "json"),
+                         "scal": ("scal", "scal_workbook")}.get(dataset, ("tables", "table"))
         f = self.filed(path, category, kind, fmt)
         return self.con.execute("INSERT INTO data_sources(study_id, file_id, path, label, dataset, rows) "
                                 "VALUES (?,?,?,?,?,?)",
@@ -302,6 +308,7 @@ def load(con, name: str, *, write: bool = True, geo_spec: dict | None = None) ->
             con.execute(f"DELETE FROM {t} WHERE study_id = ?", (st["id"],))
         _load_fluid(L, f)
         _load_geo(L, f, geo_spec)
+        _load_res(L, f, st["spec"].get("unit_system"))
         _load_well(L, f)
         _load_files(L, f)
         from .checks import run_checks
@@ -433,6 +440,37 @@ def _load_geo(L: _Loader, f: dict, geo_spec: dict | None) -> None:
             L.issue("res", "required", "contacts", "contacts need datum_depth and datum_pressure")
     L.con.execute("INSERT INTO data_geo_spec(study_id, source_id, spec_json) VALUES (?,?,?)",
                   (L.sid, spec_src, json.dumps({k: v for k, v in spec.items() if k != "contacts"})))
+
+
+# ---------------------------------------------------------------- res (SCAL)
+def _load_res(L: _Loader, f: dict, unit_system: str | None) -> None:
+    """The SCAL workbook into data_scal. Without one, the res modeler takes the geo spec's 'scal' or Corey defaults."""
+    from ..res.scal_excel import read_scal
+    if not f["scal"]:
+        return
+    if len(f["scal"]) > 1:
+        L.issue("res", "decision", "scal", f"{len(f['scal'])} SCAL workbooks: "
+                f"{', '.join(L.rel(p) for p in f['scal'])}; using {L.rel(f['scal'][0])} - say which one if not")
+    p = f["scal"][0]
+    try:
+        types, unit, gaps = read_scal(p)
+    except Exception as e:  # noqa: BLE001
+        L.issue("res", "required", L.rel(p), f"{L.rel(p)}: could not read the SCAL workbook ({e})")
+        return
+    for g in gaps:
+        L.issue("res", "required" if g["severity"] == "required" else "warning", f"{L.rel(p)}: {g['item']}",
+                f"{L.rel(p)}: {g['message']}")
+    g = L.con.execute("SELECT spec_json FROM data_geo_spec WHERE study_id = ?", (L.sid,)).fetchone()
+    if g and "scal" in json.loads(g[0]):
+        L.issue("res", "warning", "scal", f"both geo.json and {L.rel(p)} give SCAL: the workbook is used")
+    if unit and unit_system and unit != unit_system:
+        L.issue("res", "required", L.rel(p), f"{L.rel(p)} is in {unit} (Pc units), the study is {unit_system}")
+    if any(g["severity"] == "required" for g in gaps) or not types:
+        L.filed(p, "scal", "scal", "scal_workbook")
+        return
+    src = L.source("scal", p, L.rel(p), "scal", len(types))
+    L.con.execute("INSERT INTO data_scal(study_id, source_id, unit_system, scal_json) VALUES (?,?,?,?)",
+                  (L.sid, src, unit, json.dumps(types)))
 
 
 def _catalog_las(L: _Loader, p: Path, meta: dict) -> None:

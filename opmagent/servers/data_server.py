@@ -289,14 +289,14 @@ class DataService:
                 "row_counts": n, "tables": t, "spoken_summary": f"{sum(n.values())} row(s) in {len(n)} table(s)."}
 
     def study_data(self, name: str) -> dict:
-        """What is loaded for a study: per dataset (pvt, tops, logs, geo_spec, contacts, wells, surveys,
+        """What is loaded for a study: per dataset (pvt, tops, logs, geo_spec, contacts, scal, wells, surveys,
         perforations, controls, history) its rows, wells and source files; the open data issues; who is ready."""
         from ..data import store
         return {"ok": True, **store.inventory(self.con, name)}
 
     def study_data_rows(self, name: str, dataset: str, well: str | None = None, limit: int = 200) -> dict:
         """Rows of one study dataset: wells, tops, surveys, perforations, controls, history, sources, issues,
-        log_curves or pvt_samples, optionally for one well (for logs use log_stats / log_samples)."""
+        log_curves, pvt_samples or scal (the SCAL workbook's rock types), optionally for one well (for logs use log_stats / log_samples)."""
         from ..data import store
         r = store.rows(self.con, name, dataset, well, min(int(limit), 2000))
         return {"ok": True, "rows": r, "spoken_summary": f"{len(r)} {dataset} row(s)."}

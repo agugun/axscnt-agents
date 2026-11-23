@@ -28,6 +28,9 @@ builder uses them together.
 - Several equilibration regions: `"contacts": [{"eqlnum": 1, ...}, {"eqlnum": 2, ...}]` with an EQLNUM region rule.
 - Region rules: `{"by": "zone", "values": {zone: n}}` (geo modeler grids), `{"by": "layer", "values": {"1-3": 1}}`,
   or `{"value": 1}`.
+- SCAL from a workbook: `opmagent res template scal.xlsx` gives the engineer the template (sheets Info, RockTypes,
+  SWOF, SGOF); `opmagent res build ... --scal scal.xlsx` uses its rock types in place of the spec's `scal`, and
+  says what it had to assume. A required gap (no unit system, Sw not increasing, a SATNUM with no rows) stops it.
 - Never guess contacts, the datum pressure or SCAL end points: ask. Corey defaults are listed in the assumptions
   when a parameter is left out; tell the user which ones.
 
@@ -40,8 +43,9 @@ builder uses them together.
 
 ## In a study
 The res task is ready when geo is done. `study_status(name)`, then `start_task(name)`. The contacts come from the
-data manager (`study_data(name)` → `contacts`); SCAL, rock and regions from the engineer's geo spec entries
-(`scal`, `rock`, `regions`) if given. `opmagent study build res <name>` builds on the study's geo version with the
+data manager (`study_data(name)` → `contacts`); SCAL from the study's SCAL workbook (`study_data(name)` →
+`scal`, loaded by the data manager), else the geo spec's `scal`; rock and regions from the engineer's geo spec
+entries (`rock`, `regions`) if given. No workbook and no `scal`: Corey defaults, which you list for the engineer. `opmagent study build res <name>` builds on the study's geo version with the
 study's model name. Missing contacts or a datum pressure? `raise_request(name, "data", "missing_data", "...")` and
 stop. When the version is approved (auto-approve on, or the engineer approved it), `complete_task(name,
 {"version_id": <id>})`.
