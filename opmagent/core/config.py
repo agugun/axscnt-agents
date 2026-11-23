@@ -46,6 +46,8 @@ class Config:
     hm_min_free_mb: int = 1024          # [hm] min_free_mb: memory left free when starting a variant
     hm_case_memory_mb: int | None = None  # [hm] case_memory_mb: memory one variant needs (default: from the grid)
     hm_case_timeout_s: int = 3600       # [hm] case_timeout_s: a variant run longer than this is stopped and failed
+    hm_min_free_disk_mb: int = 2048     # [hm] min_free_disk_mb: disk left free where the variants write
+    hm_keep_grid_output: bool = False   # [hm] keep_grid_output: keep each variant's restart and grid files
 
     @property
     def inbox(self) -> Path:
@@ -101,6 +103,8 @@ def load(path: str | os.PathLike | None = None) -> Config:
         hm_min_free_mb=int(hm.get("min_free_mb", 1024)),
         hm_case_memory_mb=int(hm["case_memory_mb"]) if hm.get("case_memory_mb") else None,
         hm_case_timeout_s=int(hm.get("case_timeout_s", 3600)),
+        hm_min_free_disk_mb=int(hm.get("min_free_disk_mb", 2048)),
+        hm_keep_grid_output=bool(hm.get("keep_grid_output", False)),
     )
     _check_release_flow(cfg)
     return cfg

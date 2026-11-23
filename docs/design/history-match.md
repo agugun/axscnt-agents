@@ -325,6 +325,24 @@ imported deck) is refused by `hm_setup` until its data has a model home.
   `hm_confirm` finds the run equal to the proposal (largest difference below 1e-6), and the match task completes.
   A rebuild with nw 2.5 is reported as `differs`.
 
+**Phase 4 as built** (Norne: [testing/history-match-norne.md](../testing/history-match-norne.md),
+`testing/hm_norne.py`):
+
+- Norne imported, rebuilt and run (292 s). The misfit is against `deck_history` (30 wells, 1997-12 to 2006-11):
+  **47.4** over 7,899 monthly values, with σ for a field (rates 10 % with a floor of 20 sm3/d, BHP 10 bar).
+  Simulated water arrives early in 16 producers.
+- The sensitivity covered PERMX by formation (layer groups: Norne's grid has no geo zones) and MULTFLT on four
+  faults: 17 of 17 cases. Most improving: opening fault E_01 (-6.6), lowering Tofte (-6.1), raising Ile (-3.7),
+  lowering Tilje (-1.5). No effect: Garn and fault BC.
+- Norne has no analytical aquifer and no Corey SCAL (both SATNUMs tabulated), so those parameters don't apply.
+- Changes it brought:
+  1. Controls are judged month by month (`misfit.honoured_mask`), since Norne's wells switch between ORAT and
+     RESV.
+  2. A parameter is refused when the deck's passthrough text rewrites its keyword (`params.rewritten`). Norne
+     makes PERMZ from PERMX with COPY and MULTIPLY.
+  3. Variants keep only their summary (`[hm] keep_grid_output`). A case starts only with `[hm] min_free_disk_mb`
+     free disk, and a failed case is tried again by the next job.
+
 - Gate: `tests/test_hm.py` runs hello and gets misfit 0 against itself, both as a `run` truth and through
   `data_production` built from its own monthly volumes. The `deck_history` path has no end-to-end test yet (no small
   deck with WCONHIST); Norne in phase 4 is its test.

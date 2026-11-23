@@ -216,6 +216,29 @@ def memory_ok(cfg, need_mb: float) -> bool:
     return f is None or f >= need_mb + cfg.hm_min_free_mb
 
 
+GRID_OUTPUT = (".UNRST", ".INIT", ".EGRID", ".DBG", ".RFT")
+
+
+def disk_ok(cfg, folder: Path) -> bool:
+    """Free space where the cases write, at least [hm] min_free_disk_mb (a full disk fails every running case)."""
+    import shutil
+    p = Path(folder)
+    while not p.exists():
+        p = p.parent
+    return shutil.disk_usage(p).free / 2 ** 20 >= cfg.hm_min_free_disk_mb
+
+
+def drop_grid_output(run_dir: Path) -> int:
+    """A scored variant needs only its summary: delete the restart, INIT and grid files (Norne: ~300 MB a case).
+    Returns the bytes freed."""
+    freed = 0
+    for f in Path(run_dir).iterdir():
+        if f.suffix.upper() in GRID_OUTPUT and f.is_file() and not f.is_symlink():
+            freed += f.stat().st_size
+            f.unlink()
+    return freed
+
+
 def ordinary_runs(con) -> int:
     """Ordinary (run agent) runs in progress: they come first, so each takes a variant slot."""
     return con.execute("SELECT COUNT(*) FROM runs WHERE status = 'running'").fetchone()[0]
@@ -277,6 +300,7 @@ class Runner:
         self.con = db.connect(cfg.database)
         self.log = log or (lambda *_: None)
         self.t0 = time.time()
+        self.retried: set[int] = set()
 
     def _progress(self, **p):
         self.con.execute("UPDATE hm_jobs SET progress_json = ? WHERE id = ?", (json.dumps(p), self.job_id))
@@ -289,9 +313,16 @@ class Runner:
         """Run the queued cases among these until each is done or failed (or a stop request). Returns the rows."""
         from ..sim import runner
         con, cfg = self.con, self.cfg
-        for c in cases:      # a case left 'running' by a server that stopped: run it again
+        for c in cases:
+            # a case left 'running' by a server that stopped: run it again
             if c["status"] == "running" and not _alive(c["pid"]):
                 con.execute("UPDATE hm_cases SET status = 'queued', pid = NULL WHERE id = ?", (c["id"],))
+            # a failed case is tried again once by each new job (a full disk, a killed server ...): a case that
+            # fails for the model's sake fails again and stays failed
+            if c["status"] == "failed" and c["id"] not in self.retried and c.get("job_id") != self.job_id:
+                self.retried.add(c["id"])
+                con.execute("UPDATE hm_cases SET status = 'queued', error = NULL, job_id = ? WHERE id = ?",
+                            (self.job_id, c["id"]))
         folder = hm_dir(cfg.file_store, h)
         need = case_memory_mb(cfg, con, h)
         running: dict[int, tuple] = {}
@@ -321,9 +352,12 @@ class Runner:
                              None if ok else _tail(cdir / "run.log"), cid))
                 if ok:
                     score(con, h, cid, str(smspec), obs)
+                if not cfg.hm_keep_grid_output:
+                    drop_grid_output(cdir)
                 self.log(f"case {cid}: {'done' if ok else 'failed'} in {wall:.0f} s")
             capacity = max(0, slots(cfg) - ordinary_runs(con))
-            while queued and not stop and len(running) < capacity and memory_ok(cfg, need * (len(running) + 1)):
+            while queued and not stop and len(running) < capacity and memory_ok(cfg, need * (len(running) + 1)) \
+                    and disk_ok(cfg, folder):
                 c = queued.pop(0)
                 cdir = folder / f"case_{c['case_no']}"
                 try:
@@ -529,8 +563,7 @@ def residual_keys(obs, objective: dict, hon: dict):
     if objective.get("exclude_wells"):
         a = a[~a["well"].isin(objective["exclude_wells"])]
     if not objective.get("include_honoured"):
-        keep = [q not in hon.get(w, {}).get("honoured", []) for w, q in zip(a["well"], a["quantity"])]
-        a = a[keep]
+        a = a[~mf.honoured_mask(a, hon)]
     a = a.dropna(subset=["value"]).sort_values(["well", "quantity", "month"]).reset_index(drop=True)
     s = objective["sigma"]
     a["sigma"] = np.maximum(a["quantity"].map(lambda q: s.get(q, {}).get("rel", 0.1)) * a["value"].abs(),

@@ -93,8 +93,11 @@ def observation_inventory(con, *, study: str | None = None, run_id: int | None =
             qs[q] = {"points": int(len(gq)), "non_zero": nz, "first": gq["month"].min(), "last": gq["month"].max(),
                      "zero_day_months": int((gq["days"] <= 0).sum())}
         h = hon.get(w, {"controls": [], "honoured": []})
+        mask = mf.honoured_mask(g, hon)
+        months_hon = {q: int(mask[(g["quantity"] == q).to_numpy()].sum()) for q in qs}
         out.append({"well": w, "quantities": qs, "controls": h["controls"], "honoured": h["honoured"],
-                    "matched": sorted(q for q in qs if q not in h["honoured"])})
+                    "honoured_months": {q: n for q, n in months_hon.items() if n},
+                    "matched": sorted(q for q in qs if months_hon[q] < qs[q]["points"])})
     first, last = (obs["month"].min(), obs["month"].max()) if not obs.empty else (None, None)
     return {"source": src, "period": [first, last], "wells": out, "points": int(len(obs))}
 
