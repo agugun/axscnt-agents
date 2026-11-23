@@ -121,6 +121,8 @@ class SimService:
     def run_simulation(self, deck_id: int, note: str | None = None) -> dict:
         """Start a validated deck in OPM Flow in the background. Returns a run id."""
         d = self._deck(deck_id)
+        from ..deck.init_review import require
+        require(self.con, deck_id)     # the initialisation gate: a person accepted its initial state
         running = self.con.execute("SELECT COUNT(*) AS n FROM runs WHERE status='running'").fetchone()["n"]
         if running >= self.cfg.max_parallel:
             raise ToolError(INVALID_INPUT, f"{running} runs already active (max_parallel {self.cfg.max_parallel}); try later")

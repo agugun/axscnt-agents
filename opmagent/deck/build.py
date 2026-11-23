@@ -138,6 +138,17 @@ def build_deck(spec: dict, cfg, *, origin: str | None = None) -> dict:
         from .init_view import after_build
         iv = after_build(cfg, svc.con, deck["id"])
         say += iv.pop("init_view_say")
+        from .init_review import auto_accept, state
+        auto = auto_accept(cfg, svc.con, deck["id"], iv.get("init_view")) if "init_view" in iv else None
+        iv["init_review"] = state(svc.con, deck["id"])
+        if iv["init_review"] == "accepted":
+            say += " Initial state accepted automatically (every check passes): it can run."
+        elif "init_view" in iv:
+            say += (f" Before the full run, a person accepts the initial state: opmagent review accept-init "
+                    f"{deck['id']}" + (f" (not automatic: {auto['reason']})" if auto and not auto["auto"] else "")
+                    + ".")
+        else:
+            say += " The initial state couldn't be made, so the deck can't run until it initialises."
     return {"ok": ok, "deck_id": deck["id"], "path": str(deck_path), "status": status, "validation_log": log, **iv,
             "cross_check_warnings": probs if imported else [],
             "models": {k: f"{m['header']['model_name']} v{m['header']['version']}" for k, m in

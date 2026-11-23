@@ -440,8 +440,16 @@ class DataService:
         OPM Flow without wells for one 1e-4 day step. Returns the fluids in place (field and per FIPNUM region), the
         initial pressure range and checks against the res model's contacts (water below the OWC, no free gas below
         the GOC). Open it with `opmagent results open --deck <deck_id> --init`. Never changes the deck."""
+        from ..deck.init_review import latest
         from ..deck.init_view import build_init_view
-        return build_init_view(self.cfg, self.con, deck_id)
+        v = build_init_view(self.cfg, self.con, deck_id)
+        r = latest(self.con, deck_id)
+        v["init_review"] = ({"decision": r["decision"], "reviewer": r["reviewer"], "at": r["decided_at"],
+                             "comment": r["comment"]} if r else {"decision": "waiting"})
+        if not r:
+            v["spoken_summary"] += (" Its initial state is waiting for a person to accept it before the full run "
+                                    f"(opmagent review accept-init {deck_id}).")
+        return v
 
     # ------------------------------------------------------------ reviewer (human only)
     def list_pending_reviews(self) -> dict:
@@ -472,6 +480,18 @@ class DataService:
         review.add_comment(self.con, kind, version_id, comment, self._reviewer(), "rejected", "change")
         return {"ok": True, "header": h, "spoken_summary": f"Rejected {kind} {h['model_name']} version {h['version']}."}
 
+    def accept_init_view(self, deck_id: int, comment: str | None = None) -> dict:
+        """Accept a deck's initial state (its initialisation view) so its full run can start. Look at it first:
+        init_view(deck_id), or `opmagent results open --deck <id> --init`."""
+        from ..deck.init_review import accept
+        return accept(self.cfg, self.con, deck_id, self._reviewer(), comment)
+
+    def reject_init_view(self, deck_id: int, comment: str, to: str = "res") -> dict:
+        """Reject a deck's initial state with a comment; it is also filed as review feedback on the deck's model
+        named by `to` (fluid, geo, res or well; default res: contacts, SCAL, regions)."""
+        from ..deck.init_review import reject
+        return reject(self.cfg, self.con, deck_id, self._reviewer(), comment, to)
+
     def _reviewer(self) -> str:
         return os.environ.get("OPMAGENT_REVIEWER") or getpass.getuser()
 
@@ -497,10 +517,12 @@ TOOLS = {
     "data": COMMON + ["register_file", "load_study_data", "load_deck_data", "load_study_input"] + DATA_READ + STUDY,
     "view": COMMON + ["list_decks", "get_deck", "static_view", "init_view"] + STUDY,
     "reviewer": COMMON + ["list_pending_reviews", "get_qc_report", "approve", "reject", "add_review_comment",
+                          "accept_init_view", "reject_init_view",
                           "get_review_feedback", "list_decks", "get_deck", "study_status", "list_studies",
                           "study_data", "study_data_rows", "log_stats", "static_view", "init_view"],
 }
 WRITE_TOOLS = (set(WRITER) | {"create_deck", "add_deck_file", "set_deck_status", "approve", "reject", "init_study",
+                               "accept_init_view", "reject_init_view",
                                "load_study_data", "load_deck_data", "load_study_input", "answer_review_feedback", "add_review_comment"}
                | set(STUDY) | set(QC_NOTEBOOKS)) - {"run_validator", "study_status", "list_studies"}
 

@@ -52,8 +52,9 @@ tools/create_workspace.sh ~/opm-agents   # the agents' workspace, checked with o
   (config, database, file store, `.mcp.json`, `.claude/agents` and skills, `CLAUDE.md`, `reviewer-mcp.json`), then
   `opmagent doctor` and `opmagent hello`. `AUTO_APPROVE=1` (models that pass their validator are approved; hello then
   runs to the end), `APPROVE_SERVERS=1` (pre-approve the MCP servers for Claude Code), `RESINSIGHT=<launcher>` (if it
-  isn't on PATH or in `/opt/ResInsight`), `SKIP_HELLO=1`. Without auto-approve, hello stops for your review:
-  `opmagent review approve-hello` (you type `approve`), then `opmagent hello` again. On a new workspace the doctor warns
+  isn't on PATH or in `/opt/ResInsight`), `SKIP_HELLO=1`. Without auto-approve, hello stops twice for you: after the
+  four models (`opmagent review approve-hello`, you type `approve`, then `opmagent hello` again), and after the deck
+  initialises (`opmagent review approve-hello` again accepts its initial state, then `opmagent hello` runs it). On a new workspace the doctor warns
   "server not approved" for every agent until Claude Code approves the servers at its first start (it asks once per
   server), or `APPROVE_SERVERS=1` approves them up front. Answered "don't use", the servers are recorded as
   disabled in `.claude/settings.local.json`, the doctor fails every agent, and `/mcp` no longer lists them: close
@@ -399,9 +400,18 @@ agent's `job_status` returns the same progress. The full log is `run.log` in the
 initial state (PRESSURE, SWAT, SGAS, RS/RV) for ResInsight, and the build reports the fluids in place for the field
 and per FIPNUM region, the average pressure, and checks against the res model's contacts. It is not a run.
 
+**The initialisation gate.** A deck runs in full only after a person accepts its initial state, typed at a
+terminal like an approval (`init_reviews`, append-only; agents can't). A rejection's comment goes to the model you
+name as review feedback. With `[study] auto_approve` it is accepted automatically, but only when every check
+passes or is n/a. `run_simulation`, `opmagent run` and `opmagent study run` refuse a deck that isn't accepted, and
+a study's deck task completes only after it. Import round trips (`opmagent import verify`) are exempt: they compare
+a rebuilt deck with its source. `opmagent review list` and `opmagent doctor` show decks waiting.
+
 ```bash
 opmagent deck init 2 [--open]                # (re)make it; prints in-place totals, checks, region totals
 opmagent results open --deck 2 --init        # open it in ResInsight
+opmagent review accept-init 2                # shows the initial state, then you type 'accept'
+opmagent review reject-init 2 --to res --comment "oil below the OWC in EQLNUM 2"
 ```
 
 ## Agents' condition (doctor)

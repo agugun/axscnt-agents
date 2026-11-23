@@ -93,8 +93,10 @@ if [ -z "${SKIP_HELLO:-}" ]; then
     ok "hello ran to the end (auto-approve)"
   else
     cat <<EOF
-     The four hello models wait for your review. Approve them yourself (you type 'approve'), then run hello again:
-       cd $WS && opmagent review approve-hello && opmagent hello
+     The four hello models wait for your review. Approve them yourself (you type 'approve'), then run hello again;
+     it stops once more at the deck's initial state, which you accept the same way before hello runs it:
+       cd $WS && opmagent review approve-hello && opmagent hello      # models approved; the deck initialises
+       opmagent review approve-hello && opmagent hello                 # initial state accepted; the deck runs
 EOF
   fi
 fi

@@ -3,8 +3,9 @@
 Idempotent stages, each run continues where the last one stopped:
   1. build HELLO_FLUID / HELLO_GEO / HELLO_RES / HELLO_WELLS (demo) and submit them for review
   2. wait for a human: `opmagent review approve-hello`
-  3. build the HELLO deck from the approved demo models, parse it with OPM
-  4. run it and report field oil rate and pressure
+  3. build the HELLO deck from the approved demo models, parse it with OPM, initialise it (time zero)
+  4. wait for a human to accept the initial state: `opmagent review approve-hello` again
+  5. run it and report field oil rate and pressure
 """
 from __future__ import annotations
 
@@ -90,16 +91,36 @@ def hello(cfg, *, log=print) -> dict:
                                   "or run: opmagent review approve-hello. Then run hello again."}
     stage("your approval", True, "all four demo models approved")
 
-    try:
-        d = build_deck({"name": "HELLO", "requirement": "hello demo: 5-year waterflood prediction",
-                        "fluid": cur["fluid"]["version_id"], "geo": cur["geo"]["version_id"],
-                        "res": cur["res"]["version_id"], "well": cur["well"]["version_id"], "years": 5, "report": "monthly"}, cfg, origin="demo")
-    except Exception as e:  # noqa: BLE001
-        stage("deck build", False, str(e))
-        return {"ok": False, "stages": stages, "spoken_summary": f"Hello failed building the deck: {e}"}
-    stage("deck build + OPM parse", d["ok"], d["path"] if d["ok"] else d["validation_log"][-300:])
-    if not d["ok"]:
-        return {"ok": False, "stages": stages, "deck": d, "spoken_summary": d["spoken_summary"]}
+    from ..deck.init_review import state as init_state
+    ids = {k: cur[k]["version_id"] for k in ("fluid", "geo", "res", "well")}
+    old = con.execute("SELECT id FROM decks WHERE name = 'HELLO' AND status = 'validated' AND fluid_version_id = ? "
+                      "AND geo_version_id = ? AND res_version_id = ? AND well_version_id = ? ORDER BY id DESC LIMIT 1",
+                      (ids["fluid"], ids["geo"], ids["res"], ids["well"])).fetchone()
+    if old:   # the deck from these four versions exists: don't build another (it would need a new acceptance)
+        from ..core import models as _m
+        dk = _m.get_deck(con, old[0])
+        d = {"ok": True, "deck_id": old[0], "path": next(f["path"] for f in dk["files"] if f["role"] == "DATA"),
+             "init_review": init_state(con, old[0]), "spoken_summary": f"Deck HELLO {old[0]} (built before)."}
+        stage("deck build + OPM parse", True, f"{d['path']} (built before from these four versions)")
+    else:
+        try:
+            d = build_deck({"name": "HELLO", "requirement": "hello demo: 5-year waterflood prediction", **ids,
+                            "years": 5, "report": "monthly"}, cfg, origin="demo")
+        except Exception as e:  # noqa: BLE001
+            stage("deck build", False, str(e))
+            return {"ok": False, "stages": stages, "spoken_summary": f"Hello failed building the deck: {e}"}
+        stage("deck build + OPM parse", d["ok"], d["path"] if d["ok"] else d["validation_log"][-300:])
+        if not d["ok"]:
+            return {"ok": False, "stages": stages, "deck": d, "spoken_summary": d["spoken_summary"]}
+    if d.get("init_review") != "accepted":
+        rejected = d.get("init_review") == "rejected"
+        stage("initial state", False if rejected else None,
+              "rejected: rebuild the hello models" if rejected else
+              f"waiting for you to accept it (opmagent results open --deck {d['deck_id']} --init to look)")
+        return {"ok": not rejected, "stage": "waiting_for_init_acceptance", "stages": stages, "deck": d,
+                "spoken_summary": f"The hello deck is built and initialises. Look at its initial state, then say "
+                                  f"accept hello, or run: opmagent review approve-hello. Then run hello again."}
+    stage("initial state", True, "accepted")
 
     r = run_deck(d["path"], cfg.file_store / "runs" / f"HELLO_deck{d['deck_id']}", cfg.flow_bin)
     if not r["ok"]:

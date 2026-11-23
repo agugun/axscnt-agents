@@ -42,7 +42,10 @@ A's input (`load_study_input`)". The rest is as above. This is scenario 2 of `te
 1. `opmagent study status <name> --json`. The `next` list is the ready tasks and their agents.
 2. Hand each ready task to its agent (Agent tool, the agent's name), with: the study name, "do your study task
    (`<task>`); follow your skill", and anything the engineer said that matters for it. Agents can't ask the
-   engineer themselves: before the run task (it starts Flow) read back the deck and models and get their "yes",
+   engineer themselves. After the deck build, the deck's initial state waits for the engineer: give them its fluids
+   in place and checks, and ask them to accept it (`opmagent review accept-init <deck_id>`, after looking with
+   `opmagent results open --deck <deck_id> --init`); the deck task completes after that. Before the run task (it
+   starts Flow) read back the deck and models and get their "yes",
    then say "the engineer confirmed" in the hand-off; answer agents' questions the same way. Run independent tasks
    together: fluid and geo in parallel; then res (it waits for geo: it is defined on the geo grid) and well (after
    geo if possible, so it uses the grid) in parallel.
