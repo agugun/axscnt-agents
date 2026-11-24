@@ -239,3 +239,22 @@ def test_old_database_gets_the_match_task(tmp_path):
     con.execute("INSERT INTO study_tasks(study_id, task) VALUES (1, 'match')")
     st = studies.status(con, "OLD")      # only the tasks it has
     assert [t["task"] for t in st["tasks"]] == ["data", "match"]
+
+
+def test_proposal_runs_even_when_the_deck_has_a_run(cfg, hello_run, tmp_path):
+    """The base case takes the deck's own run; a proposal's case (other values) must run as a variant, not take
+    the base run's results (found while capturing the user guide: misfit 1.2 = the base, not ~0)."""
+    cfg.hm_parallel = 4
+    con = db.connect(cfg.database)
+    deck = con.execute("SELECT deck_id FROM runs WHERE id = ?", (hello_run,)).fetchone()[0]
+    truth = _truth_run(cfg, con, deck, tmp_path)
+    s = jobs.setup(con, "WITHRUN", deck, PARAMS, source="run", truth_run_id=truth)
+    assert s["base_run_id"] == hello_run
+    h = jobs.get_hm(con, s["hm_id"])
+    jobs.Runner(cfg, jobs.create_job(con, h, "base")).run()
+    jobs.Runner(cfg, jobs.create_job(con, h, "base", {"values": TRUTH, "method": "proposal"})).run()
+    p = proposals.propose(cfg, con, "WITHRUN")
+    assert p["values"] == TRUTH and p["misfit"] < 1e-6 < p["base_misfit"], p
+    rows = {r["label"]: r for r in con.execute("SELECT label, run_id, misfit FROM hm_cases WHERE hm_id = ?",
+                                                (h["id"],))}
+    assert rows["base"]["run_id"] == hello_run and rows["proposal"]["run_id"] is None

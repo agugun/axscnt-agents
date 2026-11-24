@@ -9,6 +9,11 @@ to the res model, and SQLite can't change the existing tables in place. `opmagen
 so; move it aside and run `opmagent init-db` (or `opmagent setup <workspace>`), then rebuild the studies.
 No approvals are carried over. Design: [docs/design/res-model.md](docs/design/res-model.md).
 
+- **History matching fixes found while capturing the user guide**: a proposal's case no longer takes the base
+  run's results when the deck has a run of its own (`hm propose` reported the base misfit, not the proposal's);
+  job progress lines give the case number `hm cases` shows, not the row id; the HM report's well plots say in how
+  many months a quantity was given to Flow (a well that switches between ORAT and RESV), not "honoured" for all;
+  `hm targets` lists the layers when the grid has no zones (an imported deck).
 - **History matching, phase 4 (Norne)**: `testing/hm_norne.py` and `testing/history-match-norne.md` import,
   rebuild and run Norne, give its misfit against its own 1997-2006 history, and run a sensitivity on PERMX per
   formation and four faults. Controls are now judged month by month (wells switch between ORAT and RESV). A

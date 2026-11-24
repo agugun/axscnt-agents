@@ -92,9 +92,19 @@ def fig_well(data: dict, well: str):
           and (o[o["quantity"] == q]["value"].abs().sum() > 0 or q == "bhp")]
     if not qs:
         return None
-    hon = {w["well"]: w.get("honoured", []) for w in data.get("wells", [])}.get(well, [])
+    terms = {t["quantity"]: t for t in data.get("terms") or [] if t["well"] == well}
+
+    def note(q):
+        """Is q given to Flow (honoured)? In every month, or in some: a well can switch control (ORAT, RESV)."""
+        t = terms.get(q)
+        if not t:
+            return ""
+        if not t.get("in_total", True):
+            return " (honoured: given to Flow)"
+        n = t.get("honoured_months") or 0
+        return f" (given to Flow in {n} month(s), matched in {t['n']})" if n else ""
     fig = make_subplots(rows=len(qs), cols=1, shared_xaxes=True, vertical_spacing=0.06,
-                        subplot_titles=[LABEL[q] + (" (honoured: given to Flow)" if q in hon else "") for q in qs])
+                        subplot_titles=[LABEL[q] + note(q) for q in qs])
     for i, q in enumerate(qs, start=1):
         oq = o[o["quantity"] == q].sort_values("month")
         sq = s[s["quantity"] == q].sort_values("month")

@@ -354,7 +354,8 @@ class Runner:
                     score(con, h, cid, str(smspec), obs)
                 if not cfg.hm_keep_grid_output:
                     drop_grid_output(cdir)
-                self.log(f"case {cid}: {'done' if ok else 'failed'} in {wall:.0f} s")
+                no = con.execute("SELECT case_no FROM hm_cases WHERE id = ?", (cid,)).fetchone()[0]
+                self.log(f"case {no}: {'done' if ok else 'failed'} in {wall:.0f} s")   # the number hm cases shows
             capacity = max(0, slots(cfg) - ordinary_runs(con))
             while queued and not stop and len(running) < capacity and memory_ok(cfg, need * (len(running) + 1)) \
                     and disk_ok(cfg, folder):
@@ -398,7 +399,10 @@ class Runner:
                        eta_s=round(eta) if eta else None, memory_mb_per_case=round(need), **(extra or {}))
 
     def _use_base_run(self, h, base: dict, obs):
-        """The base case is the approved deck's own run when there is one."""
+        """The base case is the approved deck's own run when there is one. Only the case at the start values is:
+        any other case (a proposal's, a search's) is a variant and runs."""
+        if base["values_key"] != pm.values_key(start_values(h)):
+            return
         if base["status"] != "done" and h["base_run_id"]:
             r = service.run_row(self.con, h["base_run_id"])
             self.con.execute("UPDATE hm_cases SET status = 'done', run_id = ?, run_dir = ?, smspec_path = ?, "

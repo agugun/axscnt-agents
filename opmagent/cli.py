@@ -1005,6 +1005,12 @@ def _cmd_hm2(args, cfg, con):
         print(f"grid {' x '.join(map(str, t['grid']))}")
         for z in t["zones"]:
             print(f"  zone {z['zone']:<12} layers {z['layers']:<7} PERMX {z['mean_permx']}")
+        if not t["zones"]:     # an imported grid has no zones: parameters target layer ranges
+            fmt = lambda v: "-" if v is None else f"{v:.4g}"  # noqa: E731
+            print("  no zones: target layer ranges. Mean per layer:")
+            for lay in t["layers"]:
+                print(f"  layer {lay['layer']:<3} PERMX {fmt(lay['mean_permx']):>8}  PERMZ {fmt(lay['mean_permz']):>8}  "
+                      f"PORO {fmt(lay['mean_poro']):>6}")
         for f in t["faults"]:
             print(f"  fault {f['fault']:<12} MULTFLT {f['multflt']:g}")
         for st in t["satnums"]:
