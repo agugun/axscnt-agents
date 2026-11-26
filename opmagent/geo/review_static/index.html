@@ -78,6 +78,9 @@ code { background: var(--chip); padding: 1px 4px; border-radius: 4px; font-size:
 #diffinfo { display: none; margin-top: 10px; font-size: 12px; }
 #diffinfo table { border-collapse: collapse; width: 100%; margin: 4px 0 10px; }
 #diffinfo td, #diffinfo th { text-align: left; padding: 2px 8px 2px 0; border-bottom: 1px solid var(--line); }
+.knobs { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.knobs input[type=number] { width: 80px; }
+.knobs .changed { outline: 2px solid var(--warn); }
 #diffinfo td.num { text-align: right; font-variant-numeric: tabular-nums; }
 #diffinfo h3 { font-size: 12px; margin: 8px 0 2px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
 </style>
@@ -125,7 +128,7 @@ code { background: var(--chip); padding: 1px 4px; border-radius: 4px; font-size:
 <script>
 "use strict";
 const TABS = [["surfaces", "Surfaces"], ["layer_map", "Layer map"], ["section", "Section"], ["well", "Well"],
-              ["at_wells", "At wells"], ["distributions", "Distributions"], ["poroperm", "Poro-perm"], ["findings", "QC findings"], ["diff_map", "Diff"]];
+              ["at_wells", "At wells"], ["distributions", "Distributions"], ["poroperm", "Poro-perm"], ["findings", "QC findings"], ["diff_map", "Diff"], ["whatif", "What-if"]];
 let token = "";
 try { token = new URLSearchParams(location.hash.slice(1)).get("token") || sessionStorage.getItem("geoReviewToken") || ""; } catch (e) {}
 try { if (token) sessionStorage.setItem("geoReviewToken", token); } catch (e) {}
@@ -136,7 +139,7 @@ addEventListener("hashchange", () => {
 });
 const qs = new URLSearchParams(location.search);
 const S = { vid: +qs.get("version_id"), meta: null, tab: "layer_map", spec: {}, anchor: {}, viewForComment: null, comments: [],
-            proposals: {}, session: {}, replyOpen: new Set(), drafts: {}, lastSig: "", diff: null };
+            proposals: {}, session: {}, replyOpen: new Set(), drafts: {}, lastSig: "", diff: null, preview: null, knobs: null };
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
 
@@ -160,8 +163,8 @@ async function loadMeta() {
   const c = { pass: 0, warn: 0, fail: 0 };
   m.findings.forEach(f => { if (f.status in c) c[f.status]++; });
   const ov = c.fail ? "fail" : c.warn ? "warn" : "pass";
-  $("qc").className = `badge ${ov}`;
-  $("qc").textContent = `QC ${ov}: ${c.fail} fail, ${c.warn} warn`;
+  $("qc").className = m.findings.length ? `badge ${ov}` : "badge";
+  $("qc").textContent = m.findings.length ? `QC ${ov}: ${c.fail} fail, ${c.warn} warn` : "no QC findings (model view)";
   $("version").innerHTML = m.versions.map(v => `<option value="${v.version_id}" ${v.version_id === S.vid ? "selected" : ""}>v${v.version} (${esc(v.status)})</option>`).join("");
   $("qcreport").href = `/qc?version_id=${S.vid}`;
   $("cmds").innerHTML = m.review_commands ? "Approve or reject in your terminal: " + m.review_commands.map(c => `<code>${esc(c)}</code>`).join(" ") : "";
@@ -169,11 +172,13 @@ async function loadMeta() {
 }
 
 function tabs() {
-  $("tabs").innerHTML = TABS.map(([k, n]) => `<button data-t="${k}" class="${k === S.tab ? "on" : ""}">${n}</button>`).join("");
+  const ok = new Set([...(S.meta.views || []), "findings", ...(S.meta.can_preview ? ["whatif"] : [])]);
+  $("tabs").innerHTML = TABS.filter(([k]) => ok.has(k)).map(([k, n]) => `<button data-t="${k}" class="${k === S.tab ? "on" : ""}">${n}</button>`).join("");
   $("tabs").querySelectorAll("button").forEach(b => b.onclick = () => openTab(b.dataset.t));
 }
 
 function controls() {
+  if (S.tab === "whatif") return whatifControls();
   const m = S.meta, s = S.spec, el = $("controls");
   const opt = (arr, v) => arr.map(a => `<option ${String(a) === String(v) ? "selected" : ""}>${esc(a)}</option>`).join("");
   let h = "";
@@ -216,7 +221,15 @@ function openTab(t, spec) {
   $("plot").style.display = isF ? "none" : "block";
   $("diffinfo").style.display = t === "diff_map" ? "block" : "none";
   if (isF) { $("controls").innerHTML = ""; findings(); return; }
-  if (t === "diff_map" && !spec) { loadDiff(S.spec.fig === "diff_map" ? S.spec.base_version_id : null); return; }
+  if (t === "diff_map" && !spec) { loadDiff(S.spec.fig === "diff_map" && !S.spec.preview_id ? S.spec.base_version_id : null); return; }
+  $("diffinfo").style.display = (t === "diff_map" || t === "whatif") ? "block" : "none";
+  if (t === "whatif") {
+    if (spec) S.spec = { ...spec };
+    else if (!S.spec.preview_id) S.spec = {};
+    whatifControls(); renderPreviewInfo();
+    if (S.spec.preview_id) draw(); else { Plotly.purge("plot"); $("plot").innerHTML = `<p class="msg">Change the settings above and press Preview: a scratch build on this version's data, compared with v${S.meta.version}. Nothing is saved as a version.</p>`; }
+    return;
+  }
   if (spec) S.spec = { ...spec };
   else if (S.spec.fig !== t) {
     const kw = S.spec.kw || (S.meta.keywords.includes("PORO") ? "PORO" : S.meta.keywords[0]);
@@ -230,7 +243,8 @@ function openTab(t, spec) {
 
 async function draw() {
   controls();
-  if (S.spec.fig === "diff_map" && (!S.diff || !S.diff.base_version_id || !S.diff.maps)) {
+  if (S.tab === "whatif" && !S.spec.preview_id) return;
+  if (S.spec.fig === "diff_map" && !S.spec.preview_id && (!S.diff || !S.diff.base_version_id || !S.diff.maps)) {
     Plotly.purge("plot");
     $("plot").innerHTML = `<p class="msg">${!S.diff || !S.diff.base_version_id ? "No earlier version to compare with." : "The versions have different areal grids: compare their maps side by side."}</p>`;
     return;
@@ -246,6 +260,7 @@ async function draw() {
       Object.assign(fig.layout, { paper_bgcolor: "#1c2027", plot_bgcolor: "#1c2027", font: { color: "#e5e9f0" } });
     }
     fig.layout.autosize = true;
+    $("plot").querySelectorAll(":scope > p.msg").forEach(e => e.remove());     // a placeholder from before
     await Plotly.react("plot", fig.data, fig.layout, { responsive: true, displaylogo: false });
     $("plot").removeAllListeners?.("plotly_click");
     $("plot").on("plotly_click", onClick);
@@ -313,6 +328,123 @@ function findings() {
   });
 }
 
+// ---------------------------------------------------------------- what-if (previews and the engineer's own changes)
+function knobDefaults() {
+  const sp = S.meta.spec || {}, pp = sp.petro || {};
+  return { vsh_cutoff: pp.vsh_cutoff ?? 0.5, kv_kh: pp.kv_kh ?? 0.1, pp_a: (pp.poro_perm || [0.01, 30])[0],
+           pp_b: (pp.poro_perm || [0.01, 30])[1], min_thickness: sp.min_thickness ?? 0.5, layers: [...(sp.layers || [])] };
+}
+
+function knobPatch(k) {
+  const d = knobDefaults(), petro = {}, patch = {};
+  if (+k.vsh_cutoff !== d.vsh_cutoff) petro.vsh_cutoff = +k.vsh_cutoff;
+  if (+k.kv_kh !== d.kv_kh) petro.kv_kh = +k.kv_kh;
+  if (+k.pp_a !== d.pp_a || +k.pp_b !== d.pp_b) petro.poro_perm = [+k.pp_a, +k.pp_b];
+  if (Object.keys(petro).length) patch.petro = petro;
+  if (+k.min_thickness !== d.min_thickness) patch.min_thickness = +k.min_thickness;
+  if (k.layers.some((n, i) => +n !== d.layers[i])) patch.layers = k.layers.map(Number);
+  return patch;
+}
+
+function whatifControls() {
+  const el = $("controls"), d = knobDefaults();
+  S.knobs = S.knobs || knobDefaults();
+  const k = S.knobs, zones = S.meta.zones || [];
+  const num = (id, v, step, ref) => `<input type="number" id="k_${id}" step="${step}" value="${v}" class="${+v !== ref ? "changed" : ""}">`;
+  let h = `<div class="knobs">
+    <label>Vsh cut-off ${num("vsh_cutoff", k.vsh_cutoff, 0.05, d.vsh_cutoff)}</label>
+    <label>kv/kh ${num("kv_kh", k.kv_kh, 0.01, d.kv_kh)}</label>
+    <label title="k = a·10^(b·φ), used only where no permeability is logged">poro-perm a ${num("pp_a", k.pp_a, 0.001, d.pp_a)} b ${num("pp_b", k.pp_b, 1, d.pp_b)}</label>
+    <label>min thickness ${num("min_thickness", k.min_thickness, 0.1, d.min_thickness)}</label>
+    ${zones.map((z, i) => `<label>${esc(z.zone)} layers ${num("layers_" + i, k.layers[i], 1, d.layers[i])}</label>`).join("")}
+    <button class="primary" id="runpreview">Preview</button> <button class="link" id="resetknobs">reset</button>
+    <span class="msg" id="pmsg"></span></div>`;
+  const p = S.preview;
+  if (p) {
+    const s = S.spec;
+    h += `<div class="knobs" style="margin-top:6px">
+      <label>Show <select id="pshow"><option value="diff" ${s.fig === "diff_map" ? "selected" : ""}>difference from v${p.base_version}</option>
+        <option value="map" ${s.fig === "layer_map" ? "selected" : ""}>preview map</option></select></label>
+      <label>Property <select id="pkw">${S.meta.keywords.map(x => `<option ${x === s.kw ? "selected" : ""}>${x}</option>`).join("")}</select></label>
+      ${s.fig === "layer_map" || p.maps === "layer" ? `<label>Layer <input type="number" id="player" min="1" max="${+p.grid.split(" x ")[2]}" value="${s.layer || 1}"></label>` :
+        `<label>Zone <select id="pzone">${zones.map(z => `<option ${z.zone === s.zone ? "selected" : ""}>${esc(z.zone)}</option>`).join("")}</select></label>`}
+    </div>`;
+  }
+  el.innerHTML = h;
+  el.querySelectorAll(".knobs input[id^=k_]").forEach(inp => inp.onchange = () => {
+    const key = inp.id.slice(2);
+    if (key.startsWith("layers_")) k.layers[+key.slice(7)] = +inp.value; else k[key] = +inp.value;
+    whatifControls();
+  });
+  $("runpreview").onclick = runPreview;
+  $("resetknobs").onclick = () => { S.knobs = knobDefaults(); whatifControls(); };
+  const on = (id, fn) => { const x = $(id); if (x) x.onchange = fn; };
+  on("pshow", e => { previewSpec(e.target.value); draw(); });
+  on("pkw", e => { S.spec.kw = e.target.value; delete S.spec.log; draw(); });
+  on("player", e => { S.spec.layer = +e.target.value; delete S.spec.zone; draw(); });
+  on("pzone", e => { S.spec.zone = e.target.value; delete S.spec.layer; draw(); });
+}
+
+function previewSpec(show) {
+  const p = S.preview, kw = S.spec.kw || "PORO";
+  if (show === "map") S.spec = { fig: "layer_map", preview_id: p.preview_id, kw, layer: S.spec.layer || 1 };
+  else if (p.maps) {
+    S.spec = { fig: "diff_map", preview_id: p.preview_id, base_version_id: p.base_version_id, kw };
+    if (p.maps === "layer") S.spec.layer = S.spec.layer || 1; else S.spec.zone = (S.meta.zones[0] || {}).zone;
+  } else S.spec = { fig: "layer_map", preview_id: p.preview_id, kw, layer: 1 };
+}
+
+async function runPreview() {
+  const patch = knobPatch(S.knobs);
+  if (!Object.keys(patch).length) { $("pmsg").textContent = "Change a setting first."; return; }
+  $("pmsg").textContent = "Building the preview…";
+  $("runpreview").disabled = true;
+  try {
+    const r = await api("/api/previews", { base_version_id: S.vid, spec_patch: patch });
+    showPreview(r.preview);
+  } catch (e) { $("pmsg").className = "msg err"; $("pmsg").textContent = e.message; $("runpreview").disabled = false; }
+}
+
+function showPreview(p) {
+  S.preview = p;
+  previewSpec("diff");
+  S.tab = "whatif";
+  tabs();
+  $("findings").style.display = "none"; $("plot").style.display = "block"; $("diffinfo").style.display = "block";
+  renderPreviewInfo();
+  draw();
+}
+
+function renderPreviewInfo() {
+  const p = S.preview, el = $("diffinfo");
+  if (S.tab !== "whatif") return;
+  if (!p) { el.innerHTML = ""; return; }
+  const fmt = v => v === null || v === undefined ? "–" : typeof v === "number" ? (Math.abs(v) >= 1e5 ? v.toExponential(3) : +v.toPrecision(5)) : esc(v);
+  const ch = v => v === null || v === undefined ? "" : v === 0 ? "0" : (v > 0 ? "+" : "") + fmt(v);
+  const f = p.findings, moved = p.numbers.filter(n => n.change !== null && n.change !== 0);
+  const open = S.comments.filter(c => c.status === "open");
+  el.innerHTML = `<h3>Preview #${p.preview_id} on v${p.base_version} · ${esc(p.grid)} · built in ${p.elapsed_s} s · not a version</h3>
+    <table>${p.changes.map(c => `<tr><td>${esc(c.key)}</td><td>${esc(JSON.stringify(c.old))}</td><td>→ <b>${esc(JSON.stringify(c.new))}</b></td></tr>`).join("")}</table>
+    <h3>QC findings</h3><div>fixed ${f.fixed.length} · still ${f.still.length} · new ${f.new.length}</div>
+    ${[["fixed", "pass"], ["new", "fail"]].map(([k, cls]) => f[k].map(x => `<div><span class="badge ${cls}">${k}</span> ${esc(x.finding)} <span class="msg">${esc(x.detail || "")}</span></div>`).join("")).join("")}
+    <h3>What changes (${moved.length} of ${p.numbers.length} numbers)</h3>
+    <table><tr><th></th><th>v${p.base_version}</th><th>preview</th><th>change</th></tr>
+    ${(moved.length ? moved : p.numbers).map(n => `<tr><td>${esc(n.key)}</td><td class="num">${fmt(n.old)}</td><td class="num">${fmt(n.new)}</td><td class="num">${ch(n.change)}</td></tr>`).join("")}</table>
+    <h3>Ask the geo agent to build this</h3>
+    <div class="msg">It becomes your proposal, accepted at once; the agent builds the new version from it and answers the comments.</div>
+    ${open.length ? `<div>${open.map(c => `<label class="msg" style="display:block"><input type="checkbox" data-fb="${c.id}"> #${c.id} [${esc(c.label)}] ${esc(c.comment.slice(0, 80))}</label>`).join("")}</div>` : ""}
+    <textarea id="prationale" placeholder="Why (with no comment ticked, this becomes a new comment)"></textarea>
+    <div class="row"><button class="primary" id="prequest">Ask the agent to build this</button><span class="msg" id="preqmsg"></span></div>`;
+  $("prequest").onclick = async () => {
+    const ids = [...el.querySelectorAll("input[data-fb]:checked")].map(x => +x.dataset.fb);
+    try {
+      const r = await api("/api/requests", { preview_id: p.preview_id, feedback_ids: ids, rationale: $("prationale").value });
+      $("preqmsg").textContent = `Proposal #${r.proposal.id} accepted: the geo agent builds it next.`;
+      await loadComments(true);
+    } catch (e) { $("preqmsg").className = "msg err"; $("preqmsg").textContent = e.message; }
+  };
+}
+
 async function loadComments(force) {
   const r = await api(`/api/comments?version_id=${S.vid}`);
   const sig = JSON.stringify([r.comments, r.proposals]);
@@ -355,8 +487,11 @@ function proposalCard(p) {
   if (p.status === "proposed")
     acts = `<div class="acts"><button class="primary" data-acc="${p.id}">Accept</button>
       <input placeholder="why not (to reject)" id="rej${p.id}"><button data-rej="${p.id}">Reject</button></div>`;
-  else acts = `<div class="msg">${esc(p.status)}${p.reviewer ? " by " + esc(p.reviewer) : ""}${p.built_version ? ` · built v${p.built_version}` : ""}${p.comment ? ": " + esc(p.comment) : ""}</div>`;
-  return `<div class="prop"><b>Proposal #${p.id}</b> on v${p.base_version}<table>${rows}</table>
+  else acts = `<div class="msg">${p.status === "built" ? "accepted" : esc(p.status)}${p.reviewer ? " by " + esc(p.reviewer) : ""}${p.built_version ? ` · built v${p.built_version}` : ""}${p.comment ? ": " + esc(p.comment) : ""}</div>`;
+  const pv = p.preview;
+  const pvh = pv ? `<div class="msg">Previewed (#${pv.preview_id}, ${esc(pv.grid)}): findings fixed ${pv.findings.fixed.length}, new ${pv.findings.new.length}
+    · <button class="link" data-pv="${p.id}">show the preview</button></div>` : "";
+  return `<div class="prop"><b>Proposal #${p.id}</b> by ${p.author_role === "reviewer" ? "you" : "the geo agent"} on v${p.base_version}<table>${rows}</table>${pvh}
     ${p.expected ? `<div class="msg">Expected: ${esc(typeof p.expected === "string" ? p.expected : JSON.stringify(p.expected))}</div>` : ""}
     ${p.built_version_id ? `<button class="link" data-diff="${p.built_version_id}" data-base="${p.base_version_id}">diff v${p.built_version} vs v${p.base_version}</button>` : ""}${acts}</div>`;
 }
@@ -409,6 +544,11 @@ function renderComments() {
     if (m) openViewSpec(m.views[n]);
   });
   q("button[data-acc]").forEach(b => b.onclick = () => decide(+b.dataset.acc, "accept"));
+  q("button[data-pv]").forEach(b => b.onclick = () => {
+    const p = S.proposals[b.dataset.pv];
+    if (p.base_version_id !== S.vid) { location.search = `?version_id=${p.base_version_id}`; return; }
+    showPreview(p.preview);
+  });
   q("button[data-rej]").forEach(b => b.onclick = () => decide(+b.dataset.rej, "reject", $(`rej${b.dataset.rej}`).value));
 }
 
@@ -430,8 +570,19 @@ async function decide(pid, action, comment) {
   catch (e) { alert(e.message); }
 }
 
-function openViewSpec(v) {
+async function openViewSpec(v) {
   if (!v) return;
+  if (v.preview_id) {
+    try {
+      const r = await api(`/api/preview?id=${v.preview_id}`);
+      if (r.removed) { alert(`Preview #${v.preview_id}'s grid was removed (its summary is kept).`); return; }
+      if (r.preview.base_version_id !== S.vid) { location.search = `?version_id=${r.preview.base_version_id}&view=${encodeURIComponent(JSON.stringify(v))}`; return; }
+      showPreview(r.preview);
+      S.spec = { ...v };
+      draw();
+    } catch (e) { alert(e.message); }
+    return;
+  }
   if (v.version_id && v.version_id !== S.vid) {
     location.search = `?version_id=${v.version_id}&view=${encodeURIComponent(JSON.stringify(v))}`;
     return;

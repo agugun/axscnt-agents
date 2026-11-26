@@ -51,3 +51,7 @@ min_free_mb = 1024
 case_timeout_s = 3600
 min_free_disk_mb = 2048
 # keep_grid_output = true   # keep each variant's restart/INIT/EGRID (Norne: ~300 MB a case); default: summary only
+
+[geo_review]
+# Geo review workbench (`opmagent geo review`): what-if previews are scratch builds in <file_store>/previews/
+preview_keep_days = 7

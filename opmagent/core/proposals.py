@@ -190,6 +190,14 @@ def mark_built(con, proposal_id: int, version_id: int) -> dict:
     return get(con, proposal_id)
 
 
+def request(con, kind: str, base_version_id: int, feedback_ids: list[int], spec_patch: dict, rationale: str,
+            reviewer: str, preview: dict | None = None) -> dict:
+    """The engineer's own change (decision 4): a proposal by the reviewer, accepted at once, for the modeler to build."""
+    p = propose(con, kind, base_version_id, feedback_ids, spec_patch, rationale, reviewer, author_role="reviewer",
+                preview=preview)
+    return decide(con, p["id"], "accept", reviewer)
+
+
 def accepted_for_build(con, proposal_id: int, kind: str = "geo") -> dict:
     """The proposal a build is about to apply: it must be accepted and of this kind."""
     p = get(con, proposal_id)

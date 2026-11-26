@@ -118,6 +118,31 @@ def loop(url: str, v1: int) -> None:
                                             "zone": "TopRes"}})
     say(st == 200, "the NTG difference map draws (zone means)")
 
+    # what-if: the agent previews a change; the engineer previews their own and asks the agent to build it
+    pa = agent("preview_geo_change", base_version_id=v2, spec_patch={"layers": [4, 3]})
+    say(pa.get("ok") and pa["preview"]["grid"].endswith("x 7"), f"the agent's preview: {pa.get('spoken_summary')}")
+    st, r = eng.call("/api/previews", {"base_version_id": v2, "spec_patch": {"petro": {"kv_kh": 0.05}}})
+    pv = r.get("preview", {})
+    moved = {n["key"]: n for n in pv.get("numbers", []) if n["change"]}
+    say(st == 200 and set(moved) == {"mean_PERMZ"}, f"the engineer's preview (kv/kh 0.05, {pv.get('elapsed_s')} s) "
+        f"changes only {sorted(moved)}")
+    st, r = eng.call("/api/requests", {"preview_id": pv.get("preview_id"), "rationale": "kv/kh 0.05 from the core data"})
+    rp = r.get("proposal", {})
+    say(st == 200 and rp.get("status") == "accepted" and rp.get("author_role") == "reviewer",
+        f"the engineer's own change is proposal #{rp.get('id')}, accepted at once")
+    w = agent("await_review_activity", version_id=v2, timeout_s=10)
+    say(w.get("event") == "waiting_on_you" and any(t["last"]["kind"] == "accepted" for t in w["threads"]),
+        "the agent hears it")
+    out = subprocess.run(["opmagent", "geo", "build", "--from-proposal", str(rp.get("id"))], capture_output=True, text=True)
+    b3 = json.loads(out.stdout) if out.stdout.strip().startswith("{") else {}
+    st, d3 = eng.call(f"/api/diff?version_id={b3.get('version_id')}")
+    m3 = {n["key"]: n for n in d3.get("diff", {}).get("numbers", []) if n["change"]}
+    say(b3.get("ok") and set(m3) == {"mean_PERMZ"} and m3["mean_PERMZ"]["new"] == moved["mean_PERMZ"]["new"],
+        f"v{b3.get('version')} built from it is what the preview showed (mean PERMZ {m3.get('mean_PERMZ', {}).get('new')})")
+    for fid3 in rp.get("feedback_ids", []):
+        agent("answer_review_feedback", feedback_id=fid3, response=f"v{b3.get('version')}: kv/kh 0.05",
+              status="addressed", addressed_in_version_id=b3.get("version_id"))
+
     # the agent answers; the engineer ends the session
     a = agent("answer_review_feedback", feedback_id=fid, response=f"v{b['version']}: Vsh 0.4, TopRes in 4 layers",
               status="addressed", addressed_in_version_id=v2)

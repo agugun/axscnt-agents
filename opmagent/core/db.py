@@ -347,6 +347,14 @@ MIGRATIONS = [
         started_at TEXT NOT NULL DEFAULT (datetime('now')), last_seen_at TEXT NOT NULL DEFAULT (datetime('now')),
         ended_at TEXT, ended_by TEXT);
         CREATE UNIQUE INDEX review_sessions_one_open ON review_sessions(model_kind, model_name) WHERE ended_at IS NULL;"""),
+    # What-if previews (geo review, phase 3): a scratch build of a spec patch on a version, never a version. Its
+    # grid lives in <file_store>/previews/ until [geo_review] preview_keep_days; the summary stays.
+    ("review_previews", """CREATE TABLE review_previews (
+        id INTEGER PRIMARY KEY, model_kind TEXT NOT NULL CHECK (model_kind IN ('geo')), model_name TEXT NOT NULL,
+        base_version_id INTEGER NOT NULL, spec_patch_json TEXT NOT NULL,
+        author_role TEXT NOT NULL CHECK (author_role IN ('reviewer','modeler')), author TEXT NOT NULL,
+        folder TEXT NOT NULL, summary_json TEXT, elapsed_s REAL, removed_at TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')));"""),
 ]
 
 
