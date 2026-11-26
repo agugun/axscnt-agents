@@ -592,6 +592,31 @@ def cmd_geo_view(args):
     raise SystemExit(0 if r.get("ok") else 2)
 
 
+def cmd_geo_review(args):
+    """The geo review workbench: a local web app for the engineer (model panel, anchored comments)."""
+    import webbrowser
+    from .core.errors import ToolError
+    from .geo.review_app import ReviewApp, make_server, url
+    cfg = cfgmod.load(args.config)
+    try:
+        app = ReviewApp(cfg, args.version_id)
+    except ToolError as e:
+        raise SystemExit(e.message) from None
+    srv = make_server(app, args.port)
+    link = url(srv, app)
+    print(f"Geo review workbench for geo version {args.version_id}:\n  {link}\n"
+          "The link holds this session's review token: comments are written as you "
+          f"({app.reviewer._reviewer()}). Keep it to yourself. Ctrl-C stops it.", flush=True)
+    if not args.no_open:
+        webbrowser.open(link)
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        srv.server_close()
+
+
 def cmd_res_build(args):
     import json
     from .core.errors import ToolError
@@ -1392,6 +1417,11 @@ def main(argv=None):
     x.add_argument("--open", action="store_true", help="open it in ResInsight")
     x.add_argument("--json", action="store_true")
     x.set_defaults(fn=cmd_geo_view)
+    x = gm.add_parser("review", help="review workbench: a local web app to look at a geo version and pin comments on it")
+    x.add_argument("version_id", type=int)
+    x.add_argument("--port", type=int, default=0, help="port on 127.0.0.1 (default: any free one)")
+    x.add_argument("--no-open", action="store_true", help="print the link only (e.g. for the Claude desktop browser pane)")
+    x.set_defaults(fn=cmd_geo_review)
     x = gm.add_parser("qc", help="re-run the standard QC notebook for a draft version (prints the new report's file id)")
     x.add_argument("version_id", type=int)
     x.set_defaults(fn=cmd_model_notebook, nb_kind="geo")

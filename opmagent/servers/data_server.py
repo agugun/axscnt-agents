@@ -373,6 +373,37 @@ class DataService:
                           kind=MODELER_KIND.get(self.profile))
         return {"ok": True, "feedback": f, "spoken_summary": f"Comment {feedback_id} {status}."}
 
+    def review_context(self, feedback_id: int) -> dict:
+        """A geo review comment with what it points at: its anchor (well, cell [i, j, k] 1-based, layer, zone,
+        surface or QC finding), the model's values there, and what the view it was made on shows (the engineer
+        made it on that picture in the review workbench). Read this before answering an anchored comment."""
+        from ..geo import review_views as rvw
+        f = review.get(self.con, feedback_id)
+        if f["model_kind"] != "geo" or (self.profile in MODELER_KIND and MODELER_KIND[self.profile] != "geo"):
+            raise ToolError(FORBIDDEN, f"comment {feedback_id} is on a {f['model_kind']} model; review_context is for geo")
+        d = rvw.load_version(self.cfg, self.con, f["version_id"])
+        out = {"ok": True, "feedback": f, "at_anchor": rvw.describe(f["anchor"], d) if "text" not in f["anchor"] else None}
+        if f["view"]:
+            out["view"] = rvw.summarize(rvw.check_spec(f["view"], d), d)
+        out["spoken_summary"] = (f"Comment {feedback_id} on geo {f['model_name']} v{f['version']} [{f['label']}]: "
+                                 f"{f['comment']}")
+        return out
+
+    def render_review_view(self, spec: dict, anchor: dict | None = None) -> dict:
+        """What a review workbench view shows, in numbers (you can't see the picture): spec as in the geo review
+        workbench, e.g. {"fig": "layer_map", "version_id": 42, "kw": "PORO", "layer": 5}; figs surfaces,
+        layer_map (kw, layer, log), section (kw, along x|y, well or cell [i, j]), well (well), at_wells,
+        distributions, poroperm. anchor: also the model's values at that anchor."""
+        from ..geo import review_views as rvw
+        if not isinstance(spec, dict) or "version_id" not in spec:
+            raise ToolError(INVALID_INPUT, "spec needs fig and version_id")
+        d = rvw.load_version(self.cfg, self.con, int(spec["version_id"]))
+        out = {"ok": True, **rvw.summarize(rvw.check_spec(spec, d), d)}
+        if anchor:
+            out["at_anchor"] = rvw.describe(rvw.check_anchor(anchor), d)
+        out["spoken_summary"] = out["shows"]
+        return out
+
     def add_review_comment(self, kind: str, version_id: int, comment: str, item: str | None = None,
                            severity: str = "change") -> dict:
         """Reviewer: comment on a model version (severity change, question or note; item: what it is about,
@@ -509,9 +540,10 @@ DATA_READ = ["study_data", "study_data_rows", "log_stats", "log_samples", "fluid
 FEEDBACK = ["get_review_feedback", "answer_review_feedback"]
 STUDY = ["study_status", "list_studies", "start_task", "complete_task", "fail_task", "retry_task", "raise_request",
          "resolve_request"]
+GEO_REVIEW = ["review_context", "render_review_view"]   # the geo review workbench (read only)
 QC_NOTEBOOKS = ["run_qc_notebook", "create_investigation_notebook", "run_investigation_notebook"]
 TOOLS = {
-    "fluid": COMMON + WRITER + STUDY + DATA_READ + FEEDBACK + QC_NOTEBOOKS, "geo": COMMON + WRITER + STUDY + DATA_READ + FEEDBACK + QC_NOTEBOOKS + ["static_view"],
+    "fluid": COMMON + WRITER + STUDY + DATA_READ + FEEDBACK + QC_NOTEBOOKS, "geo": COMMON + WRITER + STUDY + DATA_READ + FEEDBACK + QC_NOTEBOOKS + ["static_view"] + GEO_REVIEW,
     "well": COMMON + WRITER + STUDY + DATA_READ + FEEDBACK + QC_NOTEBOOKS,
     "res": COMMON + WRITER + STUDY + DATA_READ + FEEDBACK + QC_NOTEBOOKS,
     "import": COMMON + WRITER,
@@ -526,7 +558,7 @@ TOOLS = {
     "reviewer": COMMON + ["list_pending_reviews", "get_qc_report", "approve", "reject", "add_review_comment",
                           "accept_init_view", "reject_init_view",
                           "get_review_feedback", "list_decks", "get_deck", "study_status", "list_studies",
-                          "study_data", "study_data_rows", "log_stats", "static_view", "init_view"],
+                          "study_data", "study_data_rows", "log_stats", "static_view", "init_view"] + GEO_REVIEW,
 }
 WRITE_TOOLS = (set(WRITER) | {"create_deck", "add_deck_file", "set_deck_status", "approve", "reject", "init_study",
                                "accept_init_view", "reject_init_view",

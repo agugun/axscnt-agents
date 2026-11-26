@@ -1,6 +1,6 @@
 # Geo review workbench
 
-Status: proposal, for review before implementation. Branch: `docs/geo-review`.
+Status: phase 1 built (see **Phase 1 as built** under Plan); phases 2 to 4 proposed. Branch: `feat/geo-review-workbench`.
 
 ## Summary
 
@@ -235,6 +235,40 @@ written to `review_feedback` with the token. `get_review_feedback` returns ancho
 Gate: on hello, a comment pinned on a W1 cell in layer 2 arrives at the agent with the anchor and the spec.
 `render_review_view` returns that cell's PORO, the W1 upscaled value and the layer's range. Browser check with
 the built-in browser.
+
+**Phase 1 as built** (`opmagent/geo/review_views.py`, `opmagent/geo/review_app.py`, `review_static/index.html`):
+
+- `opmagent geo review <version> [--port N] [--no-open]` serves the workbench on 127.0.0.1 and prints the link with
+  the session token in the fragment. Standard library `http.server`, one request at a time, no new dependency
+  (decision 2). plotly.js comes from the installed plotly package (`plotly>=5.22` for label shadows), so there's no CDN.
+  A tab that opens a restarted server's link takes the new token from the fragment.
+- **Item format:** `review_feedback.item` holds `{"anchor": {...}, "view": {...}}`. Cells are **1-based** `[i, j, k]`,
+  as in the deck. `core/review.get` parses every item into `anchor`, `view` and a short `label` (free text reads as
+  `{"text": ...}`). So `get_review_feedback`, `opmagent review feedback` and `study_status` all show the label.
+- **Views:** `surfaces`, `layer_map` (any layer, not only the QC notebook's three), `section` (through a well, or
+  through a cell: `fig_section(..., cell=(i, j))` is new in `geo_qc_lib`), `well`, `at_wells`, `distributions`,
+  `poroperm`. Every trace carries `meta.role`, and `locate()` turns a click into an anchor on the server. Comment
+  pins are drawn on layer maps and sections, and a click on a pin opens its comment.
+- **Workbench:** a cell, well, top, well-track depth, at-wells point or QC finding becomes the anchor. The panel
+  shows the model's values there (every keyword, zone, depths, nearest well, the well's upscaled vs model values
+  per layer, top misfits) and offers the next view (section along x / y through the cell, the layer map, the well
+  track). "show view" on a comment reopens the view it was made on. The approve / reject commands are shown; the
+  QC report is served at `/qc`.
+- **Agent tools** (geo and reviewer profiles, read-only): `review_context(feedback_id)` gives the comment, the
+  values at its anchor and a summary of its view. `render_review_view(spec, anchor)` gives the same for any view the
+  agent wants to look at.
+- **Safety:** writes need the token (`X-Review-Token`) and a Host of 127.0.0.1 / localhost on the server's port.
+  Comments go through the reviewer profile's `add_review_comment` (audited). A finding anchor must be one of the
+  version's. `opmagent setup` puts `Bash(opmagent geo review:*)` under `ask` for the agents.
+- **Not yet:** versions from a deck have no QC payload, so the workbench refuses them for now (phase 2: read the
+  model without logs). Picking a version switches the page; there is no side-by-side diff (phase 2).
+- **Gate:** `tests/test_geo_review.py` runs on the logs-based test field (4 wells, 10 x 10 x 5) rather than hello,
+  whose geo model has no logs to anchor to. A click on a layer map in B's column anchors
+  `{"cell": [9, 3, 2], "kw": "PORO", "well": "B"}`. The comment posted there (token required) reaches the geo
+  agent with that anchor and view, and `review_context` returns the cell's PORO, B's upscaled vs model values per
+  layer and the layer map's values at every well. Bad specs (unknown figure, keyword or argument, layer out of
+  range) are refused. The real server answers on 127.0.0.1 and refuses a foreign Host. Browser check: every tab,
+  cell / top / finding anchors, posting, pins and "show view", in the Claude desktop browser pane, light and dark.
 
 **Phase 2: threads, proposals, version diff, review session.**
 `review_messages`, `geo_proposals`, `review_sessions`, the new tools, `--from-proposal`, the diff tab, and

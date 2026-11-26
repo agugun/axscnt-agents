@@ -7,6 +7,7 @@ version that deals with them, and answers each one: addressed (with the version 
 """
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 
 from . import models
@@ -35,6 +36,8 @@ def get(con, feedback_id: int) -> dict:
         raise ToolError(NOT_FOUND, f"no review comment {feedback_id}")
     d = dict(r)
     d["version"] = models.header(con, d["model_kind"], d["version_id"])["version"]
+    d["anchor"], d["view"] = parse_item(d["item"])
+    d["label"] = label(d["anchor"])
     return d
 
 
@@ -77,4 +80,51 @@ def summary(items: list[dict]) -> str:
         return "No review comments."
     return f"{len(items)} comment(s): " + "; ".join(
         f"#{f['id']} {f['model_kind']} {f['model_name']} v{f['version']}"
-        + (f" [{f['item']}]" if f["item"] else "") + f" {f['comment']}" for f in items[:5])
+        + (f" [{f['label']}]" if f["item"] else "") + f" {f['comment']}" for f in items[:5])
+
+
+# ---------------------------------------------------------------- anchored items (the geo review workbench)
+# item holds either free text (older comments, `opmagent review comment --item`) or JSON {"anchor": ..., "view": ...}:
+# what the comment is about and the view it was made on (opmagent/geo/review_views.py).
+def label(anchor: dict | None) -> str:
+    """A short label for the anchor: 'W2', 'cell 4,7,5 PORO', 'TopRes at W3', 'layer 5'."""
+    a = anchor or {}
+    if not a:
+        return "general"
+    if "text" in a:
+        return str(a["text"])
+    bits = []
+    if "finding" in a:
+        bits.append(f"finding {a['finding']}")
+    if "surface" in a:
+        bits.append(a["surface"])
+    if "cell" in a:
+        bits.append("cell " + ",".join(map(str, a["cell"])))
+    if "column" in a:
+        bits.append("column " + ",".join(map(str, a["column"])))
+    if "well" in a:
+        bits.append(("at " if "surface" in a else "") + str(a["well"]))
+    if "layer" in a:
+        bits.append(f"layer {a['layer']}")
+    if "zone" in a:
+        bits.append(f"zone {a['zone']}")
+    if "kw" in a:
+        bits.append(a["kw"])
+    return " ".join(bits)
+
+
+def make_item(anchor: dict | None, view: dict | None) -> str:
+    return json.dumps({"anchor": anchor or {}, **({"view": view} if view else {})}, separators=(",", ":"))
+
+
+def parse_item(item: str | None) -> tuple[dict, dict | None]:
+    """(anchor, view) from review_feedback.item; free text (or nothing) reads as {"text": ...} (or {})."""
+    if not item:
+        return {}, None
+    try:
+        d = json.loads(item)
+    except ValueError:
+        d = None
+    if isinstance(d, dict) and "anchor" in d:
+        return d.get("anchor") or {}, d.get("view")
+    return {"text": item}, None
