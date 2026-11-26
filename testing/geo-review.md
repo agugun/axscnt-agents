@@ -1,7 +1,7 @@
-# Geo review loop
+# Review loops (geo, res, well)
 
-This scenario checks that the engineer and the geo agent can go back and forth on a geo model through the review
-workbench, from the first comment to a new version that answers it:
+This scenario checks that the engineer and the geo, res and well agents can go back and forth on their models through
+the review workbench, from the first comment to a new version that answers it. The geo loop:
 
 ```
 geo build v1 ──► opmagent geo review v1 (workbench)
@@ -13,17 +13,28 @@ geo build v1 ──► opmagent geo review v1 (workbench)
    engineer: ends the session
 ```
 
+Then a res model on geo v1 (`opmagent res review`) and a well model in it (`opmagent well review`):
+
+```
+res:  engineer: a question on EQLNUM 1's OWC ──► res agent: previews OWC 2060 (no Flow run), proposes it
+      engineer: accepts                      ──► res agent: `res build --from-proposal` (v2), answers
+      engineer: previews SATNUM 2 nw 3 -> 2.5 over the base curves, asks for it ──► res agent: builds v3
+well: engineer: a question on P1's perforation ──► well agent: answers from the perforation's cells
+      (no previews: a well change is a data edit)
+```
+
 Design: [docs/design/geo-review.md](../docs/design/geo-review.md).
 
 ## Run it (scripted)
 
 ```bash
-testing/geo_review_loop.sh            # about 25 s; a new temporary workspace
-KEEP=1 testing/geo_review_loop.sh     # then leave the workbench running and open the printed link
+testing/geo_review_loop.sh            # about 50 s; a new temporary workspace
+KEEP=1 testing/geo_review_loop.sh     # then leave the three workbenches running and open the printed links
 ```
 
-The engineer's side goes through the running workbench over HTTP with its token, as the browser does. The agent's
-side goes through the geo profile's tools, and the build through `opmagent geo build --from-proposal`.
+The engineer's side goes through the running workbenches over HTTP with their tokens, as the browser does. The agents'
+side goes through the geo, res and well profiles' tools, and the builds through `opmagent geo build
+--from-proposal` and `opmagent res build --from-proposal`.
 
 ## Run it by hand (with the agent)
 
@@ -59,5 +70,11 @@ side goes through the geo profile's tools, and the build through `opmagent geo b
 | 9 | Previews | the agent's preview of 4 + 3 layers is 10 x 10 x 7; the engineer's kv/kh 0.05 preview changes only mean PERMZ |
 | 10 | The engineer's own change | it is a proposal by the reviewer, accepted at once; the waiting agent hears it; v3 built from it changes only mean PERMZ, to the preview's value |
 | 11 | The loop closes | the agent answers the thread with v2; End session releases the waiting agent (`session_ended`) |
+| 12 | The res workbench | it serves res v1 (two SATNUMs); a click on EQLNUM 1's OWC anchors `EQLNUM 1 OWC` with its oil pore volume |
+| 13 | The res agent | it hears the comment, previews OWC 2060 with no Flow run (oil pore volume moves to water, the same amount), and proposes it with the preview |
+| 14 | Res builds | `res build --from-proposal` refuses before the accept and builds v2 after it; the diff holds only the OWC and the two pore volumes, and the comment it answers |
+| 15 | The engineer's res change | the preview reads `scal.2.nw`; its curves are drawn over the base's dotted ones; requested and built as v3 ("by the engineer") |
+| 16 | The well workbench | it serves the well model with no previews or proposals; a click on P1's perforation gives its cells in the geo grid |
+| 17 | The well agent | it hears the comment, answers from the perforation's layers; a preview is refused; ending each session releases its agent |
 
 The scripted run prints PASS or FAIL per check and "All checks passed." at the end.

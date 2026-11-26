@@ -200,3 +200,16 @@ def test_proposal_kinds(cfg):
                     "spec_patch_json, rationale, author) VALUES ('well', 'W', 1, '[]', '{}', 'x', 'a')")
     assert proposals.spec_diff({"scal": [{"satnum": 2, "nw": 3}]}, {"scal": [{"satnum": 2, "nw": 2.5}]}) == \
         [{"key": "scal.2.nw", "old": 3, "new": 2.5}]
+
+
+def test_res_build_from_proposal_on_the_command_line(cfg, tmp_path, capsys):
+    """`opmagent res build --from-proposal` needs no --name (it once did, so it couldn't run from the CLI)."""
+    from opmagent.cli import main
+    toml = tmp_path / "opmagent.toml"
+    toml.write_text(f'[paths]\ndatabase = "{cfg.database}"\nfile_store = "{cfg.file_store}"\n')
+    with pytest.raises(SystemExit) as e:
+        main(["--config", str(toml), "res", "build", "--from-proposal", "999"])
+    assert e.value.code == 2 and "no proposal 999" in capsys.readouterr().out
+    with pytest.raises(SystemExit) as e:
+        main(["--config", str(toml), "res", "build", "--name", "X"])
+    assert "needs --spec, --name and --geo-version" in str(e.value.code)
