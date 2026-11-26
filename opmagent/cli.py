@@ -1561,7 +1561,7 @@ def main(argv=None):
     x.add_argument("--geo-version", dest="geo_version", type=int, help="the geo version id it is defined on")
     x.add_argument("--from-proposal", dest="from_proposal", type=int,
                    help="build from an accepted review proposal: the base version's spec with its patch")
-    x.add_argument("--name", required=True)
+    x.add_argument("--name")
     x.add_argument("--description")
     x.add_argument("--scal", help="a SCAL workbook (opmagent res template): its rock types replace the spec's scal")
     x.set_defaults(fn=cmd_res_build)
