@@ -300,6 +300,53 @@ MIGRATIONS = [
         DROP TABLE study_requests;
         ALTER TABLE study_requests_v2 RENAME TO study_requests;
         CREATE INDEX study_tasks_match ON study_tasks(study_id, task);"""),
+    # Geo review workbench, phase 2 (docs/design/geo-review.md): the conversation under a review comment, the
+    # modelers' proposals the engineer accepts before a build, and the agent's live review sessions.
+    # A thread is the review_feedback row (the engineer's first word) and its messages, append-only.
+    ("review_messages", """CREATE TABLE review_messages (
+        id INTEGER PRIMARY KEY, feedback_id INTEGER NOT NULL REFERENCES review_feedback(id),
+        author_role TEXT NOT NULL CHECK (author_role IN ('reviewer','modeler')),
+        author TEXT NOT NULL CHECK (length(trim(author)) > 0), body TEXT NOT NULL CHECK (length(trim(body)) > 0),
+        kind TEXT NOT NULL DEFAULT 'message'
+          CHECK (kind IN ('message','answer','reopen','proposal','accepted','rejected','built')),
+        views_json TEXT, notebook_file_id INTEGER REFERENCES files(id), proposal_id INTEGER,
+        version_id INTEGER, created_at TEXT NOT NULL DEFAULT (datetime('now')));
+        CREATE INDEX idx_review_messages ON review_messages(feedback_id, id);
+        CREATE TRIGGER review_messages_fixed BEFORE UPDATE ON review_messages
+        BEGIN SELECT RAISE(ABORT, 'a review message cannot be changed; add a new one'); END;
+        CREATE TRIGGER review_messages_kept BEFORE DELETE ON review_messages
+        BEGIN SELECT RAISE(ABORT, 'a review message cannot be deleted'); END;"""),
+    # A modeler's proposed change to a version's spec (a JSON merge patch), for the threads it answers. The
+    # engineer accepts or rejects it; the build from it records the version. One open proposal per base version.
+    ("model_proposals", """CREATE TABLE model_proposals (
+        id INTEGER PRIMARY KEY, model_kind TEXT NOT NULL CHECK (model_kind IN ('geo')),
+        model_name TEXT NOT NULL, base_version_id INTEGER NOT NULL, feedback_ids_json TEXT NOT NULL,
+        spec_patch_json TEXT NOT NULL, rationale TEXT NOT NULL CHECK (length(trim(rationale)) > 0),
+        expected_json TEXT, preview_json TEXT,
+        author_role TEXT NOT NULL DEFAULT 'modeler' CHECK (author_role IN ('modeler','reviewer')),
+        author TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'proposed' CHECK (status IN ('proposed','accepted','rejected','superseded','built')),
+        reviewer TEXT, comment TEXT, decided_at TEXT, built_version_id INTEGER,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        CHECK (status <> 'rejected' OR (comment IS NOT NULL AND length(trim(comment)) > 0)),
+        CHECK (status NOT IN ('accepted','rejected','built') OR reviewer IS NOT NULL),
+        CHECK (status <> 'built' OR built_version_id IS NOT NULL));
+        CREATE UNIQUE INDEX model_proposals_one_open ON model_proposals(model_kind, base_version_id)
+          WHERE status IN ('proposed','accepted');
+        CREATE TRIGGER model_proposals_fixed BEFORE UPDATE OF model_kind, model_name, base_version_id,
+          feedback_ids_json, spec_patch_json, rationale, expected_json, author_role, author, created_at ON model_proposals
+        BEGIN SELECT RAISE(ABORT, 'a proposal cannot be changed; propose again'); END;
+        CREATE TRIGGER model_proposals_status BEFORE UPDATE OF status ON model_proposals
+        WHEN OLD.status <> NEW.status AND NOT (
+          (OLD.status = 'proposed' AND NEW.status IN ('accepted','rejected','superseded'))
+          OR (OLD.status = 'accepted' AND NEW.status = 'built'))
+        BEGIN SELECT RAISE(ABORT, 'proposal status: proposed -> accepted | rejected | superseded, accepted -> built'); END;"""),
+    # The agent listening in a live review session (await_review_activity); the engineer ends it in the workbench.
+    ("review_sessions", """CREATE TABLE review_sessions (
+        id INTEGER PRIMARY KEY, model_kind TEXT NOT NULL, model_name TEXT NOT NULL, agent TEXT NOT NULL,
+        started_at TEXT NOT NULL DEFAULT (datetime('now')), last_seen_at TEXT NOT NULL DEFAULT (datetime('now')),
+        ended_at TEXT, ended_by TEXT);
+        CREATE UNIQUE INDEX review_sessions_one_open ON review_sessions(model_kind, model_name) WHERE ended_at IS NULL;"""),
 ]
 
 

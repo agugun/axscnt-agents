@@ -203,6 +203,58 @@ def _hm_review(rv, args):
         print(f"Proposal {args.proposal_id} rejected; the comment goes back to the history matcher.")
 
 
+def _review_thread(rv, args):
+    """A review comment's thread (geo review workbench); --reply writes in it as you (reopens an answered one)."""
+    from .core.errors import ToolError
+    try:
+        if args.reply:
+            rv.reply_review(feedback_id=args.feedback_id, body=args.reply)
+        t = rv.get_review_thread(feedback_id=args.feedback_id)["thread"]
+    except ToolError as e:
+        raise SystemExit(f"{e.code}: {e.message}") from None
+    print(f"#{t['id']} {t['model_kind']} {t['model_name']} v{t['version']} [{t['label']}] {t['severity']}, {t['status']}"
+          + (f", waiting on the {t['waiting_on']}" if t["waiting_on"] else ""))
+    print(f"  {t['created_at']}  {t['reviewer']}: {t['comment']}")
+    for m in t["messages"]:
+        extra = (f" (views: {', '.join(v['fig'] for v in m['views'])})" if m["views"] else "")
+        print(f"  {m['created_at']}  {m['author']} [{m['kind']}]: {m['body']}{extra}")
+
+
+def _review_proposal(rv, args):
+    """A geo review proposal: show it, accept it (you type 'accept'; the modeler then builds it) or reject it."""
+    from .core.errors import ToolError
+    from .core.proposals import describe_changes
+    try:
+        p = rv.get_geo_proposal(proposal_id=args.proposal_id)["proposal"]
+        if args.action == "show":
+            print(f"Proposal {p['id']} on {p['model_kind']} {p['model_name']} v{p['base_version']}: {p['status']}"
+                  + (f" (built v{p['built_version']})" if p.get("built_version") else ""))
+            print(f"  changes: {describe_changes(p['changes'])}")
+            print(f"  why: {p['rationale']}")
+            if p["expected"]:
+                print(f"  expected: {p['expected']}")
+            print(f"  threads: {', '.join('#' + str(i) for i in p['feedback_ids'])}")
+            if p.get("comment"):
+                print(f"  {p['reviewer']}: {p['comment']}")
+            if p["status"] == "proposed":
+                print(f"  decide: opmagent review proposal accept {p['id']}   or   opmagent review proposal reject "
+                      f"{p['id']} --comment '...'")
+            return
+        if args.action == "accept":
+            print(f"Accept proposal {p['id']} on {p['model_name']} v{p['base_version']}: {describe_changes(p['changes'])}")
+            try:
+                ok = input("Type 'accept' to confirm: ").strip().lower() == "accept"
+            except EOFError:
+                ok = False
+            if not ok:
+                raise SystemExit("Not accepted.")
+        r = rv.decide_geo_proposal(proposal_id=args.proposal_id, action=args.action, comment=args.comment)
+    except ToolError as e:
+        raise SystemExit(f"{e.code}: {e.message}") from None
+    print(r["spoken_summary"] + (" The geo modeler builds it next." if args.action == "accept" else
+                                 " The comment is in its threads."))
+
+
 def cmd_review(args):
     """Human review from the terminal (uses the reviewer profile)."""
     import json
@@ -225,7 +277,7 @@ def cmd_review(args):
                                             if f["addressed_in_version_id"] else "") + f": {f['response']}"
                    if f["status"] != "open" else "")
             print(f"  #{f['id']:<4} {f['model_kind']:5} {f['model_name']} v{f['version']} ({f['severity']}"
-                  f"{', ' + f['item'] if f['item'] else ''}) {f['comment']}{ans}"[:300])
+                  f"{', ' + f['label'] if f['item'] else ''}) {f['comment']}{ans}"[:300])
         return
     if args.rcmd == "list":
         from .deck.init_review import pending as init_pending
@@ -240,6 +292,10 @@ def cmd_review(args):
         return _init_review(cfg, rv, args)
     if args.rcmd == "hm":
         return _hm_review(rv, args)
+    if args.rcmd == "thread":
+        return _review_thread(rv, args)
+    if args.rcmd == "proposal":
+        return _review_proposal(rv, args)
     targets = []
     if args.rcmd == "approve-hello":
         from .hello.run import latest_demo
@@ -561,6 +617,18 @@ def cmd_geo_build(args):
     from .core.errors import ToolError
     from .geo.pipeline import build_geo_model
     cfg = cfgmod.load(args.config)
+    if args.from_proposal is not None:
+        if args.tops or args.logs or args.spec or args.name:
+            raise SystemExit("--from-proposal takes the base version's data and spec: no --tops/--logs/--spec/--name")
+        from .geo.proposal_build import build_from_proposal
+        try:
+            r = build_from_proposal(cfg, args.from_proposal, surveys=args.surveys)
+        except ToolError as e:
+            r = e.to_dict()
+        print(json.dumps(r, indent=2, default=str)[:6000])
+        raise SystemExit(0 if r.get("ok") else 2)
+    if not (args.tops and args.spec and args.name):
+        raise SystemExit("geo build needs --tops, --spec and --name (or --from-proposal)")
     spec = json.loads(open(args.spec).read())
     try:
         r = build_geo_model(cfg, tops=args.tops, logs=args.logs or [], spec=spec, name=args.name, surveys=args.surveys,
@@ -708,7 +776,7 @@ def cmd_study(args):
             raise SystemExit(0 if r["ok"] else 2)
         if args.complete:
             studies.start_task(con, args.name, args.what, actor=getpass.getuser())
-        r = _study_build(cfg, con, args.what, args.name)
+        r = _study_build(cfg, con, args.what, args.name, getattr(args, "from_proposal", None))
         if args.complete and r.get("ok"):
             key = "deck_id" if args.what == "deck" else "version_id"
             from .deck.init_review import state as init_state
@@ -800,12 +868,24 @@ def _study_view(con, name, kinds, open_=False, cfg=None):
     return {"ok": all(v.get("qc_report") for v in views if v["kind"] != "deck"), "views": views}
 
 
-def _study_build(cfg, con, what, name):
-    """Run a modeler or the deck builder on the study's data in the database, with the study's names."""
+def _study_build(cfg, con, what, name, from_proposal=None):
+    """Run a modeler or the deck builder on the study's data in the database, with the study's names.
+    from_proposal: geo only, an accepted review proposal on one of the study's geo versions."""
     import json
     from .core import studies
     from .core.errors import INVALID_INPUT, ToolError
     from .data import store
+    if from_proposal is not None:
+        from .core import models as mdl
+        from .core import proposals as props
+        from .geo.proposal_build import build_from_proposal
+        if what != "geo":
+            raise ToolError(INVALID_INPUT, "--from-proposal builds a geo model")
+        p = props.get(con, from_proposal)
+        src = (mdl.header(con, "geo", p["base_version_id"]).get("spec_json") or {}).get("data_source") or {}
+        if src.get("study") != name:
+            raise ToolError(INVALID_INPUT, f"proposal {from_proposal} is on a geo version that isn't from study {name}")
+        return build_from_proposal(cfg, from_proposal)
     st = studies.status(con, name)
     spec, folder = st["study"]["spec"], Path(st["study"]["folder"])
     if what != "deck" and not store.ready(con, name, what):
@@ -1259,6 +1339,15 @@ def main(argv=None):
     x = rv.add_parser("approve-hello", help="approve the four hello demo models, then (run again) accept the hello "
                                             "deck's initial state")
     x.set_defaults(fn=cmd_review, comment=None)
+    x = rv.add_parser("thread", help="a review comment's thread with the modeler's replies; --reply to write in it")
+    x.add_argument("feedback_id", type=int)
+    x.add_argument("--reply", help="your message (reopens an answered comment)")
+    x.set_defaults(fn=cmd_review)
+    x = rv.add_parser("proposal", help="a geo review proposal: show it, accept it (the modeler builds it) or reject it")
+    x.add_argument("action", choices=["show", "accept", "reject"])
+    x.add_argument("proposal_id", type=int)
+    x.add_argument("--comment", help="why (required to reject)")
+    x.set_defaults(fn=cmd_review)
     x = rv.add_parser("hm", help="a history-match proposal: show it, accept it (requests to the modelers) or reject it")
     x.add_argument("action", choices=["show", "accept", "reject"])
     x.add_argument("proposal_id", type=int)
@@ -1367,6 +1456,8 @@ def main(argv=None):
     x.add_argument("name")
     x.add_argument("--complete", action="store_true",
                    help="start the task first and complete it with the result (a model only once it is approved)")
+    x.add_argument("--from-proposal", dest="from_proposal", type=int,
+                   help="geo: build from an accepted review proposal (the base version's spec with its patch)")
     x.set_defaults(fn=cmd_study)
     da = sub.add_parser("data", help="data manager: load a study's raw data into the database").add_subparsers(
         dest="dcmd", required=True)
@@ -1403,11 +1494,13 @@ def main(argv=None):
     x.set_defaults(fn=cmd_results)
     gm = sub.add_parser("geo", help="geo modeler").add_subparsers(dest="gcmd", required=True)
     x = gm.add_parser("build", help="build a corner-point geo model from tops, logs and a spec")
-    x.add_argument("--tops", required=True)
+    x.add_argument("--tops")
     x.add_argument("--logs", nargs="*", help="LAS or CSV log files")
     x.add_argument("--surveys", help="deviation surveys (to convert LAS MD to TVD)")
-    x.add_argument("--spec", required=True, help="geo spec JSON (surfaces, layers, areal, contacts, petro, scal)")
-    x.add_argument("--name", required=True)
+    x.add_argument("--spec", help="geo spec JSON (surfaces, layers, areal, contacts, petro, scal)")
+    x.add_argument("--name")
+    x.add_argument("--from-proposal", dest="from_proposal", type=int,
+                   help="build from an accepted review proposal: the base version's inputs and spec with its patch")
     x.add_argument("--description")
     x.set_defaults(fn=cmd_geo_build)
     x = gm.add_parser("view", help="static view: the geo model as EGRID + INIT (OPM Flow dry run) for ResInsight")

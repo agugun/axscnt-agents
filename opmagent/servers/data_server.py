@@ -19,7 +19,7 @@ from mcp.server.mcpserver import MCPServer
 
 from ..core import config as cfgmod
 from ..core import db, files, models, review, studies
-from ..core.errors import FORBIDDEN, INVALID_INPUT, ToolError
+from ..core.errors import FORBIDDEN, INVALID_INPUT, NOT_FOUND, ToolError
 from ..notebooks import runner
 
 PROFILES = ("fluid", "geo", "res", "well", "import", "deck", "run", "data", "view", "hm", "reviewer")
@@ -363,6 +363,8 @@ class DataService:
                 raise ToolError(FORBIDDEN, f"profile '{self.profile}' reads only {MODELER_KIND[self.profile]} feedback")
             kind = MODELER_KIND[self.profile]
         items = review.list_feedback(self.con, kind, model_name, version_id, status)
+        for f in items:
+            f["messages"] = review.messages(self.con, f["id"])
         return {"ok": True, "feedback": items, "spoken_summary": review.summary(items)}
 
     def answer_review_feedback(self, feedback_id: int, response: str, status: str = "addressed",
@@ -384,7 +386,10 @@ class DataService:
         d = rvw.load_version(self.cfg, self.con, f["version_id"])
         out = {"ok": True, "feedback": f, "at_anchor": rvw.describe(f["anchor"], d) if "text" not in f["anchor"] else None}
         if f["view"]:
-            out["view"] = rvw.summarize(rvw.check_spec(f["view"], d), d)
+            b = rvw.load_version(self.cfg, self.con, int(f["view"]["base_version_id"])) \
+                if f["view"].get("base_version_id") else None
+            out["view"] = rvw.summarize(rvw.check_spec(f["view"], d, b), d, b)
+        out["messages"] = review.messages(self.con, feedback_id)
         out["spoken_summary"] = (f"Comment {feedback_id} on geo {f['model_name']} v{f['version']} [{f['label']}]: "
                                  f"{f['comment']}")
         return out
@@ -393,16 +398,170 @@ class DataService:
         """What a review workbench view shows, in numbers (you can't see the picture): spec as in the geo review
         workbench, e.g. {"fig": "layer_map", "version_id": 42, "kw": "PORO", "layer": 5}; figs surfaces,
         layer_map (kw, layer, log), section (kw, along x|y, well or cell [i, j]), well (well), at_wells,
-        distributions, poroperm. anchor: also the model's values at that anchor."""
+        distributions, poroperm, diff_map (kw, base_version_id, layer or zone: this version minus the base).
+        anchor: also the model's values at that anchor."""
         from ..geo import review_views as rvw
         if not isinstance(spec, dict) or "version_id" not in spec:
             raise ToolError(INVALID_INPUT, "spec needs fig and version_id")
         d = rvw.load_version(self.cfg, self.con, int(spec["version_id"]))
-        out = {"ok": True, **rvw.summarize(rvw.check_spec(spec, d), d)}
+        base = rvw.load_version(self.cfg, self.con, int(spec["base_version_id"])) if spec.get("base_version_id") else None
+        out = {"ok": True, **rvw.summarize(rvw.check_spec(spec, d, base), d, base)}
         if anchor:
             out["at_anchor"] = rvw.describe(rvw.check_anchor(anchor), d)
         out["spoken_summary"] = out["shows"]
         return out
+
+    # ------------------------------------------------------------ review threads and proposals (geo review, phase 2)
+    def _role(self) -> tuple[str, str]:
+        if self.profile == "reviewer":
+            return "reviewer", self._reviewer()
+        if MODELER_KIND.get(self.profile) == "geo":
+            return "modeler", "geo modeler"
+        raise ToolError(FORBIDDEN, f"profile '{self.profile}' has no part in geo review threads")
+
+    def _check_views(self, f: dict, views: list | None) -> list[dict]:
+        from ..geo import review_views as rvw
+        out = []
+        for v in views or []:
+            if not isinstance(v, dict):
+                raise ToolError(INVALID_INPUT, "views: a list of view specs")
+            vid = int(v.get("version_id") or f["version_id"])
+            if models.header(self.con, "geo", vid)["model_name"] != f["model_name"]:
+                raise ToolError(INVALID_INPUT, f"view of version {vid}: not {f['model_name']}")
+            d = rvw.load_version(self.cfg, self.con, vid)
+            b = rvw.load_version(self.cfg, self.con, int(v["base_version_id"])) if v.get("base_version_id") else None
+            out.append(rvw.check_spec({**v, "version_id": vid}, d, b))
+        return out
+
+    def get_review_thread(self, feedback_id: int) -> dict:
+        """A review comment and its whole thread (your replies, the engineer's, proposals and their decisions).
+        waiting_on says whose turn it is."""
+        f = review.thread(self.con, feedback_id)
+        if self.profile in MODELER_KIND and f["model_kind"] != MODELER_KIND[self.profile]:
+            raise ToolError(FORBIDDEN, f"comment {feedback_id} is on a {f['model_kind']} model")
+        last = f["messages"][-1]["body"] if f["messages"] else f["comment"]
+        return {"ok": True, "thread": f, "spoken_summary": f"Comment {feedback_id} [{f['label']}], {f['status']}, "
+                f"waiting on {f['waiting_on'] or 'nobody'}: {last[:200]}"}
+
+    def reply_review(self, feedback_id: int, body: str, views: list[dict] | None = None,
+                     notebook_path: str | None = None) -> dict:
+        """Write in a review thread (geo). As the modeler: answer the engineer's question or point at something,
+        with view specs they can open ("look at this": e.g. [{"fig": "section", "kw": "PORO", "well": "B"}]) and
+        optionally an investigation notebook you ran (its HTML is the evidence). A reply doesn't close the thread:
+        answer_review_feedback does, with the version that addresses it. As the reviewer: writing in an answered
+        thread reopens it."""
+        role, author = self._role()
+        f = review.get(self.con, feedback_id)
+        if f["model_kind"] != "geo":
+            raise ToolError(FORBIDDEN, f"comment {feedback_id} is on a {f['model_kind']} model")
+        nb = None
+        if notebook_path:
+            r = self.con.execute("SELECT id FROM files WHERE path = ? AND kind = 'qc_report' ORDER BY id DESC LIMIT 1",
+                                 (str(notebook_path),)).fetchone()
+            if not r:
+                raise ToolError(NOT_FOUND, "that notebook isn't registered: run it with run_investigation_notebook first")
+            nb = r[0]
+        m = review.add_message(self.con, feedback_id, role, author, body, views=self._check_views(f, views),
+                               notebook_file_id=nb, modeler_kind="geo" if role == "modeler" else None)
+        return {"ok": True, "message": m, "spoken_summary": f"Replied in thread {feedback_id}."}
+
+    def propose_geo_change(self, base_version_id: int, feedback_ids: list[int], spec_patch: dict, rationale: str,
+                           expected: dict | str | None = None) -> dict:
+        """Propose a change to a geo version's spec for the engineer to accept before you build it: spec_patch is a
+        JSON merge patch on the base spec (layers, areal, petro, curves, contacts, min_thickness; null removes a
+        key), e.g. {"petro": {"vsh_cutoff": 0.4}}. feedback_ids: the threads it answers (it is posted in each).
+        expected: what it should change, e.g. "B layer 5 PORO 0.27 -> ~0.22, TopRes HCPV -6 %". A new proposal on
+        the same version supersedes one still waiting. Once accepted, build it with `opmagent geo build
+        --from-proposal <id>` (or `opmagent study build geo <study> --from-proposal <id>`), then answer the
+        threads with the new version."""
+        from ..core import proposals as props
+        if self.profile != "geo":
+            raise ToolError(FORBIDDEN, "only the geo modeler proposes geo changes")
+        p = props.propose(self.con, "geo", base_version_id, feedback_ids, spec_patch, rationale, "geo modeler",
+                          expected=expected)
+        return {"ok": True, "proposal": p, "spoken_summary": f"Proposal {p['id']} on {p['model_name']} "
+                f"v{p['base_version']}: {props.describe_changes(p['changes'])}. Waiting for the engineer."}
+
+    def get_geo_proposal(self, proposal_id: int) -> dict:
+        """A geo proposal: the patch, the merged spec and its changes, status, the engineer's decision and comment,
+        and the version built from it."""
+        from ..core import proposals as props
+        p = props.get(self.con, proposal_id)
+        return {"ok": True, "proposal": p, "spoken_summary": f"Proposal {proposal_id}: {p['status']}"
+                + (f" ({p['comment']})" if p.get("comment") else "")}
+
+    def list_geo_proposals(self, model_name: str | None = None, status: str | None = None) -> dict:
+        """Geo proposals (all, or one model's, or by status: proposed, accepted, rejected, superseded, built)."""
+        from ..core import proposals as props
+        ps = props.list_proposals(self.con, "geo", model_name, status)
+        return {"ok": True, "proposals": ps, "spoken_summary": f"{len(ps)} proposal(s)" + (
+            ": " + "; ".join(f"#{p['id']} {p['status']}" for p in ps[-5:]) if ps else ".")}
+
+    def decide_geo_proposal(self, proposal_id: int, action: str, comment: str | None = None) -> dict:
+        """Reviewer: accept a geo proposal (the modeler builds it) or reject it (comment required; it goes into
+        the threads)."""
+        from ..core import proposals as props
+        p = props.decide(self.con, proposal_id, action, self._reviewer(), comment)
+        return {"ok": True, "proposal": p, "spoken_summary": f"Proposal {proposal_id} {p['status']}."}
+
+    def review_diff(self, version_id: int, base_version_id: int | None = None) -> dict:
+        """What changed from one geo version to another (default: the version it was built from): spec, numbers
+        (zone volumes, tops misfit, at-well and leave-one-out errors), QC findings fixed / still / new, whether
+        maps compare by layer or zone, and the threads this version answers."""
+        from ..geo.review_diff import diff
+        d = diff(self.cfg, self.con, version_id, base_version_id)
+        if d.get("base_version_id") is None:
+            return {"ok": True, "diff": d, "spoken_summary": d["message"]}
+        fx = d["findings"]
+        return {"ok": True, "diff": d, "spoken_summary": f"v{d['version']} against v{d['base_version']}: "
+                f"{len(d['spec'])} spec change(s); findings fixed {len(fx['fixed'])}, still {len(fx['still'])}, "
+                f"new {len(fx['new'])}."}
+
+    def await_review_activity(self, model_name: str | None = None, version_id: int | None = None,
+                              timeout_s: int = 300) -> dict:
+        """Review session: wait until the engineer needs you on a geo model (a thread waiting on you: a new
+        comment, a reply, a proposal accepted or rejected), or the engineer ends the session, or timeout_s
+        (max 1800) passes. Returns at once if something is already waiting. Deal with what it returns (reply,
+        propose, build an accepted proposal, answer), then call it again. The workbench shows you as listening
+        while you wait."""
+        import time
+        if self.profile != "geo":
+            raise ToolError(FORBIDDEN, "only the geo modeler waits for review activity")
+        if model_name is None:
+            if version_id is None:
+                raise ToolError(INVALID_INPUT, "give model_name or version_id")
+            model_name = models.header(self.con, "geo", int(version_id))["model_name"]
+        timeout_s = max(1, min(int(timeout_s), 1800))
+        con = db.connect(self.cfg.database)      # its own connection: this runs outside the server's lock
+        try:
+            sid = review.session_touch(con, "geo", model_name, "geo modeler")["id"]
+            end = time.monotonic() + timeout_s
+            while True:
+                s = con.execute("SELECT ended_at, ended_by FROM review_sessions WHERE id = ?", (sid,)).fetchone()
+                if s["ended_at"]:
+                    return {"ok": True, "event": "session_ended", "threads": [],
+                            "spoken_summary": f"The engineer ended the review session on {model_name}."}
+                w = review.waiting(con, "geo", model_name)["modeler"]
+                if w:
+                    threads = []
+                    for fid in w:
+                        t = review.thread(con, fid)
+                        last = t["messages"][-1] if t["messages"] else None
+                        threads.append({"id": fid, "version": t["version"], "version_id": t["version_id"],
+                                        "label": t["label"], "comment": t["comment"], "severity": t["severity"],
+                                        "last": {"kind": last["kind"], "body": last["body"],
+                                                 "proposal_id": last["proposal_id"]} if last else None})
+                    return {"ok": True, "event": "waiting_on_you", "threads": threads,
+                            "spoken_summary": f"{len(threads)} thread(s) on {model_name} wait on you: "
+                                              + "; ".join(f"#{t['id']} [{t['label']}]" for t in threads)}
+                if time.monotonic() >= end:
+                    return {"ok": True, "event": "timeout", "threads": [],
+                            "spoken_summary": "Nothing new; call await_review_activity again to keep listening."}
+                time.sleep(2)
+                con.execute("UPDATE review_sessions SET last_seen_at = datetime('now') WHERE id = ? AND ended_at IS NULL",
+                            (sid,))
+        finally:
+            con.close()
 
     def add_review_comment(self, kind: str, version_id: int, comment: str, item: str | None = None,
                            severity: str = "change") -> dict:
@@ -540,10 +699,13 @@ DATA_READ = ["study_data", "study_data_rows", "log_stats", "log_samples", "fluid
 FEEDBACK = ["get_review_feedback", "answer_review_feedback"]
 STUDY = ["study_status", "list_studies", "start_task", "complete_task", "fail_task", "retry_task", "raise_request",
          "resolve_request"]
-GEO_REVIEW = ["review_context", "render_review_view"]   # the geo review workbench (read only)
+GEO_REVIEW = ["review_context", "render_review_view", "get_review_thread", "reply_review", "get_geo_proposal",
+              "list_geo_proposals", "review_diff"]                 # the geo review workbench
+GEO_REVIEW_MODELER = ["propose_geo_change", "await_review_activity"]
+GEO_REVIEW_REVIEWER = ["decide_geo_proposal"]
 QC_NOTEBOOKS = ["run_qc_notebook", "create_investigation_notebook", "run_investigation_notebook"]
 TOOLS = {
-    "fluid": COMMON + WRITER + STUDY + DATA_READ + FEEDBACK + QC_NOTEBOOKS, "geo": COMMON + WRITER + STUDY + DATA_READ + FEEDBACK + QC_NOTEBOOKS + ["static_view"] + GEO_REVIEW,
+    "fluid": COMMON + WRITER + STUDY + DATA_READ + FEEDBACK + QC_NOTEBOOKS, "geo": COMMON + WRITER + STUDY + DATA_READ + FEEDBACK + QC_NOTEBOOKS + ["static_view"] + GEO_REVIEW + GEO_REVIEW_MODELER,
     "well": COMMON + WRITER + STUDY + DATA_READ + FEEDBACK + QC_NOTEBOOKS,
     "res": COMMON + WRITER + STUDY + DATA_READ + FEEDBACK + QC_NOTEBOOKS,
     "import": COMMON + WRITER,
@@ -558,12 +720,17 @@ TOOLS = {
     "reviewer": COMMON + ["list_pending_reviews", "get_qc_report", "approve", "reject", "add_review_comment",
                           "accept_init_view", "reject_init_view",
                           "get_review_feedback", "list_decks", "get_deck", "study_status", "list_studies",
-                          "study_data", "study_data_rows", "log_stats", "static_view", "init_view"] + GEO_REVIEW,
+                          "study_data", "study_data_rows", "log_stats", "static_view", "init_view"] + GEO_REVIEW
+                + GEO_REVIEW_REVIEWER,
 }
 WRITE_TOOLS = (set(WRITER) | {"create_deck", "add_deck_file", "set_deck_status", "approve", "reject", "init_study",
                                "accept_init_view", "reject_init_view",
-                               "load_study_data", "load_deck_data", "load_study_input", "answer_review_feedback", "add_review_comment"}
+                               "load_study_data", "load_deck_data", "load_study_input", "answer_review_feedback", "add_review_comment",
+                               "reply_review", "propose_geo_change", "decide_geo_proposal"}
                | set(STUDY) | set(QC_NOTEBOOKS)) - {"run_validator", "study_status", "list_studies"}
+
+
+UNLOCKED = {"await_review_activity"}
 
 
 def wrap(svc: DataService, name: str):
@@ -571,6 +738,8 @@ def wrap(svc: DataService, name: str):
 
     @functools.wraps(fn)
     def tool(**kwargs):
+        if name in UNLOCKED:          # waits on its own connection; the other tools keep working meanwhile
+            return _call(**kwargs)
         with svc.lock:
             return _call(**kwargs)
 

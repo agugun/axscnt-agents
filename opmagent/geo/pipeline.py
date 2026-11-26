@@ -70,10 +70,12 @@ def _report(path, name, version, g, logs, spec, assumptions, warnings):
 
 
 def build_geo_model(cfg, *, tops, logs, spec: dict, name: str, surveys=None, description: str | None = None,
-                    source_file_ids: list[int] | None = None, data_source: dict | None = None) -> dict:
+                    source_file_ids: list[int] | None = None, data_source: dict | None = None,
+                    extra_assumptions: list[str] | None = None, proposal_id: int | None = None) -> dict:
     """tops: CSV path or DataFrame; logs: LAS/CSV paths or a DataFrame (well_name, tvd, phi, perm, vsh); surveys:
     a survey file, or a DataFrame of x, y, tvd stations. From a study (data_source = {"study": name}) the tables
-    come from the database and source_file_ids are the inbox files they were loaded from."""
+    come from the database and source_file_ids are the inbox files they were loaded from. proposal_id: the
+    accepted review proposal this build applies (geo/proposal_build.py), recorded in the spec."""
     for key in ("surfaces", "layers"):
         if key not in spec:
             raise ToolError(INVALID_INPUT, f"geo spec needs '{key}'")
@@ -101,6 +103,7 @@ def build_geo_model(cfg, *, tops, logs, spec: dict, name: str, surveys=None, des
         f"PERMY = PERMX; PERMZ = {spec.get('petro', {}).get('kv_kh', 0.1)} x PERMX",
         "no faults (vertical pillars)",
     ]
+    assumptions += list(extra_assumptions or [])
     if lg["perm"].isna().all():
         assumptions.append(f"no permeability log: k = a*10^(b*phi) with a, b = {spec.get('petro', {}).get('poro_perm', [0.01, 30.0])}")
     if source_file_ids is not None:
@@ -113,7 +116,8 @@ def build_geo_model(cfg, *, tops, logs, spec: dict, name: str, surveys=None, des
         "unit_system": "METRIC", "grid_type": "corner_point", "nx": g["nx"], "ny": g["ny"], "nz": g["nz"],
         "grid_file_id": gid, "user_description": description, "assumptions_json": assumptions,
         "spec_json": {"geo_spec": spec, "areal": g["areal"], "layer_depths_file": g["layer_depths_file"],
-                      **({"data_source": data_source} if data_source else {})}})
+                      **({"data_source": data_source} if data_source else {}),
+                      **({"proposal_id": proposal_id} if proposal_id else {})}})
     vid = v["version_id"]
     props = [{"keyword": k, "file_id": D("register_file", path=p, kind="property")["file_id"]} for k, p in g["files"].items()]
     D("write_tables", kind="geo", version_id=vid, table="geo_properties", rows=props)

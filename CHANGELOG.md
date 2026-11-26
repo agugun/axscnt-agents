@@ -9,6 +9,20 @@ to the res model, and SQLite can't change the existing tables in place. `opmagen
 so; move it aside and run `opmagent init-db` (or `opmagent setup <workspace>`), then rebuild the studies.
 No approvals are carried over. Design: [docs/design/res-model.md](docs/design/res-model.md).
 
+- **Geo review workbench, phase 2** ([docs/design/geo-review.md](docs/design/geo-review.md)):
+  - **Threads:** each review comment has a thread (`review_messages`, append-only). The modeler replies with views
+    (`reply_review`); writing in an answered thread reopens it.
+  - **Proposals:** the agent proposes spec changes (`propose_geo_change`, a merge patch; table `model_proposals`).
+    You accept or reject them in the workbench or with `opmagent review proposal`. Only an accepted one is built:
+    `opmagent geo build --from-proposal <id>` or `opmagent study build geo <study> --from-proposal <id>`.
+  - **Version diff:** `review_diff` and the Diff tab show spec, numbers, QC findings and difference maps by layer
+    or zone mean.
+  - **Live review session:** `await_review_activity` lets the agent wait for you, shown as "listening" in the
+    workbench, where you can end the session.
+  - **CLI and status:** `opmagent review thread <id> [--reply]`. `study_status` says which comments wait on the
+    modeler.
+  - **Testing:** new scenario `testing/geo_review_loop.sh`.
+  - **Database:** new tables are added in place (`review_messages`, `model_proposals`, `review_sessions`).
 - **Geo review workbench, phase 1** ([docs/design/geo-review.md](docs/design/geo-review.md)): `opmagent geo review
   <version>` serves a local web app (127.0.0.1, a session token for writes) to look at a geo version (surfaces, any
   layer map, sections through a well or a cell, well tracks, at-wells, distributions, QC findings) and pin comments
