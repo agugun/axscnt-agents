@@ -1,6 +1,6 @@
 # Geo review workbench
 
-Status: phase 1 built (see **Phase 1 as built** under Plan); phases 2 to 4 proposed. Branch: `feat/geo-review-workbench`.
+Status: phases 1 and 2 built (see **Phase 1 / Phase 2 as built** under Plan); phases 3 and 4 proposed. Branch: `feat/geo-review-phase2`.
 
 ## Summary
 
@@ -278,8 +278,63 @@ replies with a section view and proposes `vsh_cutoff` 0.5 → 0.4, the engineer 
 answers the thread, and the diff shows the anchored cell's change, the HCPV delta and the QC finding fixed. The
 same loop as a `testing/geo_review_loop.sh` scenario.
 
+**Phase 2 as built** (`core/review.py` threads and sessions, `core/proposals.py`, `geo/proposal_build.py`,
+`geo/review_diff.py`, the workbench page):
+
+- **Decision 3:** a kind-neutral `model_proposals` table (`model_kind` CHECK `geo` for now), so res and well need
+  no new table in phase 4. `hm_proposals` stays as it is.
+- **Threads carry everything.** `review_messages` (append-only: triggers refuse update and delete) has a `kind`:
+  `message`, `answer` (the modeler's answer is kept here too, so a reopened thread keeps its history), `reopen` (the
+  engineer writing in an answered thread: status back to open, response cleared), `proposal`, `accepted`,
+  `rejected`, `built`. A thread waits on the modeler while it is open and the engineer wrote last (or nobody has
+  replied), and on the reviewer while it is open and the modeler wrote last. So a decision on a proposal needs no
+  event of its own: it is a reviewer message, and the thread waits on the modeler again.
+- **Proposals:** a JSON merge patch on the base version's spec, limited to `layers`, `areal`, `petro`, `curves`,
+  `contacts` and `min_thickness` (other surfaces need other tops: a data request). The merged spec is checked
+  (layers per zone, cut-off ranges), and a patch that changes nothing is refused. Each proposal answers at least one
+  open thread. A new proposal supersedes a waiting one on the same base, and an accepted one blocks new ones until
+  it is built (a partial unique index plus triggers for the status moves). Accept or reject is the reviewer's only:
+  `decide_geo_proposal` (reviewer profile), the workbench, or `opmagent review proposal accept|reject <id>`, where
+  accept needs `accept` typed at the terminal, so an agent's Bash can't accept.
+- **`--from-proposal`:** `opmagent geo build --from-proposal <id>` and `opmagent study build geo <study>
+  --from-proposal <id>` build only an accepted proposal. They use the base's data (the study's tables, or the base's
+  recorded tops and LAS files, refused if those changed since), with the merged spec. The version's assumptions name
+  the proposal, its spec records `proposal_id`, and the proposal is marked `built` with a message in its threads.
+  The agent then answers the threads with the version.
+- **Diff** (`review_diff`, `/api/diff`, the Diff tab): spec keys changed, numbers side by side (cells, mean PORO,
+  tops misfit RMS per surface, at-well RMS for phi / log10 perm / NTG, leave-one-out RMS, pore volume / HCPV /
+  mean phi / perm per zone), and QC findings fixed / still / new. Maps compare by layer on the same grid, by zone
+  mean when the layering changed, and not at all when the areal grid changed. The comments the version answers
+  link to their view on either version. Default base: the proposal's base, else the version before. A new
+  `diff_map` view (blue-red, centred on zero) is also open to `render_review_view`.
+- **Review session:** `await_review_activity(model_name | version_id, timeout_s ≤ 1800)` returns `waiting_on_you`
+  with the threads (at once if something already waits), `session_ended`, or `timeout`. It polls every 2 s on its
+  own connection, outside the data server's lock, so the agent's other tools keep working. `review_sessions` holds
+  one open session per model. The workbench shows "geo agent listening" (a wait in the last 60 s) and the counts
+  waiting on each side, and "End session" ends it. `study_status` says how many open comments wait on the modeler.
+- **Workbench:** threads with the agent's messages, "open view" on each view it attached, proposal cards (changes,
+  expected, Accept / Reject with a reason, then the decision and "diff vN vs vM"), Reply / Reopen with an optional
+  "with current view", the "waiting on me" filter, and polling every 4 s, so the agent's replies show up without a
+  reload. Links between versions keep the token (session storage), and `?view=` / `?diff=` open a view or a diff.
+- **Not in phase 2:** the gate's SPE9-from-deck run. Deck-based versions still have no QC payload, so the workbench
+  and proposals refuse them; reading a model without logs is moved to phase 3. On the synthetic case no QC finding
+  fails, so "fixed" is shown by the unit test of the diff, not by the scenario.
+- **Gate:** `tests/test_geo_review_loop.py`, the loop with both sides:
+  - pin, wake the waiting agent, reply with a view, the engineer's answer during a wait (other tools still answer);
+  - checks on bad patches, supersede, accept (token needed);
+  - build v2 (10 x 10 x 6) from it, once only;
+  - diff by zone with its spec, numbers and thread, and `diff_map`;
+  - answer, reopen, end the session while the agent waits;
+  - rejection with a comment, and the database's status and append-only rules.
+
+  `testing/geo_review_loop.sh` ([testing/geo-review.md](../../testing/geo-review.md)) runs the same through the real
+  server and CLI in about 20 s. The browser check in the Claude desktop pane covers the thread with the agent's
+  views, accepting in the card, the polled update after the CLI build, the diff tab and its "view on v1", and the
+  listening indicator and End session.
+
 **Phase 3: what-if preview.** Scratch builds, preview numbers and views on proposals, engineer knobs. Measure
-preview time on Norne and decide the partial-kriging shortcut.
+preview time on Norne and decide the partial-kriging shortcut. Also: deck-based versions in the workbench (the
+model read without logs or a QC payload), moved here from phase 2.
 
 **Phase 4: res and well.** The same workbench with their figure registries (SCAL curves, contacts on sections,
 well trajectories and perforations against layers).
@@ -288,10 +343,8 @@ well trajectories and perforations against layers).
 
 1. **Approval in the app.** Keep it in the CLI and reviewer profile (proposed for phases 1 and 2), or allow it in
    the app behind the session token after phase 2?
-2. **HTTP stack.** Standard library `http.server` (no new dependency, more code) or Starlette + uvicorn (an
-   optional `[review]` extra)?
-3. **Proposal table.** `geo_proposals` now and one per kind later, or a kind-neutral `model_proposals` from the
-   start (with `hm_proposals` left as it is)?
+2. ~~**HTTP stack.**~~ Settled in phase 1: the standard library's `http.server`.
+3. ~~**Proposal table.**~~ Settled in phase 2: a kind-neutral `model_proposals` (geo only for now).
 4. **The engineer's own proposals.** Allow the engineer to author a proposal from the knobs (phase 3, as
    proposed), or only to comment, so the agent stays the only one writing specs?
 5. **3D.** ResInsight stays the 3D view (a button that opens the static view at the anchored cell). Or is a

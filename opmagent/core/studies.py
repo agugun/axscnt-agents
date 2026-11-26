@@ -140,7 +140,9 @@ def status(con, name: str) -> dict:
     by = {t["task"]: t["status"] for t in tasks}
     names = s["spec"].get("models", {})
     feedback = [dict(r) for r in con.execute(
-        "SELECT id, model_kind, model_name, version_id, item, comment, severity FROM review_feedback "
+        "SELECT id, model_kind, model_name, version_id, item, comment, severity, COALESCE((SELECT author_role FROM "
+        "review_messages m WHERE m.feedback_id = review_feedback.id ORDER BY m.id DESC LIMIT 1), 'reviewer') = "
+        "'reviewer' AS waits_on_modeler FROM review_feedback "
         "WHERE status = 'open' AND ((model_kind = 'fluid' AND model_name = ?) OR (model_kind = 'geo' AND "
         "model_name = ?) OR (model_kind = 'well' AND model_name = ?)) ORDER BY id",
         (names.get("fluid"), names.get("geo"), names.get("well")))]
@@ -157,8 +159,11 @@ def status(con, name: str) -> dict:
         if blocked:
             bits.append("blocked: " + ", ".join(blocked))
         if feedback:
+            mine = sum(bool(f["waits_on_modeler"]) for f in feedback)
             bits.append(f"{len(feedback)} open review comment(s) on "
-                        + ", ".join(sorted({f['model_kind'] for f in feedback})))
+                        + ", ".join(sorted({f['model_kind'] for f in feedback}))
+                        + (f" ({mine} waiting on the modeler, {len(feedback) - mine} on the reviewer)"
+                           if mine != len(feedback) else ""))
         say = f"Study {name}: " + "; ".join(bits) + "."
     return {"study": s, "tasks": tasks, "requests": reqs, "open_requests": open_reqs, "open_feedback": feedback,
             "next": [{"task": t, "agent": AGENT[t]} for t in ready], "spoken_summary": say}

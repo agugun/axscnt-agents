@@ -57,6 +57,29 @@ textarea { width: 100%; min-height: 70px; resize: vertical; }
 .c .ans { margin-left: 10px; padding-left: 8px; border-left: 2px solid var(--line); white-space: pre-wrap; }
 .st-open { color: var(--warn); } .st-addressed { color: var(--pass); } .st-wontfix { color: var(--muted); }
 code { background: var(--chip); padding: 1px 4px; border-radius: 4px; font-size: 12px; }
+.m { margin: 4px 0 4px 10px; padding: 4px 0 4px 8px; border-left: 2px solid var(--line); }
+.m.modeler { border-left-color: var(--accent); }
+.m .who { font-size: 12px; color: var(--muted); }
+.m .who b { color: var(--ink); font-weight: 600; }
+.m .txt { white-space: pre-wrap; }
+.kind { font-size: 11px; padding: 0 6px; border-radius: 8px; background: var(--chip); }
+.prop { border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; margin: 4px 0; background: var(--chip); }
+.prop table { border-collapse: collapse; font-size: 12px; margin: 4px 0; }
+.prop td { padding: 1px 8px 1px 0; }
+.prop .acts { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 4px; }
+.prop input { flex: 1; min-width: 120px; }
+.wait { font-size: 11px; font-weight: 600; }
+.wait.you { color: var(--warn); } .wait.agent { color: var(--accent); }
+.reply { margin: 4px 0 0 10px; }
+.reply textarea { min-height: 50px; }
+#session { display: flex; gap: 8px; align-items: center; font-size: 12px; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); display: inline-block; }
+.dot.on { background: var(--pass); }
+#diffinfo { display: none; margin-top: 10px; font-size: 12px; }
+#diffinfo table { border-collapse: collapse; width: 100%; margin: 4px 0 10px; }
+#diffinfo td, #diffinfo th { text-align: left; padding: 2px 8px 2px 0; border-bottom: 1px solid var(--line); }
+#diffinfo td.num { text-align: right; font-variant-numeric: tabular-nums; }
+#diffinfo h3 { font-size: 12px; margin: 8px 0 2px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
 </style>
 </head>
 <body>
@@ -66,6 +89,7 @@ code { background: var(--chip); padding: 1px 4px; border-radius: 4px; font-size:
   <span id="status" class="badge"></span>
   <span id="qc" class="badge"></span>
   <span class="spacer"></span>
+  <span id="session"></span>
   <a id="qcreport" href="#" target="_blank" rel="noopener">QC report</a>
 </header>
 <main>
@@ -74,6 +98,7 @@ code { background: var(--chip); padding: 1px 4px; border-radius: 4px; font-size:
     <div class="controls" id="controls"></div>
     <div id="plot"></div>
     <ul id="findings"></ul>
+    <div id="diffinfo"></div>
     <div class="msg" id="hint">Click a well, a cell, a surface or a QC finding to pin a comment on it.</div>
   </section>
   <section class="panel">
@@ -92,6 +117,7 @@ code { background: var(--chip); padding: 1px 4px; border-radius: 4px; font-size:
     <div class="row" style="margin-top:0">
       <label class="msg"><input type="checkbox" id="onlyv"> this version only</label>
       <label class="msg"><input type="checkbox" id="onlyopen"> open only</label>
+      <label class="msg"><input type="checkbox" id="onlyme"> waiting on me</label>
     </div>
     <div id="comments"></div>
   </section>
@@ -99,7 +125,7 @@ code { background: var(--chip); padding: 1px 4px; border-radius: 4px; font-size:
 <script>
 "use strict";
 const TABS = [["surfaces", "Surfaces"], ["layer_map", "Layer map"], ["section", "Section"], ["well", "Well"],
-              ["at_wells", "At wells"], ["distributions", "Distributions"], ["poroperm", "Poro-perm"], ["findings", "QC findings"]];
+              ["at_wells", "At wells"], ["distributions", "Distributions"], ["poroperm", "Poro-perm"], ["findings", "QC findings"], ["diff_map", "Diff"]];
 let token = "";
 try { token = new URLSearchParams(location.hash.slice(1)).get("token") || sessionStorage.getItem("geoReviewToken") || ""; } catch (e) {}
 try { if (token) sessionStorage.setItem("geoReviewToken", token); } catch (e) {}
@@ -109,7 +135,8 @@ addEventListener("hashchange", () => {
   if (t) { token = t; try { sessionStorage.setItem("geoReviewToken", t); } catch (e) {} }
 });
 const qs = new URLSearchParams(location.search);
-const S = { vid: +qs.get("version_id"), meta: null, tab: "layer_map", spec: {}, anchor: {}, viewForComment: null, comments: [] };
+const S = { vid: +qs.get("version_id"), meta: null, tab: "layer_map", spec: {}, anchor: {}, viewForComment: null, comments: [],
+            proposals: {}, session: {}, replyOpen: new Set(), drafts: {}, lastSig: "", diff: null };
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
 
@@ -162,6 +189,13 @@ function controls() {
     h += `<label>Along <select id="along">${opt(["x", "y"], s.along || "x")}</select></label>
           <label>Through <select id="through">${s.cell ? `<option value="cell" selected>cell ${s.cell.join(",")}</option>` : ""}${opt(m.wells, s.well)}</select></label>`;
   if (s.fig === "well") h += `<label>Well <select id="wellsel">${opt(m.wells, s.well)}</select></label>`;
+  if (s.fig === "diff_map" && S.diff && S.diff.base_version_id) {
+    const others = m.versions.filter(v => v.version_id !== S.vid);
+    h += `<label>Against <select id="base">${others.map(v => `<option value="${v.version_id}" ${v.version_id === s.base_version_id ? "selected" : ""}>v${v.version}</option>`).join("")}</select></label>
+          <label>Property <select id="kw">${opt(S.diff.keywords, s.kw)}</select></label>`;
+    if (S.diff.maps === "layer") h += `<label>Layer <input type="range" id="layer" min="1" max="${S.diff.nz}" value="${s.layer || 1}"> <span>${s.layer || 1}</span></label>`;
+    else if (S.diff.maps === "zone") h += `<label>Zone <select id="zone">${opt(S.diff.zones, s.zone)}</select></label>`;
+  }
   el.innerHTML = h;
   const on = (id, fn) => { const x = $(id); if (x) x.oninput = fn; };
   on("kw", e => { s.kw = e.target.value; delete s.log; draw(); });
@@ -170,6 +204,8 @@ function controls() {
   on("along", e => { s.along = e.target.value; draw(); });
   on("through", e => { if (e.target.value !== "cell") { s.well = e.target.value; delete s.cell; } draw(); });
   on("wellsel", e => { s.well = e.target.value; draw(); });
+  on("base", e => { loadDiff(+e.target.value); });
+  on("zone", e => { s.zone = e.target.value; draw(); });
 }
 
 function openTab(t, spec) {
@@ -178,7 +214,9 @@ function openTab(t, spec) {
   const isF = t === "findings";
   $("findings").style.display = isF ? "block" : "none";
   $("plot").style.display = isF ? "none" : "block";
+  $("diffinfo").style.display = t === "diff_map" ? "block" : "none";
   if (isF) { $("controls").innerHTML = ""; findings(); return; }
+  if (t === "diff_map" && !spec) { loadDiff(S.spec.fig === "diff_map" ? S.spec.base_version_id : null); return; }
   if (spec) S.spec = { ...spec };
   else if (S.spec.fig !== t) {
     const kw = S.spec.kw || (S.meta.keywords.includes("PORO") ? "PORO" : S.meta.keywords[0]);
@@ -192,6 +230,11 @@ function openTab(t, spec) {
 
 async function draw() {
   controls();
+  if (S.spec.fig === "diff_map" && (!S.diff || !S.diff.base_version_id || !S.diff.maps)) {
+    Plotly.purge("plot");
+    $("plot").innerHTML = `<p class="msg">${!S.diff || !S.diff.base_version_id ? "No earlier version to compare with." : "The versions have different areal grids: compare their maps side by side."}</p>`;
+    return;
+  }
   const spec = { ...S.spec, version_id: S.vid };
   try {
     const r = await api("/api/view", { spec });
@@ -270,37 +313,184 @@ function findings() {
   });
 }
 
-async function loadComments() {
+async function loadComments(force) {
   const r = await api(`/api/comments?version_id=${S.vid}`);
+  const sig = JSON.stringify([r.comments, r.proposals]);
+  S.session = r.session;
+  renderSession();
+  if (!force && sig === S.lastSig) return;
+  const firstLoad = !S.lastSig;
+  S.lastSig = sig;
   S.comments = r.comments;
+  S.proposals = r.proposals;
   renderComments();
+  if (!firstLoad && S.tab !== "findings") draw();      // new pins
+}
+
+function renderSession() {
+  const s = S.session || {};
+  const sig = JSON.stringify(s);
+  if (sig === S.sessionSig) return;        // unchanged: keep the button under the pointer
+  S.sessionSig = sig;
+  $("session").innerHTML = `<span class="dot ${s.listening ? "on" : ""}"></span>
+    <span>${s.listening ? "geo agent listening" : "geo agent not listening"}</span>
+    ${s.waiting_on_you ? `<span class="wait you">${s.waiting_on_you} waiting on you</span>` : ""}
+    ${s.waiting_on_agent ? `<span class="wait agent">${s.waiting_on_agent} waiting on agent</span>` : ""}
+    ${s.open ? `<button class="link" id="endsession">End session</button>` : ""}`;
+  const b = $("endsession");
+  if (b) b.onclick = async () => {
+    try { await api("/api/session/end", { version_id: S.vid }); await loadComments(true); }
+    catch (e) { alert(e.message); }
+  };
+}
+
+function viewLabel(v) {
+  return `${v.fig}${v.kw ? " " + v.kw : ""}${v.layer ? " layer " + v.layer : ""}${v.zone ? " zone " + v.zone : ""}${v.well ? " " + v.well : ""}${v.cell ? " cell " + v.cell.join(",") : ""}`;
+}
+
+function proposalCard(p) {
+  if (!p) return "";
+  const rows = p.changes.map(c => `<tr><td>${esc(c.key)}</td><td>${esc(JSON.stringify(c.old))}</td><td>→</td><td><b>${esc(JSON.stringify(c.new))}</b></td></tr>`).join("");
+  let acts = "";
+  if (p.status === "proposed")
+    acts = `<div class="acts"><button class="primary" data-acc="${p.id}">Accept</button>
+      <input placeholder="why not (to reject)" id="rej${p.id}"><button data-rej="${p.id}">Reject</button></div>`;
+  else acts = `<div class="msg">${esc(p.status)}${p.reviewer ? " by " + esc(p.reviewer) : ""}${p.built_version ? ` · built v${p.built_version}` : ""}${p.comment ? ": " + esc(p.comment) : ""}</div>`;
+  return `<div class="prop"><b>Proposal #${p.id}</b> on v${p.base_version}<table>${rows}</table>
+    ${p.expected ? `<div class="msg">Expected: ${esc(typeof p.expected === "string" ? p.expected : JSON.stringify(p.expected))}</div>` : ""}
+    ${p.built_version_id ? `<button class="link" data-diff="${p.built_version_id}" data-base="${p.base_version_id}">diff v${p.built_version} vs v${p.base_version}</button>` : ""}${acts}</div>`;
 }
 
 function renderComments() {
-  const onlyV = $("onlyv").checked, onlyO = $("onlyopen").checked;
-  const cs = S.comments.filter(c => (!onlyV || c.version_id === S.vid) && (!onlyO || c.status === "open")).reverse();
-  $("comments").innerHTML = cs.length ? cs.map(c => `<div class="c" id="c${c.id}">
+  // keep what is being typed
+  document.querySelectorAll("textarea[data-draft]").forEach(t => S.drafts[t.dataset.draft] = t.value);
+  const onlyV = $("onlyv").checked, onlyO = $("onlyopen").checked, onlyMe = $("onlyme").checked;
+  const cs = S.comments.filter(c => (!onlyV || c.version_id === S.vid) && (!onlyO || c.status === "open")
+                                 && (!onlyMe || c.waiting_on === "reviewer")).reverse();
+  const shownProps = new Set();
+  $("comments").innerHTML = cs.length ? cs.map(c => {
+    const msgs = (c.messages || []).map(m => {
+      let card = "";
+      if (m.proposal_id && m.kind === "proposal" && !shownProps.has(m.proposal_id)) {
+        shownProps.add(m.proposal_id);
+        card = proposalCard(S.proposals[m.proposal_id]);
+      }
+      return `<div class="m ${esc(m.author_role)}"><div class="who"><b>${esc(m.author)}</b> <span class="kind">${esc(m.kind)}</span> ${esc(m.created_at)}</div>
+        <div class="txt">${esc(m.body)}</div>
+        ${(m.views || []).map((v, n) => `<button class="link" data-mv="${m.id}:${n}">open view: ${esc(viewLabel(v))}</button>`).join(" ")}
+        ${m.version_id && m.kind !== "message" ? ` <button class="link" data-goto="${m.version_id}">open that version</button>` : ""}
+        ${card}</div>`;
+    }).join("");
+    const w = c.waiting_on === "reviewer" ? `<span class="wait you">waiting on you</span>` :
+              c.waiting_on === "modeler" ? `<span class="wait agent">waiting on agent</span>` : "";
+    const open = S.replyOpen.has(c.id);
+    return `<div class="c" id="c${c.id}">
     <div class="top"><b>#${c.id}</b> v${c.version} · ${esc(c.severity)} · <span class="st-${esc(c.status)}">${esc(c.status)}</span>
-      · ${esc(c.label)} · ${esc(c.reviewer)} · ${esc(c.created_at)}
+      ${w} · ${esc(c.label)} · ${esc(c.reviewer)} · ${esc(c.created_at)}
       ${c.view ? `<button class="link" data-v="${c.id}">show view</button>` : ""}</div>
     <div class="body">${esc(c.comment)}</div>
-    ${c.response ? `<div class="ans">${esc(c.response)}${c.addressed_in_version_id ? ` (version id ${c.addressed_in_version_id})` : ""}</div>` : ""}
-  </div>`).join("") : `<div class="msg">No comments yet.</div>`;
-  $("comments").querySelectorAll("button[data-v]").forEach(b => b.onclick = () => showView(+b.dataset.v));
+    ${msgs}
+    ${open ? `<div class="reply"><textarea data-draft="${c.id}" placeholder="${c.status === "open" ? "Reply" : "Writing here reopens it"}">${esc(S.drafts[c.id] || "")}</textarea>
+      <div class="row"><button class="primary" data-send="${c.id}">Send</button><button data-cancel="${c.id}">Cancel</button>
+      ${S.viewForComment ? `<label class="msg"><input type="checkbox" data-withview="${c.id}"> with current view</label>` : ""}</div></div>`
+           : `<button class="link" data-open="${c.id}">${c.status === "open" ? "Reply" : "Reopen"}</button>`}
+  </div>`;
+  }).join("") : `<div class="msg">No comments yet.</div>`;
+  const q = sel => $("comments").querySelectorAll(sel);
+  q("button[data-v]").forEach(b => b.onclick = () => showView(+b.dataset.v));
+  q("button[data-open]").forEach(b => b.onclick = () => { S.replyOpen.add(+b.dataset.open); renderComments(); });
+  q("button[data-cancel]").forEach(b => b.onclick = () => { S.replyOpen.delete(+b.dataset.cancel); delete S.drafts[b.dataset.cancel]; renderComments(); });
+  q("button[data-send]").forEach(b => b.onclick = () => sendReply(+b.dataset.send));
+  q("button[data-goto]").forEach(b => b.onclick = () => { location.search = `?version_id=${b.dataset.goto}`; });
+  q("button[data-diff]").forEach(b => b.onclick = () => { location.search = `?version_id=${b.dataset.diff}&diff=${b.dataset.base}`; });
+  q("button[data-mv]").forEach(b => b.onclick = () => {
+    const [mid, n] = b.dataset.mv.split(":").map(Number);
+    const m = S.comments.flatMap(c => c.messages || []).find(m => m.id === mid);
+    if (m) openViewSpec(m.views[n]);
+  });
+  q("button[data-acc]").forEach(b => b.onclick = () => decide(+b.dataset.acc, "accept"));
+  q("button[data-rej]").forEach(b => b.onclick = () => decide(+b.dataset.rej, "reject", $(`rej${b.dataset.rej}`).value));
+}
+
+async function sendReply(id) {
+  const t = document.querySelector(`textarea[data-draft="${id}"]`);
+  const body = (t ? t.value : "").trim();
+  if (!body) return;
+  const wv = document.querySelector(`input[data-withview="${id}"]`);
+  try {
+    await api("/api/messages", { feedback_id: id, body, views: wv && wv.checked && S.viewForComment ? [{ ...S.viewForComment, version_id: S.vid }] : null });
+    S.replyOpen.delete(id); delete S.drafts[id];
+    await loadComments(true);
+  } catch (e) { alert(e.message); }
+}
+
+async function decide(pid, action, comment) {
+  if (action === "accept" && !confirm(`Accept proposal #${pid}? The geo agent will build a new version from it.`)) return;
+  try { await api("/api/proposals/decide", { proposal_id: pid, action, comment: comment || null }); await loadComments(true); }
+  catch (e) { alert(e.message); }
+}
+
+function openViewSpec(v) {
+  if (!v) return;
+  if (v.version_id && v.version_id !== S.vid) {
+    location.search = `?version_id=${v.version_id}&view=${encodeURIComponent(JSON.stringify(v))}`;
+    return;
+  }
+  if (v.fig === "diff_map") { S.diff = null; loadDiff(v.base_version_id, v); return; }
+  openTab(v.fig, v);
 }
 
 function showView(id) {
   const c = S.comments.find(c => c.id === id);
   if (!c || !c.view) return;
-  if (c.version_id !== S.vid) { location.search = `?version_id=${c.version_id}`; return; }
-  openTab(c.view.fig, c.view);
   highlight(id);
+  openViewSpec({ ...c.view, version_id: c.version_id });
 }
 
 function highlight(id) {
   document.querySelectorAll(".c.hl").forEach(e => e.classList.remove("hl"));
   const el = $(`c${id}`);
   if (el) { el.classList.add("hl"); el.scrollIntoView({ behavior: "smooth", block: "nearest" }); }
+}
+
+async function loadDiff(base, spec) {
+  try {
+    const r = await api(`/api/diff?version_id=${S.vid}${base ? "&base=" + base : ""}`);
+    S.diff = r.diff;
+  } catch (e) { $("hint").textContent = e.message; $("hint").className = "msg err"; return; }
+  const d = S.diff;
+  renderDiffInfo();
+  const kw = (spec && spec.kw) || ((d.keywords || []).includes("PORO") ? "PORO" : (d.keywords || [])[0]);
+  const s = spec ? { ...spec } : { fig: "diff_map", kw, base_version_id: d.base_version_id };
+  s.base_version_id = d.base_version_id;
+  if (d.maps === "layer" && !s.layer && !s.zone) s.layer = 1;
+  if (d.maps === "zone") { delete s.layer; s.zone = s.zone || d.zones[0]; }
+  openTab("diff_map", s);
+}
+
+function renderDiffInfo() {
+  const d = S.diff, el = $("diffinfo");
+  if (!d || !d.base_version_id) { el.innerHTML = ""; return; }
+  const fmt = v => v === null || v === undefined ? "–" : typeof v === "number" ? (Math.abs(v) >= 1e5 ? v.toExponential(3) : +v.toPrecision(5)) : esc(v);
+  const ch = v => v === null || v === undefined ? "" : (v > 0 ? "+" : "") + fmt(v);
+  const f = d.findings;
+  el.innerHTML = `<h3>v${d.version} against v${d.base_version} · maps compared ${d.maps ? "by " + d.maps : "not at all (different areal grid)"}</h3>
+    ${d.proposals.map(p => `<div class="msg">Built from proposal #${p.id}: ${esc(p.rationale)}</div>`).join("")}
+    <h3>Spec</h3>${d.spec.length ? `<table>${d.spec.map(c => `<tr><td>${esc(c.key)}</td><td>${esc(JSON.stringify(c.old))}</td><td>${esc(JSON.stringify(c.new))}</td></tr>`).join("")}</table>` : `<div class="msg">Same spec.</div>`}
+    <h3>QC findings</h3><div>fixed ${f.fixed.length} · still ${f.still.length} · new ${f.new.length}</div>
+    ${[["fixed", "pass"], ["still", "warn"], ["new", "fail"]].map(([k, cls]) => f[k].map(x => `<div><span class="badge ${cls}">${k}</span> ${esc(x.finding)} <span class="msg">${esc(x.detail || "")}</span></div>`).join("")).join("")}
+    <h3>Numbers</h3><table><tr><th></th><th>v${d.base_version}</th><th>v${d.version}</th><th>change</th></tr>
+    ${d.numbers.map(n => `<tr><td>${esc(n.key)}</td><td class="num">${fmt(n.old)}</td><td class="num">${fmt(n.new)}</td><td class="num">${ch(n.change)}</td></tr>`).join("")}</table>
+    ${d.threads.length ? `<h3>Comments this version answers</h3>${d.threads.map(t => `<div>#${t.id} [${esc(t.label)}] ${esc(t.comment)}
+      ${t.view ? `<button class="link" data-dv="${t.id}:new">view on v${d.version}</button> <button class="link" data-dv="${t.id}:old">on v${d.base_version}</button>` : ""}</div>`).join("")}` : ""}`;
+  el.querySelectorAll("button[data-dv]").forEach(b => b.onclick = () => {
+    const [id, which] = b.dataset.dv.split(":");
+    const t = d.threads.find(t => t.id === +id);
+    const v = { ...t.view };
+    delete v.version_id;
+    if (v.fig === "layer_map" && v.layer > S.meta.grid[2]) v.layer = S.meta.grid[2];
+    openViewSpec({ ...v, version_id: which === "new" ? d.version_id : d.base_version_id });
+  });
 }
 
 $("post").onclick = async () => {
@@ -313,12 +503,13 @@ $("post").onclick = async () => {
                                            anchor: S.anchor, view: S.viewForComment ? { ...S.viewForComment, version_id: S.vid } : null });
     $("text").value = "";
     $("postmsg").textContent = `Comment #${r.feedback.id} added.`;
-    await loadComments();
+    await loadComments(true);
     if (S.tab !== "findings") draw();
   } catch (e) { $("postmsg").className = "msg err"; $("postmsg").textContent = e.message; }
 };
 $("onlyv").onchange = renderComments;
 $("onlyopen").onchange = renderComments;
+$("onlyme").onchange = renderComments;
 $("version").onchange = e => { location.search = `?version_id=${e.target.value}`; };
 
 (async () => {
@@ -326,8 +517,13 @@ $("version").onchange = e => { location.search = `?version_id=${e.target.value}`
     await loadMeta();
     tabs();
     select({}, "general", null, null);
-    openTab("layer_map");
-    await loadComments();
+    let v = null;
+    try { v = qs.get("view") ? JSON.parse(qs.get("view")) : null; } catch (e) {}
+    if (qs.get("diff")) loadDiff(+qs.get("diff"));
+    else if (v) openViewSpec({ ...v, version_id: S.vid });
+    else openTab("layer_map");
+    await loadComments(true);
+    setInterval(() => loadComments().catch(() => {}), 4000);
   } catch (e) { $("hint").textContent = e.message; $("hint").className = "msg err"; }
 })();
 </script>

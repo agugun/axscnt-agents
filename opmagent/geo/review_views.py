@@ -31,7 +31,7 @@ from ..core.errors import INVALID_INPUT, NOT_FOUND, ToolError
 from ..notebooks import geo_qc_lib as gq
 from ..notebooks import runner
 
-FIGS = ("surfaces", "layer_map", "section", "well", "at_wells", "distributions", "poroperm")
+FIGS = ("surfaces", "layer_map", "section", "well", "at_wells", "distributions", "poroperm", "diff_map")
 ANCHOR_KEYS = {"well", "cell", "kw", "layer", "zone", "surface", "column", "finding", "text"}
 
 
@@ -90,8 +90,9 @@ def _int(v, name, lo, hi):
     return n
 
 
-def check_spec(spec: dict, data: dict) -> dict:
-    """The spec with its arguments checked against the model and the defaults filled in."""
+def check_spec(spec: dict, data: dict, base: dict | None = None) -> dict:
+    """The spec with its arguments checked against the model and the defaults filled in. diff_map (this version
+    minus base_version_id, by layer or by zone mean) needs base: that version's data."""
     if not isinstance(spec, dict) or spec.get("fig") not in FIGS:
         raise ToolError(INVALID_INPUT, f"view: 'fig' must be one of {FIGS}")
     fig, out = spec["fig"], {"fig": spec["fig"], "version_id": data["version_id"]}
@@ -99,12 +100,13 @@ def check_spec(spec: dict, data: dict) -> dict:
         raise ToolError(INVALID_INPUT, f"view is of version {spec['version_id']}, not {data['version_id']}")
     known = {"fig", "version_id"} | {"surfaces": set(), "layer_map": {"kw", "layer", "log"},
                                      "section": {"kw", "along", "well", "cell", "log"}, "well": {"well"},
-                                     "at_wells": set(), "distributions": set(), "poroperm": set()}[fig]
+                                     "at_wells": set(), "distributions": set(), "poroperm": set(),
+                                     "diff_map": {"kw", "layer", "zone", "base_version_id"}}[fig]
     extra = set(spec) - known
     if extra:
         raise ToolError(INVALID_INPUT, f"view {fig}: unknown argument(s) {sorted(extra)}")
     wells = set(meta(data)["wells"])
-    if fig in ("layer_map", "section"):
+    if fig in ("layer_map", "section", "diff_map"):
         kw = spec.get("kw", "PORO")
         if kw not in data["keywords"]:
             raise ToolError(INVALID_INPUT, f"view: keyword {kw!r} is not in this model ({data['keywords']})")
@@ -131,6 +133,27 @@ def check_spec(spec: dict, data: dict) -> dict:
         if w is None or str(w) not in wells:
             raise ToolError(INVALID_INPUT, f"view: no well {w!r} in this model")
         out["well"] = str(w)
+    if fig == "diff_map":
+        from .review_diff import comparable
+        if base is None or int(spec.get("base_version_id") or 0) != base["version_id"]:
+            raise ToolError(INVALID_INPUT, "view diff_map: base_version_id is the version to subtract")
+        if base["model_name"] != data["model_name"]:
+            raise ToolError(INVALID_INPUT, "view diff_map: both versions must be of the same model")
+        if out["kw"] not in base["keywords"]:
+            raise ToolError(INVALID_INPUT, f"view diff_map: {out['kw']} is not in the base version")
+        mode = comparable(data, base)
+        out["base_version_id"] = base["version_id"]
+        out.pop("log", None)
+        if mode is None:
+            raise ToolError(INVALID_INPUT, "view diff_map: the versions have different areal grids; compare their "
+                                           "maps side by side")
+        if mode == "layer" and spec.get("zone") is None:
+            out["layer"] = _int(spec.get("layer", 1), "layer", 1, data["nz"])
+        else:
+            names = [z["zone"] for z in zones(data)]
+            out["zone"] = spec.get("zone") or names[0]
+            if out["zone"] not in names:
+                raise ToolError(INVALID_INPUT, f"view diff_map: no zone {out['zone']!r} ({names})")
     return out
 
 
@@ -209,7 +232,16 @@ def _section_ij(data, spec):
     return int(wc.loc[spec["well"], "i"]), int(wc.loc[spec["well"], "j"])
 
 
-def figure(spec: dict, data: dict, pins: list[dict] = ()):
+def diff_values(spec: dict, data: dict, base: dict) -> np.ndarray:
+    """This version minus the base: one layer, or the zone means (layering changed)."""
+    from .review_diff import zone_mean
+    kw = spec["kw"]
+    if "layer" in spec:
+        return data["arrays"][kw][spec["layer"] - 1] - base["arrays"][kw][spec["layer"] - 1]
+    return zone_mean(data, kw, spec["zone"]) - zone_mean(base, kw, spec["zone"])
+
+
+def figure(spec: dict, data: dict, pins: list[dict] = (), base: dict | None = None):
     """The plotly figure for a checked spec. Each trace has meta.role, which locate() turns a click into an anchor
     with. pins: comments on this version (with 'anchor'), drawn where their anchor is on this view."""
     import plotly.graph_objects as go
@@ -262,6 +294,23 @@ def figure(spec: dict, data: dict, pins: list[dict] = ()):
             t.meta = {"role": "at_wells" if t.mode == "markers" else "skip"}
     elif fig_name == "distributions":
         fig = gq.fig_distributions(data)
+    elif fig_name == "diff_map":
+        d = diff_values(spec, data, base)
+        xs, ys = gq.cell_centres(data)
+        lim = float(np.nanmax(np.abs(d))) or 1e-9
+        where = f"layer {spec['layer']}" if "layer" in spec else f"zone {spec['zone']} (zone mean)"
+        fig = go.Figure(go.Heatmap(x=xs, y=ys, z=d, colorscale="RdBu", zmid=0, zmin=-lim, zmax=lim, meta={"role": "layer"},
+                                   colorbar=dict(title=f"Δ {spec['kw']}"),
+                                   hovertemplate="x %{x:.0f}<br>y %{y:.0f}<br>Δ %{z:.4g}<extra></extra>"))
+        wc = gq.well_cells(data)
+        fig.add_trace(go.Scatter(x=wc["x"], y=wc["y"], mode="markers+text", text=wc["well_name"].astype(str),
+                                 textposition="top center", meta={"role": "wells"}, showlegend=False,
+                                 textfont=dict(color="black", size=13, shadow="1px 1px 2px white"),
+                                 marker=dict(color="white", size=9, line=dict(color="black", width=1)),
+                                 hovertemplate="%{text}<extra></extra>"))
+        fig.update_layout(**{**gq.LAYOUT, "height": 520},
+                          title=f"{spec['kw']} v{data['version']} minus v{base['version']}, {where}")
+        fig.update_yaxes(scaleanchor="x", scaleratio=1)
     else:
         fig = gq.fig_poroperm(data)
     return fig
@@ -280,6 +329,8 @@ def locate(spec: dict, data: dict, role: str | None, point: dict) -> dict:
         return {"surface": point.get("surface"), "column": [i + 1, j + 1]}
     if role == "layer" and x is not None:
         i, j = _xy_to_ij(data, x, y)
+        if "layer" not in spec:      # a zone-mean difference map: the column in that zone
+            return {"column": [i + 1, j + 1], "zone": spec["zone"], "kw": spec["kw"]}
         a = {"cell": [i + 1, j + 1, spec["layer"]], "kw": spec["kw"]}
         w = _well_at(data, i, j)
         return {**a, "well": w} if w else a
@@ -375,7 +426,7 @@ def describe(anchor: dict, data: dict) -> dict:
     return out
 
 
-def summarize(spec: dict, data: dict) -> dict:
+def summarize(spec: dict, data: dict, base: dict | None = None) -> dict:
     """In words and numbers, what a view shows (the agent can't see the picture)."""
     f, arr = spec["fig"], data["arrays"]
     out = {"view": spec}
@@ -410,6 +461,14 @@ def summarize(spec: dict, data: dict) -> dict:
     elif f == "distributions":
         out["shows"] = "porosity and log10 permeability histograms, model cells against log samples"
         out["model_mean_phi"] = _r(arr["PORO"].mean())
+    elif f == "diff_map":
+        out["shows"] = (f"{spec['kw']} difference, this version minus version id {spec['base_version_id']}, "
+                        + (f"layer {spec['layer']}" if "layer" in spec else f"zone {spec['zone']} mean"))
+        if base is not None:
+            d = diff_values(spec, data, base)
+            out["range"] = {"min": _r(d.min()), "mean": _r(d.mean()), "max": _r(d.max())}
+            wc = gq.well_cells(data)
+            out["at_wells"] = {str(r.well_name): _r(d[r.j, r.i]) for r in wc.itertuples()}
     else:
         out["shows"] = "porosity against permeability: model cells, log samples and upscaled values"
     return out

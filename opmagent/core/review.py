@@ -4,6 +4,12 @@ The reviewer (a person, through the reviewer profile or `opmagent review comment
 comment is recorded here too. The modeler reads the open comments on its model (any version), builds a new
 version that deals with them, and answers each one: addressed (with the version that addresses it) or wontfix
 (with the reason). A comment itself can never be changed, only answered. Approvals stay in `approvals`.
+
+Threads (the geo review workbench, phase 2): under a comment, review_messages holds the conversation, append-only.
+The comment is the engineer's first word. A thread is **waiting on the modeler** while it is open and the engineer
+wrote last (or nobody has replied yet), and **waiting on the reviewer** while it is open and the modeler wrote last.
+The modeler's answer closes it and is kept as a message too. The engineer can reopen an answered thread by writing
+in it. Proposals, their decisions and builds are messages in the threads they answer (core/proposals.py).
 """
 from __future__ import annotations
 
@@ -38,7 +44,96 @@ def get(con, feedback_id: int) -> dict:
     d["version"] = models.header(con, d["model_kind"], d["version_id"])["version"]
     d["anchor"], d["view"] = parse_item(d["item"])
     d["label"] = label(d["anchor"])
+    last = con.execute("SELECT author_role FROM review_messages WHERE feedback_id = ? ORDER BY id DESC LIMIT 1",
+                       (feedback_id,)).fetchone()
+    d["waiting_on"] = None if d["status"] != "open" else ("reviewer" if last and last[0] == "modeler" else "modeler")
     return d
+
+
+def thread(con, feedback_id: int) -> dict:
+    """The comment with all its messages, oldest first."""
+    f = get(con, feedback_id)
+    f["messages"] = messages(con, feedback_id)
+    return f
+
+
+def messages(con, feedback_id: int) -> list[dict]:
+    out = []
+    for r in con.execute("SELECT * FROM review_messages WHERE feedback_id = ? ORDER BY id", (feedback_id,)):
+        m = dict(r)
+        m["views"] = json.loads(m.pop("views_json") or "[]")
+        out.append(m)
+    return out
+
+
+def add_message(con, feedback_id: int, role: str, author: str, body: str, *, views: list[dict] | None = None,
+                kind: str = "message", notebook_file_id: int | None = None, proposal_id: int | None = None,
+                version_id: int | None = None, modeler_kind: str | None = None) -> dict:
+    """A message in a thread. The reviewer writing in an answered thread reopens it; the modeler writes only in
+    open threads on its own kind (modeler_kind). Views are checked by the caller (they need the model)."""
+    if role not in ("reviewer", "modeler"):
+        raise ToolError(INVALID_INPUT, "role must be reviewer or modeler")
+    if not (body or "").strip():
+        raise ToolError(INVALID_INPUT, "a message needs text")
+    f = get(con, feedback_id)
+    if role == "modeler":
+        if modeler_kind and f["model_kind"] != modeler_kind:
+            raise ToolError(FORBIDDEN, f"comment {feedback_id} is on a {f['model_kind']} model")
+        if f["status"] != "open":
+            raise ToolError(INVALID_INPUT, f"comment {feedback_id} is {f['status']}; the reviewer reopens it by "
+                                           "writing in it")
+    elif f["status"] != "open":
+        con.execute("UPDATE review_feedback SET status = 'open', response = NULL, addressed_in_version_id = NULL, "
+                    "answered_at = NULL WHERE id = ?", (feedback_id,))
+        kind = "reopen" if kind == "message" else kind
+    mid = con.execute("INSERT INTO review_messages(feedback_id, author_role, author, body, kind, views_json, "
+                      "notebook_file_id, proposal_id, version_id) VALUES (?,?,?,?,?,?,?,?,?)",
+                      (feedback_id, role, author, body.strip(), kind, json.dumps(views) if views else None,
+                       notebook_file_id, proposal_id, version_id)).lastrowid
+    m = dict(con.execute("SELECT * FROM review_messages WHERE id = ?", (mid,)).fetchone())
+    m["views"] = json.loads(m.pop("views_json") or "[]")
+    return m
+
+
+def waiting(con, kind: str, model_name: str) -> dict:
+    """Open threads on a model by whom they wait on: {"modeler": [ids], "reviewer": [ids]}."""
+    out = {"modeler": [], "reviewer": []}
+    for r in con.execute("SELECT id FROM review_feedback WHERE model_kind = ? AND model_name = ? AND status = 'open' "
+                         "ORDER BY id", (kind, model_name)):
+        out[get(con, r[0])["waiting_on"]].append(r[0])
+    return out
+
+
+# ---------------------------------------------------------------- live review sessions (await_review_activity)
+LISTENING_S = 60     # the agent counts as listening this long after its last wait
+
+
+def session_touch(con, kind: str, model_name: str, agent: str) -> dict:
+    """The agent is waiting: start the model's session if none is open, else note it is still there."""
+    r = con.execute("SELECT id FROM review_sessions WHERE model_kind = ? AND model_name = ? AND ended_at IS NULL",
+                    (kind, model_name)).fetchone()
+    if r:
+        con.execute("UPDATE review_sessions SET last_seen_at = datetime('now') WHERE id = ?", (r[0],))
+        sid = r[0]
+    else:
+        sid = con.execute("INSERT INTO review_sessions(model_kind, model_name, agent) VALUES (?,?,?)",
+                          (kind, model_name, agent)).lastrowid
+    return dict(con.execute("SELECT * FROM review_sessions WHERE id = ?", (sid,)).fetchone())
+
+
+def session_end(con, kind: str, model_name: str, by: str) -> bool:
+    n = con.execute("UPDATE review_sessions SET ended_at = datetime('now'), ended_by = ? WHERE model_kind = ? AND "
+                    "model_name = ? AND ended_at IS NULL", (by, kind, model_name)).rowcount
+    return n > 0
+
+
+def session_state(con, kind: str, model_name: str) -> dict:
+    r = con.execute("SELECT *, (julianday('now') - julianday(last_seen_at)) * 86400 AS idle_s FROM review_sessions "
+                    "WHERE model_kind = ? AND model_name = ? ORDER BY id DESC LIMIT 1", (kind, model_name)).fetchone()
+    if not r:
+        return {"session": None, "listening": False}
+    d = dict(r)
+    return {"session": d, "listening": d["ended_at"] is None and d["idle_s"] < LISTENING_S}
 
 
 def list_feedback(con, kind: str | None = None, model_name: str | None = None, version_id: int | None = None,
@@ -72,6 +167,10 @@ def answer(con, feedback_id: int, response: str, status: str = "addressed", addr
     con.execute("UPDATE review_feedback SET status = ?, response = ?, addressed_in_version_id = ?, answered_at = ? "
                 "WHERE id = ?", (status, response.strip(), addressed_in_version_id,
                                  datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"), feedback_id))
+    # the thread keeps every answer (a reopened thread's response is cleared; its history is here)
+    con.execute("INSERT INTO review_messages(feedback_id, author_role, author, body, kind, version_id) "
+                "VALUES (?, 'modeler', ?, ?, 'answer', ?)",
+                (feedback_id, f"{f['model_kind']} modeler", f"{status}: {response.strip()}", addressed_in_version_id))
     return get(con, feedback_id)
 
 

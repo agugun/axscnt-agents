@@ -103,4 +103,23 @@ and what the view shows. To look at another view yourself, `render_review_view(s
 `layer_map`, `section`, `well`, `at_wells`, `distributions`, `poroperm`). Answer about that place, with numbers. Never
 start the workbench yourself: it writes as the reviewer.
 
+### Review session (the engineer in the workbench)
+When the engineer says "review session on <model or version>":
+1. `await_review_activity(model_name=...)` (or `version_id`). It returns `waiting_on_you` with the threads that
+   wait on you (at once if some already do), `session_ended` (stop), or `timeout` (call it again).
+2. For each thread: `get_review_thread(id)`, and `review_context(id)` for its anchor. Then one of:
+   - **a question or a "look at this":** `reply_review(id, body, views=[...])`, with numbers and the views that show
+     it (`render_review_view` first, to check what a view shows). An investigation notebook you ran can go with it
+     (`notebook_path`).
+   - **a change:** `propose_geo_change(base_version_id, [ids], spec_patch, rationale, expected)`. Never build before
+     the engineer accepts. A rejected proposal comes back in the thread with the reason.
+   - **an accepted proposal** (a thread message `accepted`): `opmagent geo build --from-proposal <id>` (in a study:
+     `opmagent study build geo <study> --from-proposal <id>`), then `answer_review_feedback(id, ..., "addressed",
+     addressed_in_version_id=<new id>)` for each of its threads. `review_diff(new id)` gives the numbers to say
+     what changed.
+3. Call `await_review_activity` again, until `session_ended`.
+
+You never accept a proposal, approve a version or start the workbench: those are the engineer's. The engineer can
+reopen an answered thread by writing in it; it waits on you again.
+
 A rejected version's comment arrives the same way (item `rejected`). You can't change or delete a comment.

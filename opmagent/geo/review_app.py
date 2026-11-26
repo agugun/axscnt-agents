@@ -12,6 +12,10 @@ The app is the engineer's, never an agent's:
 - `opmagent setup` puts `opmagent geo review` under "ask" for the agents.
 Approve and reject stay in `opmagent review` (the app shows the command).
 
+Phase 2: threads (the engineer's replies; writing in an answered one reopens it), proposal accept / reject (the
+reviewer profile's decide_geo_proposal, audited), the version diff, and the live session state (the geo agent
+waiting in await_review_activity; the engineer ends it here).
+
 The standard library's HTTP server, one request at a time: one engineer, one SQLite connection.
 """
 from __future__ import annotations
@@ -26,6 +30,8 @@ from ..core import db, models
 from ..core import review as rv
 from ..core.errors import FORBIDDEN, INVALID_INPUT, NOT_FOUND, ToolError
 from ..servers.data_server import DataService, wrap
+from ..core import proposals as props
+from . import review_diff
 from . import review_views as views
 
 STATIC = Path(__file__).with_name("review_static")
@@ -72,17 +78,19 @@ class ReviewApp:
                                       f"opmagent review reject geo {vid} --comment \"...\""]
         return out
 
-    def view(self, body: dict) -> dict:
-        vid = int(body.get("spec", {}).get("version_id") or self.version_id)
+    def _spec(self, raw: dict):
+        vid = int((raw or {}).get("version_id") or self.version_id)
         d = self.data(vid)
-        spec = views.check_spec(body.get("spec") or {}, d)
-        fig = views.figure(spec, d, self._pins(vid))
+        b = self.data(int(raw["base_version_id"])) if (raw or {}).get("base_version_id") else None
+        return views.check_spec(raw or {}, d, b), d, b
+
+    def view(self, body: dict) -> dict:
+        spec, d, b = self._spec(body.get("spec"))
+        fig = views.figure(spec, d, self._pins(d["version_id"]), base=b)
         return {"spec": spec, "figure": json.loads(fig.to_json())}
 
     def locate(self, body: dict) -> dict:
-        vid = int(body.get("spec", {}).get("version_id") or self.version_id)
-        d = self.data(vid)
-        spec = views.check_spec(body.get("spec") or {}, d)
+        spec, d, _ = self._spec(body.get("spec"))
         a = views.locate(spec, d, body.get("role"), body.get("point") or {})
         if "comment" in a:
             return {"comment": a["comment"]}
@@ -90,13 +98,48 @@ class ReviewApp:
 
     def comments(self, vid: int) -> dict:
         name = models.header(self.con, "geo", vid)["model_name"]
-        return {"comments": rv.list_feedback(self.con, kind="geo", model_name=name, status=None)}
+        cs = rv.list_feedback(self.con, kind="geo", model_name=name, status=None)
+        for c in cs:
+            c["messages"] = rv.messages(self.con, c["id"])
+        ps = {p["id"]: p for p in props.list_proposals(self.con, "geo", name)}
+        return {"comments": cs, "proposals": ps, "session": self.session(vid)}
+
+    def session(self, vid: int) -> dict:
+        name = models.header(self.con, "geo", vid)["model_name"]
+        st = rv.session_state(self.con, "geo", name)
+        w = rv.waiting(self.con, "geo", name)
+        return {"listening": st["listening"], "open": bool(st["session"] and not st["session"]["ended_at"]),
+                "waiting_on_agent": len(w["modeler"]), "waiting_on_you": len(w["reviewer"])}
+
+    def _write(self, tool: str, **kw) -> dict:
+        r = wrap(self.reviewer, tool)(**kw)
+        if not r.get("ok"):
+            raise ToolError(r.get("code", INVALID_INPUT), r.get("message", f"{tool} failed"))
+        return r
+
+    def message(self, body: dict) -> dict:
+        fid = int(body.get("feedback_id") or 0)
+        f = rv.get(self.con, fid)
+        if f["model_kind"] != "geo":
+            raise ToolError(FORBIDDEN, f"comment {fid} is not on a geo model")
+        return self._write("reply_review", feedback_id=fid, body=body.get("body", ""), views=body.get("views") or None)
+
+    def decide(self, body: dict) -> dict:
+        return self._write("decide_geo_proposal", proposal_id=int(body.get("proposal_id") or 0),
+                           action=body.get("action"), comment=body.get("comment"))
+
+    def end_session(self, body: dict) -> dict:
+        name = models.header(self.con, "geo", int(body.get("version_id") or self.version_id))["model_name"]
+        return {"ended": rv.session_end(self.con, "geo", name, self.reviewer._reviewer())}
+
+    def diff(self, vid: int, base: int | None) -> dict:
+        return {"diff": review_diff.diff(self.cfg, self.con, vid, base)}
 
     def add_comment(self, body: dict) -> dict:
         vid = int(body.get("version_id") or self.version_id)
         d = self.data(vid)
         anchor = views.check_anchor(body.get("anchor"))
-        view = views.check_spec(body["view"], d) if body.get("view") else None
+        view = self._spec({**body["view"], "version_id": vid})[0] if body.get("view") else None
         if "finding" in anchor and not any(f"{f['area']}: {f['check']}" == anchor["finding"] for f in d["findings"]):
             raise ToolError(INVALID_INPUT, f"no QC finding {anchor['finding']!r} on this version")
         r = wrap(self.reviewer, "add_review_comment")(kind="geo", version_id=vid, comment=body.get("comment", ""),
@@ -104,7 +147,7 @@ class ReviewApp:
                                                       severity=body.get("severity", "change"))
         if not r.get("ok"):
             raise ToolError(r.get("code", INVALID_INPUT), r.get("message", "comment not added"))
-        return r
+        return {k: v for k, v in r.items() if k != "ok"}
 
     # ------------------------------------------------------------ dispatch
     def handle(self, method: str, path: str, headers: dict, body: bytes = b"") -> tuple[int, str, bytes]:
@@ -130,6 +173,11 @@ class ReviewApp:
                 return _json(200, {"ok": True, **self.meta(int(q.get("version_id", self.version_id)))})
             if method == "GET" and u.path == "/api/comments":
                 return _json(200, {"ok": True, **self.comments(int(q.get("version_id", self.version_id)))})
+            if method == "GET" and u.path == "/api/session":
+                return _json(200, {"ok": True, **self.session(int(q.get("version_id", self.version_id)))})
+            if method == "GET" and u.path == "/api/diff":
+                return _json(200, {"ok": True, **self.diff(int(q.get("version_id", self.version_id)),
+                                                            int(q["base"]) if q.get("base") else None)})
             if method == "POST":
                 try:
                     data = json.loads(body or b"{}")
@@ -139,12 +187,14 @@ class ReviewApp:
                     return _json(200, {"ok": True, **self.view(data)})
                 if u.path == "/api/locate":
                     return _json(200, {"ok": True, **self.locate(data)})
-                if u.path == "/api/comments":
+                writes = {"/api/comments": self.add_comment, "/api/messages": self.message,
+                          "/api/proposals/decide": self.decide, "/api/session/end": self.end_session}
+                if u.path in writes:
                     tok = headers.get("x-review-token") or headers.get("X-Review-Token") or ""
                     if not secrets.compare_digest(tok, self.token):
                         return _json(403, {"ok": False, "code": FORBIDDEN, "message": "the review token is missing or wrong; "
                                                                                        "open the URL printed by opmagent geo review"})
-                    return _json(200, self.add_comment(data))
+                    return _json(200, {"ok": True, **writes[u.path](data)})
             return _json(404, {"ok": False, "code": NOT_FOUND, "message": f"no {method} {u.path}"})
         except ToolError as e:
             return _json(404 if e.code == NOT_FOUND else 400, e.to_dict())
