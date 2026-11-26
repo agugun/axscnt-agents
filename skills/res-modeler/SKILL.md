@@ -70,6 +70,28 @@ Check `get_review_feedback()` before you build. For each comment build a new ver
 with `answer_review_feedback(id, "<what changed>", "addressed", addressed_in_version_id=<new id>)`, or `"wontfix"`
 and why.
 
+### Review session (the engineer in the workbench)
+The engineer reviews a res version in `opmagent res review <id>`: relative permeability and capillary pressure per
+SATNUM, region maps, contacts per EQLNUM, a section of cells at their depths with the contacts, aquifers. Their
+comments are anchored: `{"satnum": 2, "curve": "krw", "s": 0.45}`, `{"eqlnum": 1, "contact": "OWC"}`,
+`{"cell": [i, j, k], "kw": "SATNUM"}` (1-based), `{"aquifer": 1}`, or a QC finding.
+
+When the engineer says "review session on <model or version>":
+1. `await_review_activity(model_name=...)` (or `version_id`): `waiting_on_you` with the threads, `session_ended`
+   (stop), or `timeout` (call it again).
+2. For each thread: `get_review_thread(id)` and `review_context(id)` (the end points, pore volumes per contact
+   interval or the cell's values at the anchor, and what the view shows). Then:
+   - **a question:** `reply_review(id, body, views=[...])` with numbers and views (`render_review_view` first;
+     figs `kr`, `pc`, `regions`, `contacts`, `contact_section`, `aquifers`).
+   - **a change:** `preview_res_change(base_version_id, spec_patch)` (well under a second: pore volume in the gas
+     cap, oil column and water per EQLNUM, end points per SATNUM, QC findings), then
+     `propose_res_change(base_version_id, [ids], spec_patch, rationale, expected, preview_id=...)`. A list in the
+     spec (several contacts or rock types) is replaced whole by the patch. Never build before it is accepted.
+   - **an accepted proposal** (yours, or the engineer's own, already accepted): `opmagent res build --from-proposal
+     <id>` (in a study: `opmagent study build res <study> --from-proposal <id>`), then `answer_review_feedback` on
+     its threads with the new version; `review_diff(new id)` says what changed.
+3. Call `await_review_activity` again until `session_ended`. Never accept, approve or start the workbench.
+
 ## Rules
 - Never invent SCAL, contacts or pressures; never edit table numbers by hand; never approve.
 - Units follow the geo version (METRIC: bar, m, 1/bar).

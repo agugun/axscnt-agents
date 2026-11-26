@@ -144,7 +144,11 @@ def test_anchored_comment_reaches_the_agent(cfg, geo):
 
 def test_tools_and_profiles():
     assert {"review_context", "render_review_view"} <= set(TOOLS["geo"]) & set(TOOLS["reviewer"])
-    assert "review_context" not in TOOLS["res"] and "add_review_comment" not in TOOLS["geo"]
+    assert "add_review_comment" not in TOOLS["geo"]
+    # phase 4: res and well review too; only geo and res propose; nobody but the reviewer decides
+    assert {"review_context", "reply_review", "await_review_activity"} <= set(TOOLS["res"]) & set(TOOLS["well"])
+    assert "propose_res_change" in TOOLS["res"] and not [t for t in TOOLS["well"] if "propose" in t or "preview" in t]
+    assert not [t for p in ("geo", "res", "well") for t in TOOLS[p] if t.startswith(("decide", "request"))]
 
 
 def test_served_on_localhost_only(cfg, geo):

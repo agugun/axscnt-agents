@@ -20,15 +20,15 @@ from ..notebooks import geo_qc_lib as gq
 from . import review_views as views
 
 
-def default_base(con, version_id: int) -> int | None:
+def default_base(con, version_id: int, kind: str = "geo") -> int | None:
     """The version this one should be compared with: the base of the proposal it was built from, else the one before."""
-    h = models.header(con, "geo", version_id)
+    h = models.header(con, kind, version_id)
     pid = (h.get("spec_json") or {}).get("proposal_id")
     if pid:
         r = con.execute("SELECT base_version_id FROM model_proposals WHERE id = ?", (pid,)).fetchone()
         if r:
             return r[0]
-    prev = [m for m in models.list_models(con, "geo") if m["model_name"] == h["model_name"] and m["version"] < h["version"]]
+    prev = [m for m in models.list_models(con, kind) if m["model_name"] == h["model_name"] and m["version"] < h["version"]]
     return max(prev, key=lambda m: m["version"])["version_id"] if prev else None
 
 
@@ -94,9 +94,11 @@ def _r(v):
     return float(f"{v:.5g}") if isinstance(v, (int, float)) and not isinstance(v, bool) else v
 
 
-def compare(new: dict, old: dict) -> dict:
+def compare(new: dict, old: dict, kind: str = "geo") -> dict:
     """Two loaded models (versions or a preview) side by side: spec, numbers, QC findings, how maps compare."""
-    mn, mo = metrics(new), metrics(old)
+    from ..reviews import views as views_for
+    V = views_for(kind)
+    mn, mo = V.metrics(new), V.metrics(old)
     numbers = [{"key": k, "old": _r(mo.get(k)), "new": _r(mn.get(k)), "change": _change(mo.get(k), mn.get(k))}
                for k in list(dict.fromkeys(list(mo) + list(mn)))]
     key = lambda f: f"{f['area']}: {f['check']}"  # noqa: E731
@@ -109,22 +111,25 @@ def compare(new: dict, old: dict) -> dict:
                   for k in fn if fn[k]["status"] in bad and fo.get(k, {}).get("status") in bad],
         "new": [{"finding": k, "status": fn[k]["status"], "detail": fn[k]["detail"]}
                 for k in fn if fn[k]["status"] in bad and fo.get(k, {}).get("status") not in bad]}
-    return {"spec": props.spec_diff(old["spec"], new["spec"]), "numbers": numbers, "findings": findings,
-            "maps": comparable(new, old), "keywords": sorted(set(new["keywords"]) & set(old["keywords"])),
-            "zones": [z["zone"] for z in views.zones(new)], "nz": new["nz"]}
+    return {"spec": props.spec_diff(old.get("spec") or {}, new.get("spec") or {}), "numbers": numbers,
+            "findings": findings, "maps": V.comparable(new, old), **V.diff_extra(new, old)}
 
 
-def diff(cfg, con, version_id: int, base_version_id: int | None = None) -> dict:
-    base_version_id = base_version_id or default_base(con, version_id)
+def diff(cfg, con, version_id: int, base_version_id: int | None = None, kind: str = "geo") -> dict:
+    """The version diff for any reviewable kind (geo, res, well)."""
+    from ..reviews import views as views_for
+    V = views_for(kind)
+    base_version_id = base_version_id or default_base(con, version_id, kind)
     if base_version_id is None:
         return {"version_id": version_id, "base_version_id": None, "message": "no earlier version to compare with"}
-    new, old = views.load_version(cfg, con, version_id), views.load_version(cfg, con, base_version_id)
+    new, old = V.load_version(cfg, con, version_id), V.load_version(cfg, con, base_version_id)
     if new["model_name"] != old["model_name"]:
         from ..core.errors import INVALID_INPUT, ToolError
         raise ToolError(INVALID_INPUT, f"versions {version_id} and {base_version_id} are of different models")
-    c = compare(new, old)
-    built_from = [p for p in props.list_proposals(con, "geo", new["model_name"]) if p["built_version_id"] == version_id]
-    fids = {f["id"] for f in review.list_feedback(con, "geo", new["model_name"], status=None)
+    c = compare(new, old, kind)
+    built_from = [p for p in props.list_proposals(con, kind, new["model_name"]) if p["built_version_id"] == version_id] \
+        if kind in props.KINDS else []
+    fids = {f["id"] for f in review.list_feedback(con, kind, new["model_name"], status=None)
             if f["addressed_in_version_id"] == version_id}
     for p in built_from:
         fids |= set(p["feedback_ids"])

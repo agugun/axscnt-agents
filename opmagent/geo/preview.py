@@ -158,7 +158,7 @@ def run(cfg, con, base_version_id: int, spec_patch: dict, author_role: str, auth
     meta = json.loads((folder / "preview.json").read_text())
     meta["findings"] = d["findings"]
     (folder / "preview.json").write_text(json.dumps(meta, default=float))
-    s = review_diff.compare(d, base)
+    s = review_diff.compare(d, base, "geo")
     summary = {"preview_id": pid, "base_version_id": base_version_id, "base_version": h["version"],
                "grid": f"{g['nx']} x {g['ny']} x {g['nz']}", "elapsed_s": round(elapsed, 2), "spec_patch": spec_patch,
                "changes": changes, **{k: s[k] for k in ("numbers", "findings", "maps")}}

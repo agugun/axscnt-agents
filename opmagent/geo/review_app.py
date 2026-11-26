@@ -32,7 +32,6 @@ from ..core.errors import FORBIDDEN, INVALID_INPUT, NOT_FOUND, ToolError
 from ..servers.data_server import DataService, wrap
 from ..core import proposals as props
 from . import preview, review_diff
-from . import review_views as views
 
 STATIC = Path(__file__).with_name("review_static")
 MAX_BODY = 1 << 20
@@ -41,7 +40,11 @@ MAX_BODY = 1 << 20
 class ReviewApp:
     """The workbench's requests, without the socket (so tests call handle() directly)."""
 
-    def __init__(self, cfg, version_id: int, token: str | None = None):
+    def __init__(self, cfg, version_id: int, token: str | None = None, kind: str = "geo"):
+        from ..reviews import check_kind
+        from ..reviews import views as views_for
+        self.kind = check_kind(kind)
+        self.V = views_for(self.kind)
         self.cfg = cfg
         self.con = db.connect(cfg.database)
         self.reviewer = DataService("reviewer", cfg)
@@ -49,40 +52,45 @@ class ReviewApp:
         self.version_id = int(version_id)
         self.allowed_hosts: set[str] = set()
         self._cache: dict[int, dict] = {}
-        models.header(self.con, "geo", self.version_id)        # NOT_FOUND early
+        models.header(self.con, self.kind, self.version_id)        # NOT_FOUND early
         self.data(self.version_id)                             # no payload: fail at start, not in the browser
 
     # ------------------------------------------------------------ data
     def data(self, vid: int) -> dict:
         if vid not in self._cache:
-            self._cache[vid] = views.load_version(self.cfg, self.con, vid)
+            self._cache[vid] = self.V.load_version(self.cfg, self.con, vid)
         d = self._cache[vid]
-        d["header"]["status"] = models.header(self.con, "geo", vid)["status"]   # the only thing that changes
+        d["header"]["status"] = models.header(self.con, self.kind, vid)["status"]   # the only thing that changes
         return d
 
     def _pins(self, vid: int) -> list[dict]:
-        return [f for f in rv.list_feedback(self.con, kind="geo", version_id=vid, status=None) if f["anchor"]]
+        return [f for f in rv.list_feedback(self.con, kind=self.kind, version_id=vid, status=None) if f["anchor"]]
 
     # ------------------------------------------------------------ endpoints
     def meta(self, vid: int) -> dict:
         d = self.data(vid)
-        h = models.header(self.con, "geo", vid)
+        h = models.header(self.con, self.kind, vid)
         versions = [{"version_id": m["version_id"], "version": m["version"], "status": m["status"]}
-                    for m in models.list_models(self.con, "geo") if m["model_name"] == h["model_name"]]
-        qc = self.reviewer.get_qc_report(kind="geo", version_id=vid)
+                    for m in models.list_models(self.con, self.kind) if m["model_name"] == h["model_name"]]
+        qc = self.reviewer.get_qc_report(kind=self.kind, version_id=vid)
         rep = (qc.get("qc_report") or {}) if qc.get("ok") else {}
-        out = {**views.meta(d), "spec": d["spec"], "can_preview": bool(props.base_spec(self.con, "geo", vid)) and not d.get("db_only"),
+        changeable = self.kind in props.KINDS
+        out = {**self.V.meta(d), "kind": self.kind, "spec": d.get("spec") or {}, "can_propose": changeable,
+               "can_preview": changeable and bool(props.base_spec(self.con, self.kind, vid)) and not d.get("db_only"),
                "versions": sorted(versions, key=lambda v: v["version"]),
                "qc_report": rep.get("path")}
         if h["status"] == "qc_ready":
-            out["review_commands"] = [f"opmagent review approve geo {vid}",
-                                      f"opmagent review reject geo {vid} --comment \"...\""]
+            out["review_commands"] = [f"opmagent review approve {self.kind} {vid}",
+                                      f"opmagent review reject {self.kind} {vid} --comment \"...\""]
         return out
 
     def preview_data(self, pid: int) -> dict:
         key = ("preview", pid)
         if key not in self._cache:
-            self._cache[key] = preview.load(self.cfg, self.con, pid)
+            from ..reviews import load_preview, preview_row
+            if preview_row(self.con, pid)["model_kind"] != self.kind:
+                raise ToolError(NOT_FOUND, f"no {self.kind} preview {pid}")
+            self._cache[key] = load_preview(self.cfg, self.con, pid)
         return self._cache[key]
 
     def _spec(self, raw: dict):
@@ -92,32 +100,32 @@ class ReviewApp:
         else:
             d = self.data(int(raw.get("version_id") or self.version_id))
         b = self.data(int(raw["base_version_id"])) if raw.get("base_version_id") else None
-        return views.check_spec(raw, d, b), d, b
+        return self.V.check_spec(raw, d, b), d, b
 
     def view(self, body: dict) -> dict:
         spec, d, b = self._spec(body.get("spec"))
-        fig = views.figure(spec, d, [] if d.get("preview_id") else self._pins(d["version_id"]), base=b)
+        fig = self.V.figure(spec, d, [] if d.get("preview_id") else self._pins(d["version_id"]), base=b)
         return {"spec": spec, "figure": json.loads(fig.to_json())}
 
     def locate(self, body: dict) -> dict:
         spec, d, _ = self._spec(body.get("spec"))
-        a = views.locate(spec, d, body.get("role"), body.get("point") or {})
+        a = self.V.locate(spec, d, body.get("role"), body.get("point") or {})
         if "comment" in a:
             return {"comment": a["comment"]}
-        return {"anchor": a, "label": views.label(a), "describe": views.describe(a, d)}
+        return {"anchor": a, "label": rv.label(a), "describe": self.V.describe(a, d)}
 
     def comments(self, vid: int) -> dict:
-        name = models.header(self.con, "geo", vid)["model_name"]
-        cs = rv.list_feedback(self.con, kind="geo", model_name=name, status=None)
+        name = models.header(self.con, self.kind, vid)["model_name"]
+        cs = rv.list_feedback(self.con, kind=self.kind, model_name=name, status=None)
         for c in cs:
             c["messages"] = rv.messages(self.con, c["id"])
-        ps = {p["id"]: p for p in props.list_proposals(self.con, "geo", name)}
+        ps = {p["id"]: p for p in props.list_proposals(self.con, self.kind, name)} if self.kind in props.KINDS else {}
         return {"comments": cs, "proposals": ps, "session": self.session(vid)}
 
     def session(self, vid: int) -> dict:
-        name = models.header(self.con, "geo", vid)["model_name"]
-        st = rv.session_state(self.con, "geo", name)
-        w = rv.waiting(self.con, "geo", name)
+        name = models.header(self.con, self.kind, vid)["model_name"]
+        st = rv.session_state(self.con, self.kind, name)
+        w = rv.waiting(self.con, self.kind, name)
         return {"listening": st["listening"], "open": bool(st["session"] and not st["session"]["ended_at"]),
                 "waiting_on_agent": len(w["modeler"]), "waiting_on_you": len(w["reviewer"])}
 
@@ -130,20 +138,20 @@ class ReviewApp:
     def message(self, body: dict) -> dict:
         fid = int(body.get("feedback_id") or 0)
         f = rv.get(self.con, fid)
-        if f["model_kind"] != "geo":
-            raise ToolError(FORBIDDEN, f"comment {fid} is not on a geo model")
+        if f["model_kind"] != self.kind:
+            raise ToolError(FORBIDDEN, f"comment {fid} is not on a {self.kind} model")
         return self._write("reply_review", feedback_id=fid, body=body.get("body", ""), views=body.get("views") or None)
 
     def decide(self, body: dict) -> dict:
-        return self._write("decide_geo_proposal", proposal_id=int(body.get("proposal_id") or 0),
+        return self._write("decide_proposal", proposal_id=int(body.get("proposal_id") or 0),
                            action=body.get("action"), comment=body.get("comment"))
 
     def end_session(self, body: dict) -> dict:
-        name = models.header(self.con, "geo", int(body.get("version_id") or self.version_id))["model_name"]
-        return {"ended": rv.session_end(self.con, "geo", name, self.reviewer._reviewer())}
+        name = models.header(self.con, self.kind, int(body.get("version_id") or self.version_id))["model_name"]
+        return {"ended": rv.session_end(self.con, self.kind, name, self.reviewer._reviewer())}
 
     def make_preview(self, body: dict) -> dict:
-        r = self._write("preview_geo_change", base_version_id=int(body.get("base_version_id") or self.version_id),
+        r = self._write("preview_change", kind=self.kind, base_version_id=int(body.get("base_version_id") or self.version_id),
                         spec_patch=body.get("spec_patch"))
         return {"preview": r["preview"]}
 
@@ -157,23 +165,25 @@ class ReviewApp:
             raise ToolError(INVALID_INPUT, "say why (rationale)")
         if not ids:
             p = preview.get(self.con, pid)
-            c = self._write("add_review_comment", kind="geo", version_id=p["base_version_id"], comment=rationale,
+            if p["model_kind"] != self.kind:
+                raise ToolError(NOT_FOUND, f"no {self.kind} preview {pid}")
+            c = self._write("add_review_comment", kind=self.kind, version_id=p["base_version_id"], comment=rationale,
                             item=rv.make_item({}, None), severity="change")
             ids = [c["feedback"]["id"]]
-        r = self._write("request_geo_change", preview_id=pid, feedback_ids=ids, rationale=rationale)
+        r = self._write("request_change", preview_id=pid, feedback_ids=ids, rationale=rationale)
         return {"proposal": r["proposal"]}
 
     def diff(self, vid: int, base: int | None) -> dict:
-        return {"diff": review_diff.diff(self.cfg, self.con, vid, base)}
+        return {"diff": review_diff.diff(self.cfg, self.con, vid, base, self.kind)}
 
     def add_comment(self, body: dict) -> dict:
         vid = int(body.get("version_id") or self.version_id)
         d = self.data(vid)
-        anchor = views.check_anchor(body.get("anchor"))
+        anchor = self.V.check_anchor(body.get("anchor"))
         view = self._spec({**body["view"], "version_id": vid})[0] if body.get("view") else None
         if "finding" in anchor and not any(f"{f['area']}: {f['check']}" == anchor["finding"] for f in d["findings"]):
             raise ToolError(INVALID_INPUT, f"no QC finding {anchor['finding']!r} on this version")
-        r = wrap(self.reviewer, "add_review_comment")(kind="geo", version_id=vid, comment=body.get("comment", ""),
+        r = wrap(self.reviewer, "add_review_comment")(kind=self.kind, version_id=vid, comment=body.get("comment", ""),
                                                       item=rv.make_item(anchor, view),
                                                       severity=body.get("severity", "change"))
         if not r.get("ok"):
@@ -195,7 +205,7 @@ class ReviewApp:
                 return 200, "application/javascript", get_plotlyjs().encode()
             if method == "GET" and u.path == "/qc":
                 vid = int(q.get("version_id", self.version_id))
-                qc = self.reviewer.get_qc_report(kind="geo", version_id=vid)
+                qc = self.reviewer.get_qc_report(kind=self.kind, version_id=vid)
                 p = Path(((qc.get("qc_report") or {}) if qc.get("ok") else {}).get("path") or "")
                 if not p.is_file():
                     raise ToolError(NOT_FOUND, f"geo version {vid} has no QC report file")
@@ -206,7 +216,7 @@ class ReviewApp:
                 return _json(200, {"ok": True, **self.comments(int(q.get("version_id", self.version_id)))})
             if method == "GET" and u.path == "/api/preview":
                 p = preview.get(self.con, int(q.get("id", 0)))
-                if p["model_name"] != models.header(self.con, "geo", self.version_id)["model_name"]:
+                if p["model_name"] != models.header(self.con, self.kind, self.version_id)["model_name"]:
                     raise ToolError(NOT_FOUND, "no such preview on this model")
                 return _json(200, {"ok": True, "preview": p["summary"], "removed": bool(p["removed_at"])})
             if method == "GET" and u.path == "/api/session":
