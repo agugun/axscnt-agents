@@ -384,12 +384,18 @@ def fig_layer_maps(data: dict, kw: str, log: bool = False):
     return fig
 
 
-def fig_section(data: dict, kw: str = "PORO", well: str | None = None, along: str = "x", log: bool = False, nbins: int = 240):
-    """Vertical section through a well's row (along x) or column (along y): the property by depth, layer lines."""
+def fig_section(data: dict, kw: str = "PORO", well: str | None = None, along: str = "x", log: bool = False, nbins: int = 240,
+                cell: tuple[int, int] | None = None):
+    """Vertical section through a well's row (along x) or column (along y): the property by depth, layer lines.
+    cell: (i, j), 0-based, instead of a well: the section through that cell's row or column."""
     ld, a = data["layer_depths"], data["arrays"][kw]
     wc = well_cells(data).set_index("well_name")
-    well = well or (wc.index[0] if len(wc) else None)
-    i, j = (int(wc.loc[well, "i"]), int(wc.loc[well, "j"])) if well is not None else (data["nx"] // 2, data["ny"] // 2)
+    if cell is not None:
+        i, j = int(cell[0]), int(cell[1])
+        well = None
+    else:
+        well = well or (wc.index[0] if len(wc) else None)
+        i, j = (int(wc.loc[well, "i"]), int(wc.loc[well, "j"])) if well is not None else (data["nx"] // 2, data["ny"] // 2)
     xs, ys = cell_centres(data)
     if along == "x":
         h, prop, pos = ld[:, j, :], a[:, j, :], xs
@@ -418,7 +424,7 @@ def fig_section(data: dict, kw: str = "PORO", well: str | None = None, along: st
     fig.update_yaxes(autorange="reversed", title="TVD (m)")
     fig.update_xaxes(title=f"{along} (m)")
     fig.update_layout(**{**LAYOUT, "height": 420},
-                      title=f"{kw} section along {along} through {well or 'the centre'} ({'row j' if along == 'x' else 'column i'} "
+                      title=f"{kw} section along {along} through {well or (f'cell {i + 1}, {j + 1}' if cell is not None else 'the centre')} ({'row j' if along == 'x' else 'column i'} "
                             f"{(j if along == 'x' else i) + 1})")
     return fig
 

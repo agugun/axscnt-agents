@@ -31,4 +31,5 @@ def test_setup_allows_opmagent_and_the_workspace_servers_never_the_reviewer(tmp_
     assert "Bash(opmagent:*)" in allow and "mcp__opm-data-fluid" in allow and "mcp__opm-sim" in allow
     assert len(allow) == len(set(allow))
     assert not any("reviewer" in a for a in allow)
-    assert s["permissions"]["ask"] == ["Bash(opmagent clean:*)"]   # removing files asks first
+    # removing files asks first; so does the geo review workbench (it writes comments as the reviewer)
+    assert s["permissions"]["ask"] == ["Bash(opmagent clean:*)", "Bash(opmagent geo review:*)"]

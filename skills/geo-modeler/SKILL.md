@@ -95,4 +95,12 @@ before you build and whenever the coordinator says there is feedback. For each c
 2. Answer it with `answer_review_feedback(id, "<what you changed>", "addressed", addressed_in_version_id=<new id>)`,
    or with `"wontfix"` and why, if the data doesn't support the change.
 
+Comments made in the **geo review workbench** (`opmagent geo review <id>`, the engineer's web app) are anchored:
+`anchor` says what the comment is about (`{"well": "B"}`, `{"cell": [i, j, k], "kw": "PORO"}` 1-based as in the deck,
+`{"layer": 5}`, `{"zone": ...}`, `{"surface": "TopRes", "well": "C"}`, `{"finding": "<area>: <check>"}`), and `view` is
+the picture they were looking at. Before answering one, call `review_context(id)`: the model's values at the anchor
+and what the view shows. To look at another view yourself, `render_review_view(spec, anchor)` (figs `surfaces`,
+`layer_map`, `section`, `well`, `at_wells`, `distributions`, `poroperm`). Answer about that place, with numbers. Never
+start the workbench yourself: it writes as the reviewer.
+
 A rejected version's comment arrives the same way (item `rejected`). You can't change or delete a comment.

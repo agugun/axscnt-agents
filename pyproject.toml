@@ -15,7 +15,7 @@ dependencies = [
   "pandas",
   "openpyxl",
   "jinja2",
-  "plotly",
+  "plotly>=5.22",          # textfont.shadow (geo review workbench labels)
   # QC notebooks: executed headlessly in a kernel of this interpreter, exported to HTML
   "nbformat>=5.9",
   "nbclient>=0.10",
@@ -40,4 +40,4 @@ opmagent-hm = "opmagent.servers.hm_server:main"
 include = ["opmagent*"]
 
 [tool.setuptools.package-data]
-opmagent = ["core/*.sql", "notebooks/*.ipynb"]
+opmagent = ["core/*.sql", "notebooks/*.ipynb", "geo/review_static/*"]

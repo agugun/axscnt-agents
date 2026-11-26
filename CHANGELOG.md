@@ -9,6 +9,13 @@ to the res model, and SQLite can't change the existing tables in place. `opmagen
 so; move it aside and run `opmagent init-db` (or `opmagent setup <workspace>`), then rebuild the studies.
 No approvals are carried over. Design: [docs/design/res-model.md](docs/design/res-model.md).
 
+- **Geo review workbench, phase 1** ([docs/design/geo-review.md](docs/design/geo-review.md)): `opmagent geo review
+  <version>` serves a local web app (127.0.0.1, a session token for writes) to look at a geo version (surfaces, any
+  layer map, sections through a well or a cell, well tracks, at-wells, distributions, QC findings) and pin comments
+  on a well, cell, layer, top or QC finding. The comment keeps its anchor and the view it was made on in
+  `review_feedback.item` (JSON; free-text items still read). The geo agent reads them with `review_context` and
+  `render_review_view` (values at the anchor, what the view shows). `opmagent setup` asks before an agent starts the
+  workbench. `plotly>=5.22`.
 - **History matching fixes found while capturing the user guide**: a proposal's case no longer takes the base
   run's results when the deck has a run of its own (`hm propose` reported the base misfit, not the proposal's);
   job progress lines give the case number `hm cases` shows, not the row id; the HM report's well plots say in how

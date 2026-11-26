@@ -1,0 +1,335 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Geo review</title>
+<script src="/static/plotly.min.js"></script>
+<style>
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --ink: #1d2330; --muted: #637083; --line: #dde2ea; --accent: #2860c8;
+  --accent-ink: #ffffff; --pass: #2b8a3e; --warn: #b7791f; --fail: #c92a2a; --pin: #d62728; --chip: #eef1f6;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #14171c; --panel: #1c2027; --ink: #e5e9f0; --muted: #98a2b3; --line: #2e3440; --accent: #6b9bf2;
+          --accent-ink: #0d1117; --chip: #262b34; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+header { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; padding: 10px 16px; background: var(--panel);
+         border-bottom: 1px solid var(--line); }
+header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+.badge { padding: 2px 8px; border-radius: 10px; background: var(--chip); font-size: 12px; }
+.badge.pass { color: var(--pass); } .badge.warn { color: var(--warn); } .badge.fail { color: var(--fail); }
+header .spacer { flex: 1; }
+main { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 12px; padding: 12px 16px; }
+@media (max-width: 980px) { main { grid-template-columns: 1fr; } }
+section.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px; min-width: 0; }
+.tabs { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
+.tabs button { border: 1px solid var(--line); background: transparent; color: var(--ink); padding: 5px 10px;
+               border-radius: 6px; cursor: pointer; }
+.tabs button.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 8px; min-height: 30px; }
+.controls label { color: var(--muted); font-size: 12px; display: flex; gap: 4px; align-items: center; }
+select, input, textarea, button { font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--line);
+                                  border-radius: 6px; padding: 4px 6px; }
+button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); cursor: pointer; }
+button.link { border: none; background: none; color: var(--accent); padding: 0; cursor: pointer; }
+#plot { width: 100%; min-height: 460px; }
+#findings { display: none; }
+#findings li { cursor: pointer; padding: 4px 0; border-bottom: 1px solid var(--line); list-style: none; }
+#findings li:hover { color: var(--accent); }
+h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 4px 0 8px; }
+.sel { background: var(--chip); border-radius: 6px; padding: 8px; margin-bottom: 8px; }
+.sel .lbl { font-weight: 600; }
+.sel table { border-collapse: collapse; margin-top: 4px; font-size: 12px; }
+.sel td { padding: 1px 8px 1px 0; }
+.sel .acts { margin-top: 6px; display: flex; gap: 10px; flex-wrap: wrap; }
+textarea { width: 100%; min-height: 70px; resize: vertical; }
+.row { display: flex; gap: 8px; align-items: center; margin-top: 6px; }
+.msg { font-size: 12px; color: var(--muted); }
+.msg.err { color: var(--fail); }
+.c { border-top: 1px solid var(--line); padding: 8px 0; }
+.c.hl { background: color-mix(in srgb, var(--pin) 10%, transparent); }
+.c .top { display: flex; gap: 6px; flex-wrap: wrap; align-items: baseline; font-size: 12px; color: var(--muted); }
+.c .top b { color: var(--pin); }
+.c .body { margin: 3px 0; white-space: pre-wrap; }
+.c .ans { margin-left: 10px; padding-left: 8px; border-left: 2px solid var(--line); white-space: pre-wrap; }
+.st-open { color: var(--warn); } .st-addressed { color: var(--pass); } .st-wontfix { color: var(--muted); }
+code { background: var(--chip); padding: 1px 4px; border-radius: 4px; font-size: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="title">Geo review</h1>
+  <select id="version" aria-label="Version"></select>
+  <span id="status" class="badge"></span>
+  <span id="qc" class="badge"></span>
+  <span class="spacer"></span>
+  <a id="qcreport" href="#" target="_blank" rel="noopener">QC report</a>
+</header>
+<main>
+  <section class="panel">
+    <div class="tabs" id="tabs"></div>
+    <div class="controls" id="controls"></div>
+    <div id="plot"></div>
+    <ul id="findings"></ul>
+    <div class="msg" id="hint">Click a well, a cell, a surface or a QC finding to pin a comment on it.</div>
+  </section>
+  <section class="panel">
+    <h2>Comment</h2>
+    <div class="sel" id="sel"></div>
+    <textarea id="text" placeholder="What should change, or what do you want to know?"></textarea>
+    <div class="row">
+      <select id="severity" aria-label="Severity">
+        <option value="change">change</option><option value="question">question</option><option value="note">note</option>
+      </select>
+      <button class="primary" id="post">Post comment</button>
+      <span class="msg" id="postmsg"></span>
+    </div>
+    <div class="msg" id="cmds"></div>
+    <h2 style="margin-top:16px">Comments on this model</h2>
+    <div class="row" style="margin-top:0">
+      <label class="msg"><input type="checkbox" id="onlyv"> this version only</label>
+      <label class="msg"><input type="checkbox" id="onlyopen"> open only</label>
+    </div>
+    <div id="comments"></div>
+  </section>
+</main>
+<script>
+"use strict";
+const TABS = [["surfaces", "Surfaces"], ["layer_map", "Layer map"], ["section", "Section"], ["well", "Well"],
+              ["at_wells", "At wells"], ["distributions", "Distributions"], ["poroperm", "Poro-perm"], ["findings", "QC findings"]];
+let token = "";
+try { token = new URLSearchParams(location.hash.slice(1)).get("token") || sessionStorage.getItem("geoReviewToken") || ""; } catch (e) {}
+try { if (token) sessionStorage.setItem("geoReviewToken", token); } catch (e) {}
+// a restarted server makes a new token; opening its link in this tab only changes the fragment
+addEventListener("hashchange", () => {
+  const t = new URLSearchParams(location.hash.slice(1)).get("token");
+  if (t) { token = t; try { sessionStorage.setItem("geoReviewToken", t); } catch (e) {} }
+});
+const qs = new URLSearchParams(location.search);
+const S = { vid: +qs.get("version_id"), meta: null, tab: "layer_map", spec: {}, anchor: {}, viewForComment: null, comments: [] };
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+
+async function api(path, body) {
+  const opt = body === undefined ? {} : { method: "POST", body: JSON.stringify(body),
+    headers: { "Content-Type": "application/json", "X-Review-Token": token } };
+  const r = await fetch(path, opt);
+  const j = await r.json();
+  if (!j.ok) throw new Error(j.message || r.statusText);
+  return j;
+}
+
+function dark() { return matchMedia("(prefers-color-scheme: dark)").matches; }
+
+async function loadMeta() {
+  const m = await api(`/api/meta?version_id=${S.vid}`);
+  S.meta = m;
+  document.title = `Geo review: ${m.model_name} v${m.version}`;
+  $("title").textContent = `${m.model_name} v${m.version}`;
+  $("status").textContent = m.status;
+  const c = { pass: 0, warn: 0, fail: 0 };
+  m.findings.forEach(f => { if (f.status in c) c[f.status]++; });
+  const ov = c.fail ? "fail" : c.warn ? "warn" : "pass";
+  $("qc").className = `badge ${ov}`;
+  $("qc").textContent = `QC ${ov}: ${c.fail} fail, ${c.warn} warn`;
+  $("version").innerHTML = m.versions.map(v => `<option value="${v.version_id}" ${v.version_id === S.vid ? "selected" : ""}>v${v.version} (${esc(v.status)})</option>`).join("");
+  $("qcreport").href = `/qc?version_id=${S.vid}`;
+  $("cmds").innerHTML = m.review_commands ? "Approve or reject in your terminal: " + m.review_commands.map(c => `<code>${esc(c)}</code>`).join(" ") : "";
+  if (!S.spec.fig) S.spec = { fig: "layer_map", kw: m.keywords.includes("PORO") ? "PORO" : m.keywords[0], layer: 1 };
+}
+
+function tabs() {
+  $("tabs").innerHTML = TABS.map(([k, n]) => `<button data-t="${k}" class="${k === S.tab ? "on" : ""}">${n}</button>`).join("");
+  $("tabs").querySelectorAll("button").forEach(b => b.onclick = () => openTab(b.dataset.t));
+}
+
+function controls() {
+  const m = S.meta, s = S.spec, el = $("controls");
+  const opt = (arr, v) => arr.map(a => `<option ${String(a) === String(v) ? "selected" : ""}>${esc(a)}</option>`).join("");
+  let h = "";
+  if (s.fig === "layer_map" || s.fig === "section")
+    h += `<label>Property <select id="kw">${opt(m.keywords, s.kw)}</select></label>
+          <label><input type="checkbox" id="log" ${s.log ?? s.kw.startsWith("PERM") ? "checked" : ""}> log10</label>`;
+  if (s.fig === "layer_map") {
+    const z = m.zones.find(z => z.first <= s.layer && s.layer <= z.last);
+    h += `<label>Layer <input type="range" id="layer" min="1" max="${m.grid[2]}" value="${s.layer}">
+          <span>${s.layer} / ${m.grid[2]}${z ? " (" + esc(z.zone) + ")" : ""}</span></label>`;
+  }
+  if (s.fig === "section")
+    h += `<label>Along <select id="along">${opt(["x", "y"], s.along || "x")}</select></label>
+          <label>Through <select id="through">${s.cell ? `<option value="cell" selected>cell ${s.cell.join(",")}</option>` : ""}${opt(m.wells, s.well)}</select></label>`;
+  if (s.fig === "well") h += `<label>Well <select id="wellsel">${opt(m.wells, s.well)}</select></label>`;
+  el.innerHTML = h;
+  const on = (id, fn) => { const x = $(id); if (x) x.oninput = fn; };
+  on("kw", e => { s.kw = e.target.value; delete s.log; draw(); });
+  on("log", e => { s.log = e.target.checked; draw(); });
+  on("layer", e => { s.layer = +e.target.value; draw(); });
+  on("along", e => { s.along = e.target.value; draw(); });
+  on("through", e => { if (e.target.value !== "cell") { s.well = e.target.value; delete s.cell; } draw(); });
+  on("wellsel", e => { s.well = e.target.value; draw(); });
+}
+
+function openTab(t, spec) {
+  S.tab = t;
+  tabs();
+  const isF = t === "findings";
+  $("findings").style.display = isF ? "block" : "none";
+  $("plot").style.display = isF ? "none" : "block";
+  if (isF) { $("controls").innerHTML = ""; findings(); return; }
+  if (spec) S.spec = { ...spec };
+  else if (S.spec.fig !== t) {
+    const kw = S.spec.kw || (S.meta.keywords.includes("PORO") ? "PORO" : S.meta.keywords[0]);
+    S.spec = { fig: t };
+    if (t === "layer_map") Object.assign(S.spec, { kw, layer: 1 });
+    if (t === "section") Object.assign(S.spec, { kw, along: "x", well: S.meta.wells[0] });
+    if (t === "well") S.spec.well = S.meta.wells[0];
+  }
+  draw();
+}
+
+async function draw() {
+  controls();
+  const spec = { ...S.spec, version_id: S.vid };
+  try {
+    const r = await api("/api/view", { spec });
+    S.spec = r.spec;
+    const fig = r.figure;
+    fig.layout = fig.layout || {};
+    if (dark()) {
+      fig.layout.template = undefined;
+      Object.assign(fig.layout, { paper_bgcolor: "#1c2027", plot_bgcolor: "#1c2027", font: { color: "#e5e9f0" } });
+    }
+    fig.layout.autosize = true;
+    await Plotly.react("plot", fig.data, fig.layout, { responsive: true, displaylogo: false });
+    $("plot").removeAllListeners?.("plotly_click");
+    $("plot").on("plotly_click", onClick);
+    controls();
+  } catch (e) { $("hint").textContent = e.message; $("hint").className = "msg err"; }
+}
+
+async function onClick(ev) {
+  const p = ev.points[0];
+  if (!p) return;
+  const meta = p.data.meta || {};
+  if (meta.role === "skip") return;
+  const point = { x: p.x, y: p.y, text: Array.isArray(p.data.text) ? p.data.text[p.pointIndex] : p.text, ...meta };
+  try {
+    const r = await api("/api/locate", { spec: { ...S.spec, version_id: S.vid }, role: meta.role, point });
+    if (r.comment) { highlight(r.comment); return; }
+    select(r.anchor, r.label, r.describe, { ...S.spec });
+  } catch (e) { $("hint").textContent = e.message; $("hint").className = "msg err"; }
+}
+
+function select(anchor, label, describe, view) {
+  S.anchor = anchor || {};
+  S.viewForComment = view;
+  const rows = [];
+  const d = describe || {};
+  if (d.cell) {
+    rows.push(["Cell", `${d.cell.ijk.join(", ")} · zone ${d.cell.zone ?? "-"} · TVD ${d.cell.top_tvd}–${d.cell.base_tvd} m`]);
+    Object.entries(d.cell.values).forEach(([k, v]) => rows.push([k, v]));
+    if (d.cell.nearest_well) rows.push(["Nearest well", `${d.cell.nearest_well.well} (${d.cell.nearest_well.distance_m} m)`]);
+  }
+  if (d.well) {
+    d.well.at_layers.forEach(l => rows.push([`${d.well.well} L${l.layer}`, `φ log ${l.phi_log} · model ${l.phi_model}`]));
+    Object.entries(d.well.tops_misfit_m).forEach(([s, v]) => rows.push([`${s} misfit`, `${v} m`]));
+  }
+  if (d.surface && d.surface.tvd_at_column !== undefined) rows.push(["TVD here", `${d.surface.tvd_at_column} m`]);
+  if (d.finding) rows.push([d.finding.status, d.finding.detail]);
+  const acts = [];
+  if (anchor && anchor.cell) {
+    acts.push(`<button class="link" data-a="sx">Section along x here</button>`, `<button class="link" data-a="sy">Section along y here</button>`);
+    if (S.spec.fig !== "layer_map") acts.push(`<button class="link" data-a="map">Layer ${anchor.cell[2]} map</button>`);
+  }
+  if (anchor && anchor.well && S.spec.fig !== "well") acts.push(`<button class="link" data-a="well">Well ${esc(anchor.well)} track</button>`);
+  if (Object.keys(S.anchor).length) acts.push(`<button class="link" data-a="clear">Clear (general comment)</button>`);
+  $("sel").innerHTML = `<div class="lbl">On: ${esc(label || "general")}</div>` +
+    (rows.length ? `<table>${rows.slice(0, 14).map(r => `<tr><td>${esc(r[0])}</td><td>${esc(r[1])}</td></tr>`).join("")}</table>` : "") +
+    (view && view.fig ? `<div class="msg">View: ${esc(view.fig)}${view.kw ? " " + esc(view.kw) : ""}${view.layer ? " layer " + view.layer : ""}</div>` : "") +
+    (acts.length ? `<div class="acts">${acts.join("")}</div>` : "");
+  $("sel").querySelectorAll("button").forEach(b => b.onclick = () => {
+    const a = S.anchor, kw = a.kw || S.spec.kw || "PORO";
+    if (b.dataset.a === "sx" || b.dataset.a === "sy")
+      openTab("section", { fig: "section", kw, along: b.dataset.a === "sx" ? "x" : "y", cell: a.cell.slice(0, 2) });
+    if (b.dataset.a === "map") openTab("layer_map", { fig: "layer_map", kw, layer: a.cell[2] });
+    if (b.dataset.a === "well") openTab("well", { fig: "well", well: a.well });
+    if (b.dataset.a === "clear") select({}, "general", null, null);
+  });
+}
+
+function findings() {
+  const fs = S.meta.findings;
+  $("findings").innerHTML = fs.length ? fs.map((f, n) => `<li data-n="${n}"><span class="badge ${esc(f.status)}">${esc(f.status)}</span>
+    <b>${esc(f.area)}</b>: ${esc(f.check)} <span class="msg">${esc(f.detail)}</span></li>`).join("") : "<li>No QC findings recorded.</li>";
+  $("findings").querySelectorAll("li[data-n]").forEach(li => li.onclick = () => {
+    const f = fs[+li.dataset.n];
+    select({ finding: `${f.area}: ${f.check}` }, `finding ${f.area}: ${f.check}`, { finding: f }, null);
+  });
+}
+
+async function loadComments() {
+  const r = await api(`/api/comments?version_id=${S.vid}`);
+  S.comments = r.comments;
+  renderComments();
+}
+
+function renderComments() {
+  const onlyV = $("onlyv").checked, onlyO = $("onlyopen").checked;
+  const cs = S.comments.filter(c => (!onlyV || c.version_id === S.vid) && (!onlyO || c.status === "open")).reverse();
+  $("comments").innerHTML = cs.length ? cs.map(c => `<div class="c" id="c${c.id}">
+    <div class="top"><b>#${c.id}</b> v${c.version} · ${esc(c.severity)} · <span class="st-${esc(c.status)}">${esc(c.status)}</span>
+      · ${esc(c.label)} · ${esc(c.reviewer)} · ${esc(c.created_at)}
+      ${c.view ? `<button class="link" data-v="${c.id}">show view</button>` : ""}</div>
+    <div class="body">${esc(c.comment)}</div>
+    ${c.response ? `<div class="ans">${esc(c.response)}${c.addressed_in_version_id ? ` (version id ${c.addressed_in_version_id})` : ""}</div>` : ""}
+  </div>`).join("") : `<div class="msg">No comments yet.</div>`;
+  $("comments").querySelectorAll("button[data-v]").forEach(b => b.onclick = () => showView(+b.dataset.v));
+}
+
+function showView(id) {
+  const c = S.comments.find(c => c.id === id);
+  if (!c || !c.view) return;
+  if (c.version_id !== S.vid) { location.search = `?version_id=${c.version_id}`; return; }
+  openTab(c.view.fig, c.view);
+  highlight(id);
+}
+
+function highlight(id) {
+  document.querySelectorAll(".c.hl").forEach(e => e.classList.remove("hl"));
+  const el = $(`c${id}`);
+  if (el) { el.classList.add("hl"); el.scrollIntoView({ behavior: "smooth", block: "nearest" }); }
+}
+
+$("post").onclick = async () => {
+  const text = $("text").value.trim();
+  $("postmsg").className = "msg";
+  if (!text) { $("postmsg").textContent = "Write the comment first."; return; }
+  if (!token) { $("postmsg").className = "msg err"; $("postmsg").textContent = "No review token: open the URL printed by opmagent geo review."; return; }
+  try {
+    const r = await api("/api/comments", { version_id: S.vid, comment: text, severity: $("severity").value,
+                                           anchor: S.anchor, view: S.viewForComment ? { ...S.viewForComment, version_id: S.vid } : null });
+    $("text").value = "";
+    $("postmsg").textContent = `Comment #${r.feedback.id} added.`;
+    await loadComments();
+    if (S.tab !== "findings") draw();
+  } catch (e) { $("postmsg").className = "msg err"; $("postmsg").textContent = e.message; }
+};
+$("onlyv").onchange = renderComments;
+$("onlyopen").onchange = renderComments;
+$("version").onchange = e => { location.search = `?version_id=${e.target.value}`; };
+
+(async () => {
+  try {
+    await loadMeta();
+    tabs();
+    select({}, "general", null, null);
+    openTab("layer_map");
+    await loadComments();
+  } catch (e) { $("hint").textContent = e.message; $("hint").className = "msg err"; }
+})();
+</script>
+</body>
+</html>
