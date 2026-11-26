@@ -69,6 +69,12 @@ code { background: var(--chip); padding: 1px 4px; border-radius: 4px; font-size:
 .prop .acts { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 4px; }
 .prop input { flex: 1; min-width: 120px; }
 .wait { font-size: 11px; font-weight: 600; }
+#decide { margin-top: 12px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; display: none; }
+#decide input { width: 100%; margin: 4px 0; }
+#decide .block { color: var(--fail); font-size: 12px; }
+#decide .warnq { color: var(--warn); font-size: 12px; }
+button.danger { border-color: var(--fail); color: var(--fail); background: transparent; cursor: pointer; }
+button:disabled { opacity: .5; cursor: default; }
 .wait.you { color: var(--warn); } .wait.agent { color: var(--accent); }
 .reply { margin: 4px 0 0 10px; }
 .reply textarea { min-height: 50px; }
@@ -116,6 +122,7 @@ code { background: var(--chip); padding: 1px 4px; border-radius: 4px; font-size:
       <span class="msg" id="postmsg"></span>
     </div>
     <div class="msg" id="cmds"></div>
+    <div id="decide"></div>
     <h2 style="margin-top:16px">Comments on this model</h2>
     <div class="row" style="margin-top:0">
       <label class="msg"><input type="checkbox" id="onlyv"> this version only</label>
@@ -174,7 +181,10 @@ async function loadMeta() {
   $("qc").textContent = m.findings.length ? `QC ${ov}: ${c.fail} fail, ${c.warn} warn` : "no QC findings (model view)";
   $("version").innerHTML = m.versions.map(v => `<option value="${v.version_id}" ${v.version_id === S.vid ? "selected" : ""}>v${v.version} (${esc(v.status)})</option>`).join("");
   $("qcreport").href = `/qc?version_id=${S.vid}`;
-  $("cmds").innerHTML = m.review_commands ? "Approve or reject in your terminal: " + m.review_commands.map(c => `<code>${esc(c)}</code>`).join(" ") : "";
+  $("cmds").innerHTML = m.review_commands && !(m.decision || {}).can_decide
+    ? "Approve or reject in your terminal" + ((m.decision || {}).can_decide === false ? " (this workbench was started without one)" : "")
+      + ": " + m.review_commands.map(c => `<code>${esc(c)}</code>`).join(" ") : "";
+  renderDecision(m.decision);
   if (!S.spec.fig) S.spec = m.kind === "geo" ? { fig: "layer_map", kw: m.keywords.includes("PORO") ? "PORO" : m.keywords[0], layer: 1 }
                                               : defaultSpec(m.views[0]);
 }
@@ -603,11 +613,48 @@ function renderPreviewInfo() {
   };
 }
 
+// ---------------------------------------------------------------- approve / reject (design decision 1)
+function renderDecision(dec) {
+  const el = $("decide");
+  if (!dec || !dec.can_decide || dec.status !== "qc_ready") { el.style.display = "none"; el.innerHTML = ""; S.decSig = ""; return; }
+  const sig = JSON.stringify(dec);
+  if (sig === S.decSig) return;            // unchanged: keep what is being typed
+  S.decSig = sig;
+  const typed = ($("dconfirm") || {}).value || "", why = ($("dwhy") || {}).value || "";
+  el.style.display = "block";
+  el.innerHTML = `<h2 style="margin-top:0">Decision on ${esc(dec.confirm_text)}</h2>
+    ${dec.blockers.length ? `<div class="block">Open change comment(s) ${dec.blockers.map(i => `<button class="link" data-c="${i}">#${i}</button>`).join(" ")}: answered first, or reject.</div>` : ""}
+    ${dec.open_other.length ? `<div class="warnq">Still open (questions or notes): ${dec.open_other.map(i => `<button class="link" data-c="${i}">#${i}</button>`).join(" ")}</div>` : ""}
+    <div class="msg">The QC report it is decided on: <a href="/qc?version_id=${S.vid}" target="_blank" rel="noopener">QC report</a></div>
+    <input id="dconfirm" placeholder="Type ${esc(dec.confirm_text)} to confirm" autocomplete="off" value="${esc(typed)}">
+    <input id="dwhy" placeholder="Comment (needed to reject)" value="${esc(why)}">
+    <div class="row"><button class="primary" id="dapprove">Approve</button><button class="danger" id="dreject">Reject</button>
+    <span class="msg" id="dmsg"></span></div>`;
+  const sync = () => {
+    const ok = $("dconfirm").value.trim() === dec.confirm_text;
+    $("dapprove").disabled = !ok || dec.blockers.length > 0;
+    $("dreject").disabled = !ok || !$("dwhy").value.trim();
+  };
+  $("dconfirm").oninput = sync; $("dwhy").oninput = sync; sync();
+  el.querySelectorAll("button[data-c]").forEach(b => b.onclick = () => highlight(+b.dataset.c));
+  const go = async action => {
+    try {
+      const r = await api("/api/decide", { version_id: S.vid, action, confirm: $("dconfirm").value, comment: $("dwhy").value });
+      $("dmsg").textContent = r.spoken_summary;
+      S.decSig = "";
+      await loadMeta(); tabs(); await loadComments(true);
+    } catch (e) { $("dmsg").className = "msg err"; $("dmsg").textContent = e.message; }
+  };
+  $("dapprove").onclick = () => go("approve");
+  $("dreject").onclick = () => go("reject");
+}
+
 async function loadComments(force) {
   const r = await api(`/api/comments?version_id=${S.vid}`);
   const sig = JSON.stringify([r.comments, r.proposals]);
   S.session = r.session;
   renderSession();
+  if (r.decision && S.meta) { S.meta.decision = r.decision; renderDecision(r.decision); }
   if (!force && sig === S.lastSig) return;
   const firstLoad = !S.lastSig;
   S.lastSig = sig;

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 import shutil
 import subprocess
 from pathlib import Path
@@ -668,7 +669,8 @@ def cmd_geo_review(args):
     from .geo.review_app import ReviewApp, make_server, url
     cfg = cfgmod.load(args.config)
     try:
-        app = ReviewApp(cfg, args.version_id, kind=getattr(args, "review_kind", "geo"))
+        # only an engineer at a terminal can approve or reject in the app; one an agent starts (no tty) can't
+        app = ReviewApp(cfg, args.version_id, kind=getattr(args, "review_kind", "geo"), can_decide=sys.stdin.isatty())
     except ToolError as e:
         raise SystemExit(e.message) from None
     srv = make_server(app, args.port)
@@ -676,7 +678,9 @@ def cmd_geo_review(args):
     k = app.kind
     print(f"{k.capitalize()} review workbench for {k} version {args.version_id}:\n  {link}\n"
           "The link holds this session's review token: comments are written as you "
-          f"({app.reviewer._reviewer()}). Keep it to yourself. Ctrl-C stops it.", flush=True)
+          f"({app.reviewer._reviewer()}). Keep it to yourself. Ctrl-C stops it."
+          + ("" if app.can_decide else "\nStarted without a terminal: approve and reject in your terminal, not the app."),
+          flush=True)
     if not args.no_open:
         webbrowser.open(link)
     try:

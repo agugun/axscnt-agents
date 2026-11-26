@@ -9,6 +9,14 @@ to the res model, and SQLite can't change the existing tables in place. `opmagen
 so; move it aside and run `opmagent init-db` (or `opmagent setup <workspace>`), then rebuild the studies.
 No approvals are carried over. Design: [docs/design/res-model.md](docs/design/res-model.md).
 
+- **Approve and reject in the review workbench** (design decision 1): a decision box in `opmagent geo|res|well
+  review`, with these safeguards:
+  - only on a workbench started from a terminal (one an agent starts shows the commands);
+  - the model name and version typed to confirm;
+  - approval blocked while a "change" comment on the version is open;
+  - a reason needed to reject.
+
+  It goes through the reviewer profile, audited, as in the terminal.
 - **Review scenario covers res and well:** `testing/geo_review_loop.sh` now also runs a res loop and a well review
   against their own workbenches (47 checks in all, about 50 s). Found on the way: `opmagent res build --from-proposal`
   still required `--name`, so it couldn't run from the CLI.
