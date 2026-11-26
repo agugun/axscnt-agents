@@ -9,6 +9,10 @@ to the res model, and SQLite can't change the existing tables in place. `opmagen
 so; move it aside and run `opmagent init-db` (or `opmagent setup <workspace>`), then rebuild the studies.
 No approvals are carried over. Design: [docs/design/res-model.md](docs/design/res-model.md).
 
+- **QC notebook kernels talk over IPC:** on Linux and macOS they use Unix sockets in a private temporary folder
+  (removed after each run), not TCP on localhost. So no ports, and no more "Kernel is running over TCP without
+  encryption" warning on every build. Windows keeps TCP. Also: the kernel's working folder is made before it starts
+  (a missing one hung nbclient's cleanup).
 - **Approve and reject in the review workbench** (design decision 1): a decision box in `opmagent geo|res|well
   review`, with these safeguards:
   - only on a workbench started from a terminal (one an agent starts shows the commands);

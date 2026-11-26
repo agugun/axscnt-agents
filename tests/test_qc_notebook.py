@@ -133,3 +133,28 @@ def test_no_kernel_left_running(tmp_path, fail):
         r = runner.execute(src, tmp_path / "out.ipynb")
         assert r["ok"] is (not fail)
     assert set(_kernel_children()) - before == set()
+
+
+def test_notebook_kernel_talks_over_ipc(tmp_path, capfd):
+    """QC kernels use IPC sockets in a private folder (removed after), not TCP: no ports, and no 'Kernel is running
+    over TCP without encryption' warning on every QC run."""
+    import os
+    import tempfile
+
+    import nbformat
+
+    from opmagent.notebooks import runner
+    if os.name != "posix":
+        pytest.skip("IPC transport is POSIX only")
+    km = runner._kernel_manager()
+    assert km.transport == "ipc" and oct(km._opmagent_socket_dir.stat().st_mode & 0o777) == "0o700"
+    km._opmagent_socket_dir.rmdir()
+    nb = nbformat.v4.new_notebook(cells=[nbformat.v4.new_code_cell("print('IPC', 6 * 7)")])
+    src = tmp_path / "t.ipynb"
+    nbformat.write(nb, src)
+    before = set(os.listdir(tempfile.gettempdir()))
+    r = runner.execute(src, tmp_path / "out" / "t.ipynb")
+    assert r["ok"], r
+    assert "IPC 42" in (tmp_path / "out" / "t.ipynb").read_text()
+    assert "without encryption" not in capfd.readouterr().err
+    assert not {d for d in set(os.listdir(tempfile.gettempdir())) - before if d.startswith("opmagent-kernel-")}
