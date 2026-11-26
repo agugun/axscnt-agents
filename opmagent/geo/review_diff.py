@@ -56,6 +56,11 @@ def _rms(v) -> float | None:
 def metrics(data: dict) -> dict:
     out = {"cells": data["nx"] * data["ny"] * data["nz"], "grid": f"{data['nx']} x {data['ny']} x {data['nz']}",
            "mean_PORO": float(data["arrays"]["PORO"].mean()) if "PORO" in data["arrays"] else None}
+    for kw in data["keywords"]:     # every property: geometric mean for permeabilities, else arithmetic
+        if kw == "PORO":
+            continue
+        a = data["arrays"][kw]
+        out[f"mean_{kw}"] = float(np.exp(np.log(np.clip(a, 1e-9, None)).mean())) if kw.startswith("PERM") else float(a.mean())
     mf = gq.tops_misfit(data)
     for s in data["spec"]["surfaces"]:
         out[f"tops_rms_m.{s}"] = _rms(mf.loc[mf["surface"] == s, "misfit"]) if len(mf) else None
@@ -74,26 +79,23 @@ def metrics(data: dict) -> dict:
 
 
 def _change(old, new):
-    """new - old, with rounding noise (below 1e-9 of the values) as 0; None unless both are numbers."""
+    """new - old; 0 when the two agree to the 5 significant digits shown, or within 1e-6 of their size (kriging
+    solves aren't bit-for-bit, and an error statistic near zero is all noise); None unless both are numbers."""
     num = lambda v: isinstance(v, (int, float)) and not isinstance(v, bool)  # noqa: E731
     if not (num(old) and num(new)):
         return None
     d = new - old
-    return 0.0 if abs(d) <= 1e-9 * max(abs(old), abs(new), 1e-12) else _r(d)
+    if abs(d) <= 1e-6 * max(abs(old), abs(new), 1e-12) or _r(old) == _r(new):
+        return 0.0
+    return _r(d)
 
 
 def _r(v):
     return float(f"{v:.5g}") if isinstance(v, (int, float)) and not isinstance(v, bool) else v
 
 
-def diff(cfg, con, version_id: int, base_version_id: int | None = None) -> dict:
-    base_version_id = base_version_id or default_base(con, version_id)
-    if base_version_id is None:
-        return {"version_id": version_id, "base_version_id": None, "message": "no earlier version to compare with"}
-    new, old = views.load_version(cfg, con, version_id), views.load_version(cfg, con, base_version_id)
-    if new["model_name"] != old["model_name"]:
-        from ..core.errors import INVALID_INPUT, ToolError
-        raise ToolError(INVALID_INPUT, f"versions {version_id} and {base_version_id} are of different models")
+def compare(new: dict, old: dict) -> dict:
+    """Two loaded models (versions or a preview) side by side: spec, numbers, QC findings, how maps compare."""
     mn, mo = metrics(new), metrics(old)
     numbers = [{"key": k, "old": _r(mo.get(k)), "new": _r(mn.get(k)), "change": _change(mo.get(k), mn.get(k))}
                for k in list(dict.fromkeys(list(mo) + list(mn)))]
@@ -107,15 +109,26 @@ def diff(cfg, con, version_id: int, base_version_id: int | None = None) -> dict:
                   for k in fn if fn[k]["status"] in bad and fo.get(k, {}).get("status") in bad],
         "new": [{"finding": k, "status": fn[k]["status"], "detail": fn[k]["detail"]}
                 for k in fn if fn[k]["status"] in bad and fo.get(k, {}).get("status") not in bad]}
+    return {"spec": props.spec_diff(old["spec"], new["spec"]), "numbers": numbers, "findings": findings,
+            "maps": comparable(new, old), "keywords": sorted(set(new["keywords"]) & set(old["keywords"])),
+            "zones": [z["zone"] for z in views.zones(new)], "nz": new["nz"]}
+
+
+def diff(cfg, con, version_id: int, base_version_id: int | None = None) -> dict:
+    base_version_id = base_version_id or default_base(con, version_id)
+    if base_version_id is None:
+        return {"version_id": version_id, "base_version_id": None, "message": "no earlier version to compare with"}
+    new, old = views.load_version(cfg, con, version_id), views.load_version(cfg, con, base_version_id)
+    if new["model_name"] != old["model_name"]:
+        from ..core.errors import INVALID_INPUT, ToolError
+        raise ToolError(INVALID_INPUT, f"versions {version_id} and {base_version_id} are of different models")
+    c = compare(new, old)
     built_from = [p for p in props.list_proposals(con, "geo", new["model_name"]) if p["built_version_id"] == version_id]
     fids = {f["id"] for f in review.list_feedback(con, "geo", new["model_name"], status=None)
             if f["addressed_in_version_id"] == version_id}
     for p in built_from:
         fids |= set(p["feedback_ids"])
     return {"version_id": version_id, "version": new["version"], "base_version_id": base_version_id,
-            "base_version": old["version"], "spec": props.spec_diff(old["spec"], new["spec"]),
-            "numbers": numbers, "findings": findings, "maps": comparable(new, old),
-            "keywords": sorted(set(new["keywords"]) & set(old["keywords"])), "zones": [z["zone"] for z in views.zones(new)],
-            "nz": new["nz"], "proposals": [{"id": p["id"], "changes": p["changes"], "rationale": p["rationale"]}
+            "base_version": old["version"], **c, "proposals": [{"id": p["id"], "changes": p["changes"], "rationale": p["rationale"]}
                                            for p in built_from],
             "threads": [review.get(con, f) for f in sorted(fids)]}

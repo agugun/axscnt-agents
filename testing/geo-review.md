@@ -8,7 +8,9 @@ geo build v1 ──► opmagent geo review v1 (workbench)
    engineer: pins a question on a cell ──► agent (waiting): reads what is there, replies with a view
    engineer: answers in the thread     ──► agent: proposes a spec change
    engineer: accepts the proposal      ──► agent: builds v2 from it, answers the thread
-   both: the diff v2 against v1        ──► engineer: ends the session
+   both: the diff v2 against v1
+   agent: previews a change; engineer: previews kv/kh 0.05, asks the agent to build it ──► agent: builds v3
+   engineer: ends the session
 ```
 
 Design: [docs/design/geo-review.md](../docs/design/geo-review.md).
@@ -16,7 +18,7 @@ Design: [docs/design/geo-review.md](../docs/design/geo-review.md).
 ## Run it (scripted)
 
 ```bash
-testing/geo_review_loop.sh            # about 20 s; a new temporary workspace
+testing/geo_review_loop.sh            # about 25 s; a new temporary workspace
 KEEP=1 testing/geo_review_loop.sh     # then leave the workbench running and open the printed link
 ```
 
@@ -37,7 +39,10 @@ side goes through the geo profile's tools, and the build through `opmagent geo b
    in the thread with views you can open.
 4. Reply in the thread. Ask for a change; the agent posts a proposal card. Accept it (or reject it with a reason).
 5. The agent builds the new version from the proposal and answers the thread. The card links to the diff.
-6. Look at the Diff tab, then **End session**.
+6. Look at the Diff tab.
+7. Open **What-if**, change a setting (say kv/kh), press **Preview**, look at the difference map and the numbers,
+   and **Ask the agent to build this**. The agent builds it and answers.
+8. **End session**.
 
 ## Success criteria
 
@@ -51,6 +56,8 @@ side goes through the geo profile's tools, and the build through `opmagent geo b
 | 6 | The agent hears a reply while waiting | the engineer's reply ends the wait |
 | 7 | Only an accepted proposal is built | `--from-proposal` on a proposed one fails; after Accept it builds v2, 10 x 10 x 6 |
 | 8 | The diff says what changed | spec `layers` and `petro.vsh_cutoff`, maps compared by zone, the comment it answers; the NTG difference map draws |
-| 9 | The loop closes | the agent answers the thread with v2; End session releases the waiting agent (`session_ended`) |
+| 9 | Previews | the agent's preview of 4 + 3 layers is 10 x 10 x 7; the engineer's kv/kh 0.05 preview changes only mean PERMZ |
+| 10 | The engineer's own change | it is a proposal by the reviewer, accepted at once; the waiting agent hears it; v3 built from it changes only mean PERMZ, to the preview's value |
+| 11 | The loop closes | the agent answers the thread with v2; End session releases the waiting agent (`session_ended`) |
 
 The scripted run prints PASS or FAIL per check and "All checks passed." at the end.

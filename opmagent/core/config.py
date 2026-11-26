@@ -48,6 +48,7 @@ class Config:
     hm_case_timeout_s: int = 3600       # [hm] case_timeout_s: a variant run longer than this is stopped and failed
     hm_min_free_disk_mb: int = 2048     # [hm] min_free_disk_mb: disk left free where the variants write
     hm_keep_grid_output: bool = False   # [hm] keep_grid_output: keep each variant's restart and grid files
+    review_preview_keep_days: int = 7   # [geo_review] preview_keep_days: what-if preview grids are deleted after this
 
     @property
     def inbox(self) -> Path:
@@ -79,6 +80,7 @@ def load(path: str | os.PathLike | None = None) -> Config:
     paths, d, sim, dbg, st, vw = (data.get(k, {}) for k in ("paths", "defaults", "simulation", "debug", "study", "viewer"))
     qc = data.get("qc", {})
     hm = data.get("hm", {})
+    gr = data.get("geo_review", {})
     if qc.get("report", "notebook") not in ("notebook", "html"):
         raise ValueError('[qc] report must be "notebook" or "html"')
     cfg = Config(
@@ -105,6 +107,7 @@ def load(path: str | os.PathLike | None = None) -> Config:
         hm_case_timeout_s=int(hm.get("case_timeout_s", 3600)),
         hm_min_free_disk_mb=int(hm.get("min_free_disk_mb", 2048)),
         hm_keep_grid_output=bool(hm.get("keep_grid_output", False)),
+        review_preview_keep_days=int(gr.get("preview_keep_days", 7)),
     )
     _check_release_flow(cfg)
     return cfg

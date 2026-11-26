@@ -31,7 +31,7 @@ from ..core import review as rv
 from ..core.errors import FORBIDDEN, INVALID_INPUT, NOT_FOUND, ToolError
 from ..servers.data_server import DataService, wrap
 from ..core import proposals as props
-from . import review_diff
+from . import preview, review_diff
 from . import review_views as views
 
 STATIC = Path(__file__).with_name("review_static")
@@ -71,22 +71,32 @@ class ReviewApp:
                     for m in models.list_models(self.con, "geo") if m["model_name"] == h["model_name"]]
         qc = self.reviewer.get_qc_report(kind="geo", version_id=vid)
         rep = (qc.get("qc_report") or {}) if qc.get("ok") else {}
-        out = {**views.meta(d), "versions": sorted(versions, key=lambda v: v["version"]),
-               "qc_report": rep.get("path"), "views": list(views.FIGS)}
+        out = {**views.meta(d), "spec": d["spec"], "can_preview": bool(props.base_spec(self.con, "geo", vid)) and not d.get("db_only"),
+               "versions": sorted(versions, key=lambda v: v["version"]),
+               "qc_report": rep.get("path")}
         if h["status"] == "qc_ready":
             out["review_commands"] = [f"opmagent review approve geo {vid}",
                                       f"opmagent review reject geo {vid} --comment \"...\""]
         return out
 
+    def preview_data(self, pid: int) -> dict:
+        key = ("preview", pid)
+        if key not in self._cache:
+            self._cache[key] = preview.load(self.cfg, self.con, pid)
+        return self._cache[key]
+
     def _spec(self, raw: dict):
-        vid = int((raw or {}).get("version_id") or self.version_id)
-        d = self.data(vid)
-        b = self.data(int(raw["base_version_id"])) if (raw or {}).get("base_version_id") else None
-        return views.check_spec(raw or {}, d, b), d, b
+        raw = raw or {}
+        if raw.get("preview_id"):
+            d = self.preview_data(int(raw["preview_id"]))
+        else:
+            d = self.data(int(raw.get("version_id") or self.version_id))
+        b = self.data(int(raw["base_version_id"])) if raw.get("base_version_id") else None
+        return views.check_spec(raw, d, b), d, b
 
     def view(self, body: dict) -> dict:
         spec, d, b = self._spec(body.get("spec"))
-        fig = views.figure(spec, d, self._pins(d["version_id"]), base=b)
+        fig = views.figure(spec, d, [] if d.get("preview_id") else self._pins(d["version_id"]), base=b)
         return {"spec": spec, "figure": json.loads(fig.to_json())}
 
     def locate(self, body: dict) -> dict:
@@ -132,6 +142,27 @@ class ReviewApp:
         name = models.header(self.con, "geo", int(body.get("version_id") or self.version_id))["model_name"]
         return {"ended": rv.session_end(self.con, "geo", name, self.reviewer._reviewer())}
 
+    def make_preview(self, body: dict) -> dict:
+        r = self._write("preview_geo_change", base_version_id=int(body.get("base_version_id") or self.version_id),
+                        spec_patch=body.get("spec_patch"))
+        return {"preview": r["preview"]}
+
+    def request_change(self, body: dict) -> dict:
+        """The engineer's previewed change as an accepted proposal. Without a thread to answer, the rationale
+        becomes a general comment first, so the change has a thread like any other."""
+        pid = int(body.get("preview_id") or 0)
+        ids = [int(i) for i in body.get("feedback_ids") or []]
+        rationale = (body.get("rationale") or "").strip()
+        if not rationale:
+            raise ToolError(INVALID_INPUT, "say why (rationale)")
+        if not ids:
+            p = preview.get(self.con, pid)
+            c = self._write("add_review_comment", kind="geo", version_id=p["base_version_id"], comment=rationale,
+                            item=rv.make_item({}, None), severity="change")
+            ids = [c["feedback"]["id"]]
+        r = self._write("request_geo_change", preview_id=pid, feedback_ids=ids, rationale=rationale)
+        return {"proposal": r["proposal"]}
+
     def diff(self, vid: int, base: int | None) -> dict:
         return {"diff": review_diff.diff(self.cfg, self.con, vid, base)}
 
@@ -173,6 +204,11 @@ class ReviewApp:
                 return _json(200, {"ok": True, **self.meta(int(q.get("version_id", self.version_id)))})
             if method == "GET" and u.path == "/api/comments":
                 return _json(200, {"ok": True, **self.comments(int(q.get("version_id", self.version_id)))})
+            if method == "GET" and u.path == "/api/preview":
+                p = preview.get(self.con, int(q.get("id", 0)))
+                if p["model_name"] != models.header(self.con, "geo", self.version_id)["model_name"]:
+                    raise ToolError(NOT_FOUND, "no such preview on this model")
+                return _json(200, {"ok": True, "preview": p["summary"], "removed": bool(p["removed_at"])})
             if method == "GET" and u.path == "/api/session":
                 return _json(200, {"ok": True, **self.session(int(q.get("version_id", self.version_id)))})
             if method == "GET" and u.path == "/api/diff":
@@ -188,6 +224,7 @@ class ReviewApp:
                 if u.path == "/api/locate":
                     return _json(200, {"ok": True, **self.locate(data)})
                 writes = {"/api/comments": self.add_comment, "/api/messages": self.message,
+                          "/api/previews": self.make_preview, "/api/requests": self.request_change,
                           "/api/proposals/decide": self.decide, "/api/session/end": self.end_session}
                 if u.path in writes:
                     tok = headers.get("x-review-token") or headers.get("X-Review-Token") or ""

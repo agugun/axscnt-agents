@@ -42,18 +42,80 @@ def qc_folder(cfg, con, version_id: int) -> Path:
 
 
 def load_version(cfg, con, version_id: int) -> dict:
-    """A geo version as the QC notebook reads it, plus its QC findings. Needs the QC payload (a version built from
-    tops and logs); a version from a deck has none yet."""
+    """A geo version as the QC notebook reads it, plus its QC findings. A version without a QC payload (from a deck,
+    or an imported one) is read from the database alone: its arrays on cell-index axes, without tops, logs or depths."""
     folder = qc_folder(cfg, con, version_id)
     payload = folder / "payload.json"
     if not payload.is_file():
-        raise ToolError(NOT_FOUND, f"geo version {version_id} has no QC payload ({payload}); the review workbench "
-                                   "needs a version built from tops and logs")
+        return load_db_only(con, version_id)
     data = gq.load(payload, cfg.database, version_id)
     s = folder / "qc_summary.json"
     data["findings"] = json.loads(s.read_text()).get("findings", []) if s.is_file() else []
     data["keywords"] = sorted(k for k, a in data["arrays"].items() if np.ndim(a) == 3)
     return data
+
+
+def load_db_only(con, version_id: int) -> dict:
+    """A geo version from the database only (no QC payload): header and cell arrays. No tops, logs, layer depths or
+    areal grid, so the views are on cell indices (i, j, layer) and the well, surface and log views don't apply."""
+    from pathlib import Path as _P
+
+    import pandas as pd
+
+    from ..core.files import sha256_of
+    from ..validators._util import read_array
+    h = models.header(con, "geo", version_id)
+    nx, ny, nz = h["nx"], h["ny"], h["nz"]
+    if not (nx and ny and nz):
+        raise ToolError(NOT_FOUND, f"geo version {version_id} has no grid dimensions")
+    arrays, files = {}, []
+    for p in con.execute("SELECT g.keyword, g.const_value, f.path, f.sha256 FROM geo_properties g LEFT JOIN files f "
+                         "ON f.id = g.file_id WHERE g.version_id = ? ORDER BY g.keyword", (version_id,)):
+        if p["path"] is None:
+            if p["const_value"] is not None:
+                arrays[p["keyword"]] = np.full((nz, ny, nx), float(p["const_value"]))
+            continue
+        same = _P(p["path"]).is_file() and sha256_of(p["path"]) == p["sha256"]
+        files.append({"keyword": p["keyword"], "path": p["path"], "same": same})
+        if same:
+            try:
+                v = np.asarray(read_array(p["path"]), dtype=float)
+            except (ValueError, OSError):
+                continue
+            if v.size == nx * ny * nz:
+                arrays[p["keyword"]] = v.reshape((nz, ny, nx))
+    return {"model_name": h["model_name"], "version": h["version"], "version_id": version_id, "header": h,
+            "nx": nx, "ny": ny, "nz": nz, "arrays": arrays, "areal": None, "layer_depths": None,
+            "spec": {"surfaces": [], "layers": []}, "contacts": [], "zones": [], "files": files, "findings": [],
+            "tops": pd.DataFrame(columns=["well_name", "surface", "x", "y", "tvd"]),
+            "logs": pd.DataFrame(columns=["well_name", "tvd", "phi", "perm", "vsh"]),
+            "upscaled": pd.DataFrame(columns=["well_name", "layer", "phi", "perm", "ntg"]),
+            "db_only": True, "keywords": sorted(k for k in arrays if k != "ACTNUM")}
+
+
+def figs(data: dict) -> tuple[str, ...]:
+    """The views this model can show: a model read from the database alone has no wells, tops or logs."""
+    return ("layer_map", "section", "distributions", "diff_map") if data.get("db_only") else FIGS
+
+
+def name(data: dict) -> str:
+    return data.get("label") or f"v{data['version']}"
+
+
+def centres(data: dict):
+    """Cell centres in metres on a regular areal grid, else the cell indices 1..nx, 1..ny."""
+    if data.get("areal"):
+        return gq.cell_centres(data)
+    return np.arange(1, data["nx"] + 1, dtype=float), np.arange(1, data["ny"] + 1, dtype=float)
+
+
+def masked(data: dict, a: np.ndarray, k=None) -> np.ndarray:
+    """Inactive cells (ACTNUM 0) blank in a picture."""
+    act = data["arrays"].get("ACTNUM")
+    if act is None:
+        return a
+    m = act if k is None else act[k]
+    return np.where(m > 0, a, np.nan)
 
 
 def zones(data: dict) -> list[dict]:
@@ -73,7 +135,8 @@ def meta(data: dict) -> dict:
     """What the workbench needs to offer choices: wells, surfaces, keywords, layers, zones, findings."""
     wc = gq.well_cells(data)
     return {"model_name": data["model_name"], "version": data["version"], "version_id": data["version_id"],
-            "status": data["header"]["status"], "grid": [data["nx"], data["ny"], data["nz"]], "areal": data["areal"],
+            "preview_id": data.get("preview_id"), "label": name(data), "db_only": bool(data.get("db_only")),
+            "views": list(figs(data)), "status": data["header"]["status"], "grid": [data["nx"], data["ny"], data["nz"]], "areal": data["areal"],
             "wells": [str(w) for w in wc["well_name"]], "surfaces": list(data["spec"]["surfaces"]),
             "keywords": data["keywords"], "zones": zones(data), "findings": data["findings"],
             "assumptions": data.get("assumptions", [])}
@@ -93,12 +156,15 @@ def _int(v, name, lo, hi):
 def check_spec(spec: dict, data: dict, base: dict | None = None) -> dict:
     """The spec with its arguments checked against the model and the defaults filled in. diff_map (this version
     minus base_version_id, by layer or by zone mean) needs base: that version's data."""
-    if not isinstance(spec, dict) or spec.get("fig") not in FIGS:
-        raise ToolError(INVALID_INPUT, f"view: 'fig' must be one of {FIGS}")
-    fig, out = spec["fig"], {"fig": spec["fig"], "version_id": data["version_id"]}
-    if "version_id" in spec and int(spec["version_id"]) != data["version_id"]:
+    if not isinstance(spec, dict) or spec.get("fig") not in figs(data):
+        raise ToolError(INVALID_INPUT, f"view: 'fig' must be one of {figs(data)} for this model")
+    pid = data.get("preview_id")
+    fig, out = spec["fig"], {"fig": spec["fig"], **({"preview_id": pid} if pid else {"version_id": data["version_id"]})}
+    if pid and spec.get("preview_id") is not None and int(spec["preview_id"]) != pid:
+        raise ToolError(INVALID_INPUT, f"view is of preview {spec['preview_id']}, not {pid}")
+    if not pid and "version_id" in spec and int(spec["version_id"]) != data["version_id"]:
         raise ToolError(INVALID_INPUT, f"view is of version {spec['version_id']}, not {data['version_id']}")
-    known = {"fig", "version_id"} | {"surfaces": set(), "layer_map": {"kw", "layer", "log"},
+    known = {"fig", "version_id", "preview_id"} | {"surfaces": set(), "layer_map": {"kw", "layer", "log"},
                                      "section": {"kw", "along", "well", "cell", "log"}, "well": {"well"},
                                      "at_wells": set(), "distributions": set(), "poroperm": set(),
                                      "diff_map": {"kw", "layer", "zone", "base_version_id"}}[fig]
@@ -172,6 +238,8 @@ def check_anchor(anchor: dict | None) -> dict:
 # ---------------------------------------------------------------- figures
 def _xy_to_ij(data, x, y):
     a = data["areal"]
+    if not a:                                  # cell-index axes
+        return (int(np.clip(round(float(x)) - 1, 0, data["nx"] - 1)), int(np.clip(round(float(y)) - 1, 0, data["ny"] - 1)))
     i = int(np.clip((float(x) - a["x0"]) // a["dx"], 0, data["nx"] - 1))
     j = int(np.clip((float(y) - a["y0"]) // a["dy"], 0, data["ny"] - 1))
     return i, j
@@ -184,7 +252,7 @@ def _well_at(data, i, j):
 
 
 def _pins_layer_map(data, spec, pins):
-    xs, ys = gq.cell_centres(data)
+    xs, ys = centres(data)
     wc = gq.well_cells(data).set_index("well_name")
     out = []
     for p in pins:
@@ -199,7 +267,7 @@ def _pins_layer_map(data, spec, pins):
 
 
 def _pins_section(data, spec, i, j, pins):
-    xs, ys = gq.cell_centres(data)
+    xs, ys = centres(data)
     ld = data["layer_depths"]
     out = []
     for p in pins:
@@ -208,7 +276,7 @@ def _pins_section(data, spec, i, j, pins):
             continue
         ci, cj, ck = c[0] - 1, c[1] - 1, c[2] - 1
         if (spec["along"] == "x" and cj == j) or (spec["along"] == "y" and ci == i):
-            z = 0.5 * (ld[ck, cj, ci] + ld[ck + 1, cj, ci])
+            z = ck + 1 if ld is None else 0.5 * (ld[ck, cj, ci] + ld[ck + 1, cj, ci])
             out.append((xs[ci] if spec["along"] == "x" else ys[cj], float(z), p))
     return out
 
@@ -255,11 +323,12 @@ def figure(spec: dict, data: dict, pins: list[dict] = (), base: dict | None = No
             t.meta = {"role": "surface" if n % 2 == 0 else "tops", "surface": s}
     elif fig_name == "layer_map":
         a, k = data["arrays"][spec["kw"]], spec["layer"] - 1
-        xs, ys = gq.cell_centres(data)
-        z = np.log10(np.clip(a[k], 1e-6, None)) if spec["log"] else a[k]
+        xs, ys = centres(data)
+        z = masked(data, np.log10(np.clip(a[k], 1e-6, None)) if spec["log"] else a[k], k)
+        ax = ("x", "y") if data.get("areal") else ("i", "j")
         fig = go.Figure(go.Heatmap(x=xs, y=ys, z=z, colorscale="Viridis", meta={"role": "layer"},
                                    colorbar=dict(title=("log10 " if spec["log"] else "") + spec["kw"]),
-                                   hovertemplate="x %{x:.0f}<br>y %{y:.0f}<br>%{z:.4g}<extra></extra>"))
+                                   hovertemplate=f"{ax[0]} %{{x:.0f}}<br>{ax[1]} %{{y:.0f}}<br>%{{z:.4g}}<extra></extra>"))
         wc = gq.well_cells(data)
         fig.add_trace(go.Scatter(x=wc["x"], y=wc["y"], mode="markers+text", text=wc["well_name"].astype(str),
                                  textposition="top center", meta={"role": "wells"}, showlegend=False,
@@ -271,6 +340,26 @@ def figure(spec: dict, data: dict, pins: list[dict] = (), base: dict | None = No
                           title=f"{spec['kw']} layer {spec['layer']} of {data['nz']}" + (f" (zone {z_name})" if z_name else ""))
         fig.update_yaxes(scaleanchor="x", scaleratio=1)
         pts = _pins_layer_map(data, spec, pins)
+        if pts:
+            fig.add_trace(_pin_trace(pts))
+    elif fig_name == "section" and data["layer_depths"] is None:      # no depths: layers by index
+        i, j = _section_ij(data, spec)
+        a = data["arrays"][spec["kw"]]
+        img = a[:, j, :] if spec["along"] == "x" else a[:, :, i]
+        act = data["arrays"].get("ACTNUM")
+        if act is not None:
+            img = np.where((act[:, j, :] if spec["along"] == "x" else act[:, :, i]) > 0, img, np.nan)
+        pos = np.arange(1, img.shape[1] + 1)
+        fig = go.Figure(go.Heatmap(x=pos, y=np.arange(1, data["nz"] + 1), z=np.log10(np.clip(img, 1e-6, None))
+                                   if spec["log"] else img, colorscale="Viridis", meta={"role": "section"},
+                                   colorbar=dict(title=("log10 " if spec["log"] else "") + spec["kw"]),
+                                   hovertemplate="%{x}<br>layer %{y}<br>%{z:.4g}<extra></extra>"))
+        fig.update_yaxes(autorange="reversed", title="layer")
+        fig.update_xaxes(title="i" if spec["along"] == "x" else "j")
+        fig.update_layout(**{**gq.LAYOUT, "height": 420}, title=f"{spec['kw']} section along {spec['along']} "
+                          f"({'row j' if spec['along'] == 'x' else 'column i'} {(j if spec['along'] == 'x' else i) + 1}), "
+                          "by layer (no depths in this model)")
+        pts = _pins_section(data, spec, i, j, pins)
         if pts:
             fig.add_trace(_pin_trace(pts))
     elif fig_name == "section":
@@ -296,10 +385,11 @@ def figure(spec: dict, data: dict, pins: list[dict] = (), base: dict | None = No
         fig = gq.fig_distributions(data)
     elif fig_name == "diff_map":
         d = diff_values(spec, data, base)
-        xs, ys = gq.cell_centres(data)
+        xs, ys = centres(data)
         lim = float(np.nanmax(np.abs(d))) or 1e-9
         where = f"layer {spec['layer']}" if "layer" in spec else f"zone {spec['zone']} (zone mean)"
-        fig = go.Figure(go.Heatmap(x=xs, y=ys, z=d, colorscale="RdBu", zmid=0, zmin=-lim, zmax=lim, meta={"role": "layer"},
+        fig = go.Figure(go.Heatmap(x=xs, y=ys, z=masked(data, d, spec.get("layer", 1) - 1 if "layer" in spec else None)
+                                   if "layer" in spec else d, colorscale="RdBu", zmid=0, zmin=-lim, zmax=lim, meta={"role": "layer"},
                                    colorbar=dict(title=f"Δ {spec['kw']}"),
                                    hovertemplate="x %{x:.0f}<br>y %{y:.0f}<br>Δ %{z:.4g}<extra></extra>"))
         wc = gq.well_cells(data)
@@ -309,7 +399,7 @@ def figure(spec: dict, data: dict, pins: list[dict] = (), base: dict | None = No
                                  marker=dict(color="white", size=9, line=dict(color="black", width=1)),
                                  hovertemplate="%{text}<extra></extra>"))
         fig.update_layout(**{**gq.LAYOUT, "height": 520},
-                          title=f"{spec['kw']} v{data['version']} minus v{base['version']}, {where}")
+                          title=f"{spec['kw']} {name(data)} minus {name(base)}, {where}")
         fig.update_yaxes(scaleanchor="x", scaleratio=1)
     else:
         fig = gq.fig_poroperm(data)
@@ -336,12 +426,15 @@ def locate(spec: dict, data: dict, role: str | None, point: dict) -> dict:
         return {**a, "well": w} if w else a
     if role == "section" and x is not None:
         si, sj = _section_ij(data, spec)
+        xs, ys = centres(data)
         if spec["along"] == "x":
-            i, j = _xy_to_ij(data, x, data["areal"]["y0"] + (sj + 0.5) * data["areal"]["dy"])
+            i, j = _xy_to_ij(data, x, ys[sj])
         else:
-            i, j = _xy_to_ij(data, data["areal"]["x0"] + (si + 0.5) * data["areal"]["dx"], x)
-        col = data["layer_depths"][:, j, i]
-        k = int(np.searchsorted(col, float(y), side="right")) - 1
+            i, j = _xy_to_ij(data, xs[si], x)
+        if data["layer_depths"] is None:             # by layer index
+            k = int(round(float(y))) - 1
+        else:
+            k = int(np.searchsorted(data["layer_depths"][:, j, i], float(y), side="right")) - 1
         if not 0 <= k < data["nz"]:
             return {"column": [i + 1, j + 1]}
         a = {"cell": [i + 1, j + 1, k + 1], "kw": spec["kw"]}
@@ -379,11 +472,13 @@ def describe(anchor: dict, data: dict) -> dict:
         i, j, k = (c - 1 for c in a["cell"])
         if not (i < data["nx"] and j < data["ny"] and k < data["nz"]):
             raise ToolError(INVALID_INPUT, f"anchor cell {a['cell']} is outside the grid {data['nx']}x{data['ny']}x{data['nz']}")
-        xs, ys = gq.cell_centres(data)
+        xs, ys = centres(data)
         d = np.hypot(wc["x"] - xs[i], wc["y"] - ys[j]) if len(wc) else None
         out["cell"] = {"ijk": a["cell"], "x": _r(xs[i], 7), "y": _r(ys[j], 7), "zone": zone_of(data, k + 1),
-                       "top_tvd": _r(ld[k, j, i], 6), "base_tvd": _r(ld[k + 1, j, i], 6),
-                       "values": {kw: _r(arr[kw][k, j, i]) for kw in data["keywords"]}}
+                       "top_tvd": _r(ld[k, j, i], 6) if ld is not None else None,
+                       "base_tvd": _r(ld[k + 1, j, i], 6) if ld is not None else None,
+                       "values": {kw: _r(arr[kw][k, j, i]) for kw in data["keywords"]},
+                       **({"active": bool(arr["ACTNUM"][k, j, i] > 0)} if "ACTNUM" in arr else {})}
         if d is not None:
             out["cell"]["nearest_well"] = {"well": str(d.idxmin()), "distance_m": _r(d.min())}
         lay = data["arrays"][a.get("kw", "PORO")][k] if a.get("kw", "PORO") in arr else None

@@ -1,6 +1,6 @@
 # Geo review workbench
 
-Status: phases 1 and 2 built (see **Phase 1 / Phase 2 as built** under Plan); phases 3 and 4 proposed. Branch: `feat/geo-review-phase2`.
+Status: phases 1 to 3 built (see **Phase 1 / 2 / 3 as built** under Plan); phase 4 proposed. Branch: `feat/geo-review-phase3`.
 
 ## Summary
 
@@ -336,6 +336,54 @@ same loop as a `testing/geo_review_loop.sh` scenario.
 preview time on Norne and decide the partial-kriging shortcut. Also: deck-based versions in the workbench (the
 model read without logs or a QC payload), moved here from phase 2.
 
+**Phase 3 as built** (`geo/preview.py`, the What-if tab, `review_views.load_db_only`):
+
+- **Decision 4: both.** The engineer previews and proposes too. `request_geo_change` (reviewer profile) and the
+  What-if tab's "Ask the agent to build this" make the engineer's previewed change a proposal by the reviewer,
+  accepted at once, which the agent builds like any other. Without a ticked comment, the rationale becomes a
+  general comment first, so every change has a thread.
+- **Previews:** `preview_geo_change(base_version_id, spec_patch)` (geo and reviewer profiles) runs the version's
+  own build (`build_grid`) on the base's own data with base spec ⊕ patch, into `<file_store>/previews/`.
+  - The data: the study's tables and logs, or the recorded tops and LAS files. `base_inputs`, which
+    `--from-proposal` now uses too, so a preview and the build from it read the same data.
+  - Nothing is registered and no version is made. The arrays and layer depths are kept as `preview.npz`, the summary
+    in `review_previews`.
+  - The summary: changes, grid, numbers against the base, QC findings fixed / still / new (the notebook's checks run
+    on the preview), and how maps compare.
+  - A preview is drawn like a version (view specs with `preview_id`, `diff_map` against its base), and the agent's
+    `propose_geo_change(..., preview_id)` attaches it, so a proposal card says what it does before anyone accepts it.
+  - Grids are deleted after `[geo_review] preview_keep_days` (7); the summaries stay.
+- **Timing; no partial-kriging shortcut.** Norne was the planned case, but it has no logs (a deck), so there is
+  nothing to preview. On synthetic fields one build takes 0.9 s at 30,000 cells (10 wells), 1.9 s at 200,000 (20
+  wells) and 6.2 s at 675,000 (30 wells); the test field takes about 0.1-0.7 s. Fast enough for an interactive
+  preview, so the shortcut isn't needed.
+- **Numbers:** the mean of every property is added (geometric for permeabilities), so a kv/kh change shows as
+  `mean_PERMZ`. A change counts as 0 when the two values agree to the 5 significant digits shown, or within 1e-6:
+  kriging isn't bit-for-bit, and an error statistic near zero is all noise.
+- **Models without a QC payload** (from a deck, or hello's) open in the workbench, read from the database alone
+  (`load_db_only`).
+  - Arrays come from their registered files, sha256-checked. Views are on cell indices (i, j, layer): layer maps,
+    sections by layer, distributions, diffs. Inactive cells (ACTNUM 0) are blank.
+  - Well, surface and log views are hidden: there are no tops or logs. Such versions can't be previewed or patched
+    (no spec); true depths and 3D stay in the ResInsight static view.
+- **What-if tab:** knobs for Vsh cut-off, kv/kh, poro-perm a / b, minimum thickness and layers per zone, each
+  highlighted when changed from the version. Preview shows the difference map from the version (by layer or zone
+  mean) or the preview's own map, the changes, the numbers that moved and the findings. Then "Ask the agent to
+  build this", with the open comments to tick. Proposal cards show "by you" or "by the geo agent", and "show the
+  preview" when they carry one.
+- **Gate:** `tests/test_geo_review_preview.py`:
+  - the agent's preview: refusals, drawn as a diff, attached only to its own patch;
+  - the version built from that proposal has the preview's arrays, to rtol 1e-5;
+  - the engineer's preview, views and clicks on it, and request: supersedes the agent's waiting proposal, the
+    agent hears it, builds it ("by the engineer" in the assumptions); a request without a thread opens a comment;
+  - pruning (grid gone, summary kept);
+  - a preview from a study's data;
+  - hello's geo model in the workbench by cell index.
+
+  `testing/geo_review_loop.sh` adds the what-if steps: 22 checks. v3, built from the engineer's kv/kh 0.05, changes
+  only mean PERMZ, to the preview's value. Browser check: knobs, Preview, the PERMZ difference map, the numbers,
+  "Ask the agent to build this" with no thread, and hello's model with its limited tabs.
+
 **Phase 4: res and well.** The same workbench with their figure registries (SCAL curves, contacts on sections,
 well trajectories and perforations against layers).
 
@@ -345,7 +393,6 @@ well trajectories and perforations against layers).
    the app behind the session token after phase 2?
 2. ~~**HTTP stack.**~~ Settled in phase 1: the standard library's `http.server`.
 3. ~~**Proposal table.**~~ Settled in phase 2: a kind-neutral `model_proposals` (geo only for now).
-4. **The engineer's own proposals.** Allow the engineer to author a proposal from the knobs (phase 3, as
-   proposed), or only to comment, so the agent stays the only one writing specs?
+4. ~~**The engineer's own proposals.**~~ Settled in phase 3: yes, previewed and accepted at once.
 5. **3D.** ResInsight stays the 3D view (a button that opens the static view at the anchored cell). Or is a
    light in-browser 3D view (plotly mesh of the active cells, one property) worth adding in phase 2?

@@ -9,6 +9,15 @@ to the res model, and SQLite can't change the existing tables in place. `opmagen
 so; move it aside and run `opmagent init-db` (or `opmagent setup <workspace>`), then rebuild the studies.
 No approvals are carried over. Design: [docs/design/res-model.md](docs/design/res-model.md).
 
+- **Geo review workbench, phase 3** ([docs/design/geo-review.md](docs/design/geo-review.md)):
+  - **What-if previews:** `preview_geo_change` and the What-if tab run a scratch build of a spec change on the
+    version's own data, compared with it (numbers, QC findings, difference maps). The build takes seconds, and no
+    version is made. Grids are kept `[geo_review] preview_keep_days`.
+  - **Proposals:** an agent's proposal can carry its preview. Your own previewed change becomes a proposal accepted
+    at once (`request_geo_change`, "Ask the agent to build this"), which the agent builds.
+  - **Models without a QC payload** (from a deck) open in the workbench on cell indices.
+  - **Diff numbers:** the version diff also gives every property's mean, and ignores kriging noise.
+  - **Database:** new table `review_previews`.
 - **Geo review workbench, phase 2** ([docs/design/geo-review.md](docs/design/geo-review.md)):
   - **Threads:** each review comment has a thread (`review_messages`, append-only). The modeler replies with views
     (`reply_review`); writing in an answered thread reopens it.

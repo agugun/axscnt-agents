@@ -401,9 +401,13 @@ class DataService:
         distributions, poroperm, diff_map (kw, base_version_id, layer or zone: this version minus the base).
         anchor: also the model's values at that anchor."""
         from ..geo import review_views as rvw
-        if not isinstance(spec, dict) or "version_id" not in spec:
-            raise ToolError(INVALID_INPUT, "spec needs fig and version_id")
-        d = rvw.load_version(self.cfg, self.con, int(spec["version_id"]))
+        if not isinstance(spec, dict) or not ("version_id" in spec or "preview_id" in spec):
+            raise ToolError(INVALID_INPUT, "spec needs fig and version_id (or preview_id)")
+        if spec.get("preview_id"):
+            from ..geo import preview as pv
+            d = pv.load(self.cfg, self.con, int(spec["preview_id"]))
+        else:
+            d = rvw.load_version(self.cfg, self.con, int(spec["version_id"]))
         base = rvw.load_version(self.cfg, self.con, int(spec["base_version_id"])) if spec.get("base_version_id") else None
         out = {"ok": True, **rvw.summarize(rvw.check_spec(spec, d, base), d, base)}
         if anchor:
@@ -425,12 +429,15 @@ class DataService:
         for v in views or []:
             if not isinstance(v, dict):
                 raise ToolError(INVALID_INPUT, "views: a list of view specs")
-            vid = int(v.get("version_id") or f["version_id"])
-            if models.header(self.con, "geo", vid)["model_name"] != f["model_name"]:
-                raise ToolError(INVALID_INPUT, f"view of version {vid}: not {f['model_name']}")
-            d = rvw.load_version(self.cfg, self.con, vid)
+            if v.get("preview_id"):
+                from ..geo import preview as pv
+                d = pv.load(self.cfg, self.con, int(v["preview_id"]))
+            else:
+                d = rvw.load_version(self.cfg, self.con, int(v.get("version_id") or f["version_id"]))
+            if d["model_name"] != f["model_name"]:
+                raise ToolError(INVALID_INPUT, f"view of {d['model_name']}: not {f['model_name']}")
             b = rvw.load_version(self.cfg, self.con, int(v["base_version_id"])) if v.get("base_version_id") else None
-            out.append(rvw.check_spec({**v, "version_id": vid}, d, b))
+            out.append(rvw.check_spec({**v, **({} if v.get("preview_id") else {"version_id": d["version_id"]})}, d, b))
         return out
 
     def get_review_thread(self, feedback_id: int) -> dict:
@@ -465,20 +472,45 @@ class DataService:
                                notebook_file_id=nb, modeler_kind="geo" if role == "modeler" else None)
         return {"ok": True, "message": m, "spoken_summary": f"Replied in thread {feedback_id}."}
 
+    def _preview_for(self, preview_id: int | None, base_version_id: int, spec_patch: dict) -> dict | None:
+        from ..geo import preview as pv
+        if preview_id is None:
+            return None
+        p = pv.get(self.con, preview_id)
+        if p["base_version_id"] != base_version_id or p["spec_patch"] != spec_patch:
+            raise ToolError(INVALID_INPUT, f"preview {preview_id} is of another version or patch")
+        return p["summary"]
+
+    def preview_geo_change(self, base_version_id: int, spec_patch: dict) -> dict:
+        """What-if: build base spec + spec_patch on the base version's own data into a scratch folder (no version)
+        and compare it with the base: grid, numbers (zone volumes, tops misfit, at-well and leave-one-out errors),
+        QC findings fixed / new. Seconds on a small grid; elapsed_s says how long. Views can draw it
+        ({"fig": "layer_map", "preview_id": <id>, ...}, or diff_map with base_version_id). Preview your change
+        before proposing it, and pass preview_id to propose_geo_change so the engineer sees what it does."""
+        from ..geo import preview as pv
+        role, author = self._role()
+        s = pv.run(self.cfg, self.con, base_version_id, spec_patch, role, author)
+        fx = s["findings"]
+        moved = [n for n in s["numbers"] if n["change"] not in (None, 0.0)]
+        return {"ok": True, "preview": s, "spoken_summary": f"Preview {s['preview_id']} ({s['grid']}, "
+                f"{s['elapsed_s']} s): {len(moved)} number(s) changed; findings fixed {len(fx['fixed'])}, new "
+                f"{len(fx['new'])}."}
+
     def propose_geo_change(self, base_version_id: int, feedback_ids: list[int], spec_patch: dict, rationale: str,
-                           expected: dict | str | None = None) -> dict:
+                           expected: dict | str | None = None, preview_id: int | None = None) -> dict:
         """Propose a change to a geo version's spec for the engineer to accept before you build it: spec_patch is a
         JSON merge patch on the base spec (layers, areal, petro, curves, contacts, min_thickness; null removes a
         key), e.g. {"petro": {"vsh_cutoff": 0.4}}. feedback_ids: the threads it answers (it is posted in each).
         expected: what it should change, e.g. "B layer 5 PORO 0.27 -> ~0.22, TopRes HCPV -6 %". A new proposal on
-        the same version supersedes one still waiting. Once accepted, build it with `opmagent geo build
+        the same version supersedes one still waiting. preview_id: the preview_geo_change of this same patch, shown
+        with the proposal. Once accepted, build it with `opmagent geo build
         --from-proposal <id>` (or `opmagent study build geo <study> --from-proposal <id>`), then answer the
         threads with the new version."""
         from ..core import proposals as props
         if self.profile != "geo":
             raise ToolError(FORBIDDEN, "only the geo modeler proposes geo changes")
         p = props.propose(self.con, "geo", base_version_id, feedback_ids, spec_patch, rationale, "geo modeler",
-                          expected=expected)
+                          expected=expected, preview=self._preview_for(preview_id, base_version_id, spec_patch))
         return {"ok": True, "proposal": p, "spoken_summary": f"Proposal {p['id']} on {p['model_name']} "
                 f"v{p['base_version']}: {props.describe_changes(p['changes'])}. Waiting for the engineer."}
 
@@ -496,6 +528,17 @@ class DataService:
         ps = props.list_proposals(self.con, "geo", model_name, status)
         return {"ok": True, "proposals": ps, "spoken_summary": f"{len(ps)} proposal(s)" + (
             ": " + "; ".join(f"#{p['id']} {p['status']}" for p in ps[-5:]) if ps else ".")}
+
+    def request_geo_change(self, preview_id: int, feedback_ids: list[int], rationale: str) -> dict:
+        """Reviewer: make your previewed change a proposal, accepted at once, for the geo modeler to build. It
+        answers the given threads (at least one)."""
+        from ..core import proposals as props
+        from ..geo import preview as pv
+        p = pv.get(self.con, preview_id)
+        r = props.request(self.con, "geo", p["base_version_id"], feedback_ids, p["spec_patch"], rationale,
+                          self._reviewer(), preview=p["summary"])
+        return {"ok": True, "proposal": r, "spoken_summary": f"Proposal {r['id']} accepted: "
+                f"{props.describe_changes(r['changes'])}. The geo modeler builds it next."}
 
     def decide_geo_proposal(self, proposal_id: int, action: str, comment: str | None = None) -> dict:
         """Reviewer: accept a geo proposal (the modeler builds it) or reject it (comment required; it goes into
@@ -700,9 +743,9 @@ FEEDBACK = ["get_review_feedback", "answer_review_feedback"]
 STUDY = ["study_status", "list_studies", "start_task", "complete_task", "fail_task", "retry_task", "raise_request",
          "resolve_request"]
 GEO_REVIEW = ["review_context", "render_review_view", "get_review_thread", "reply_review", "get_geo_proposal",
-              "list_geo_proposals", "review_diff"]                 # the geo review workbench
+              "list_geo_proposals", "review_diff", "preview_geo_change"]                 # the geo review workbench
 GEO_REVIEW_MODELER = ["propose_geo_change", "await_review_activity"]
-GEO_REVIEW_REVIEWER = ["decide_geo_proposal"]
+GEO_REVIEW_REVIEWER = ["decide_geo_proposal", "request_geo_change"]
 QC_NOTEBOOKS = ["run_qc_notebook", "create_investigation_notebook", "run_investigation_notebook"]
 TOOLS = {
     "fluid": COMMON + WRITER + STUDY + DATA_READ + FEEDBACK + QC_NOTEBOOKS, "geo": COMMON + WRITER + STUDY + DATA_READ + FEEDBACK + QC_NOTEBOOKS + ["static_view"] + GEO_REVIEW + GEO_REVIEW_MODELER,
@@ -726,7 +769,8 @@ TOOLS = {
 WRITE_TOOLS = (set(WRITER) | {"create_deck", "add_deck_file", "set_deck_status", "approve", "reject", "init_study",
                                "accept_init_view", "reject_init_view",
                                "load_study_data", "load_deck_data", "load_study_input", "answer_review_feedback", "add_review_comment",
-                               "reply_review", "propose_geo_change", "decide_geo_proposal"}
+                               "reply_review", "propose_geo_change", "decide_geo_proposal",
+                               "preview_geo_change", "request_geo_change"}
                | set(STUDY) | set(QC_NOTEBOOKS)) - {"run_validator", "study_status", "list_studies"}
 
 

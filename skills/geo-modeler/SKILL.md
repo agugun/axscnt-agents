@@ -98,7 +98,8 @@ before you build and whenever the coordinator says there is feedback. For each c
 Comments made in the **geo review workbench** (`opmagent geo review <id>`, the engineer's web app) are anchored:
 `anchor` says what the comment is about (`{"well": "B"}`, `{"cell": [i, j, k], "kw": "PORO"}` 1-based as in the deck,
 `{"layer": 5}`, `{"zone": ...}`, `{"surface": "TopRes", "well": "C"}`, `{"finding": "<area>: <check>"}`), and `view` is
-the picture they were looking at. Before answering one, call `review_context(id)`: the model's values at the anchor
+the picture they were looking at. A version without tops or logs (from a deck) is shown on cell indices, and its
+anchors have no depths. Before answering one, call `review_context(id)`: the model's values at the anchor
 and what the view shows. To look at another view yourself, `render_review_view(spec, anchor)` (figs `surfaces`,
 `layer_map`, `section`, `well`, `at_wells`, `distributions`, `poroperm`). Answer about that place, with numbers. Never
 start the workbench yourself: it writes as the reviewer.
@@ -111,8 +112,13 @@ When the engineer says "review session on <model or version>":
    - **a question or a "look at this":** `reply_review(id, body, views=[...])`, with numbers and the views that show
      it (`render_review_view` first, to check what a view shows). An investigation notebook you ran can go with it
      (`notebook_path`).
-   - **a change:** `propose_geo_change(base_version_id, [ids], spec_patch, rationale, expected)`. Never build before
-     the engineer accepts. A rejected proposal comes back in the thread with the reason.
+   - **a change:** first `preview_geo_change(base_version_id, spec_patch)`: a scratch build in seconds with the
+     numbers and QC findings against the base (draw it with views that name `preview_id`). Then
+     `propose_geo_change(base_version_id, [ids], spec_patch, rationale, expected, preview_id=...)` with what the
+     preview showed. Never build before the engineer accepts. A rejected proposal comes back in the thread with the
+     reason.
+   - **the engineer's own change:** a proposal "by the reviewer", already accepted (they previewed it in the
+     workbench). Build it like any accepted one.
    - **an accepted proposal** (a thread message `accepted`): `opmagent geo build --from-proposal <id>` (in a study:
      `opmagent study build geo <study> --from-proposal <id>`), then `answer_review_feedback(id, ..., "addressed",
      addressed_in_version_id=<new id>)` for each of its threads. `review_diff(new id)` gives the numbers to say
