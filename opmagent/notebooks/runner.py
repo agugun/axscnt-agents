@@ -20,7 +20,9 @@ the agent or the engineer. They are evidence for the reviewer, never a replaceme
 from __future__ import annotations
 
 import json
+import os
 import re
+import shutil
 import sys
 import tempfile
 from datetime import datetime
@@ -63,7 +65,11 @@ def write_payload(folder: Path, payload: dict) -> Path:
 
 # ---------------------------------------------------------------- execution
 def _kernel_manager():
-    """A kernel of *this* interpreter (the venv opmagent runs in), whatever kernels Jupyter has installed."""
+    """A kernel of *this* interpreter (the venv opmagent runs in), whatever kernels Jupyter has installed.
+
+    On POSIX it talks over IPC (Unix sockets in a private temporary folder, removed after the run) instead of TCP on
+    localhost: no ports any local process could reach, and no "Kernel is running over TCP without encryption"
+    warning on every QC run. Windows has no IPC transport and keeps TCP."""
     from jupyter_client.kernelspec import KernelSpecManager
     from jupyter_client.manager import KernelManager
 
@@ -74,7 +80,12 @@ def _kernel_manager():
         "argv": [sys.executable, "-m", "ipykernel_launcher", "-f", "{connection_file}"],
         "display_name": "opmagent QC", "language": "python"}))
     ksm = KernelSpecManager(kernel_dirs=[str(d)], ensure_native_kernel=False)
-    return KernelManager(kernel_name=KERNEL_NAME, kernel_spec_manager=ksm)
+    km = KernelManager(kernel_name=KERNEL_NAME, kernel_spec_manager=ksm)
+    if os.name == "posix":
+        sock = Path(tempfile.mkdtemp(prefix="opmagent-kernel-"))      # mode 0700: this user only
+        km.transport, km.ip = "ipc", str(sock / "k")
+        km._opmagent_socket_dir = sock
+    return km
 
 
 def _inject_parameters(nb, params: dict):
@@ -102,6 +113,7 @@ def execute(nb_path: Path, out_path: Path, params: dict | None = None, *, cwd: P
         nb = _inject_parameters(nb, params)
     nb.metadata["kernelspec"] = {"name": KERNEL_NAME, "display_name": "opmagent QC", "language": "python"}
     cwd = Path(cwd or out_path.parent)
+    cwd.mkdir(parents=True, exist_ok=True)      # the kernel starts there: a missing folder hangs nbclient's cleanup
     km = _kernel_manager()
     client = NotebookClient(nb, km=km, timeout=timeout, resources={"metadata": {"path": str(cwd)}})
     error = None
@@ -117,6 +129,9 @@ def execute(nb_path: Path, out_path: Path, params: dict | None = None, *, cwd: P
                 km.shutdown_kernel(now=True)
         except Exception:  # noqa: BLE001
             pass
+        sock = getattr(km, "_opmagent_socket_dir", None)
+        if sock:
+            shutil.rmtree(sock, ignore_errors=True)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     nb.metadata["kernelspec"] = {"name": "python3", "display_name": "Python 3", "language": "python"}
     nbformat.write(nb, out_path)
