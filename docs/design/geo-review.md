@@ -445,10 +445,34 @@ well trajectories and perforations against layers).
   knobs (SATNUM 2 nw 3 → 2.5), the preview over the dotted base curves; the well tabs (no What-if) and a click on a
   perforation.
 
-## Decisions (open, for review)
+**Approval in the workbench (decision 1)** (`review_app.decision_state` / `decide_version`, the page's decision
+box): approve and reject move into the workbench, for geo, res and well alike, with three safeguards on top of the
+session token.
 
-1. **Approval in the app.** Keep it in the CLI and reviewer profile (proposed for phases 1 and 2), or allow it in
-   the app behind the session token after phase 2?
+- **Started from a terminal:** `opmagent geo|res|well review` lets the app decide only when its stdin is a
+  terminal. A workbench an agent starts (with no terminal, after `opmagent setup`'s permission prompt) shows the
+  `opmagent review approve|reject` commands instead and refuses `/api/decide`, as do tests and scripts unless
+  they pass `can_decide=True`.
+- **Typed confirmation:** the model name and version (`FieldG_Geo v2`), as the terminal asks for `approve`.
+- **Open change comments block approval:** the box lists them, and the server refuses. Questions and notes only
+  show. Reject needs a comment, which reaches the modeler as a terminal rejection's does.
+- **Same decision as the terminal:** it goes through the reviewer profile's `approve` / `reject` (audited, in
+  `approvals`), against the QC report the app serves at `/qc`.
+- **Gate:** `tests/test_review_decide.py`:
+  - refused on a workbench without a terminal;
+  - the token, the confirmation, a change comment blocking (a question doesn't);
+  - approved once it is answered, with the approval's QC report and the audit entry;
+  - not twice;
+  - a rejection needs and passes on its comment;
+  - res the same way.
+
+  Browser check: the box with the blocker, Approve disabled, Reject enabled by the confirmation and a reason, and
+  the version rejected with its reason in the threads.
+
+## Decisions
+
+1. ~~**Approval in the app.**~~ Settled after phase 4: approve and reject in the app, with safeguards (see
+   **Approval in the workbench** under Plan).
 2. ~~**HTTP stack.**~~ Settled in phase 1: the standard library's `http.server`.
 3. ~~**Proposal table.**~~ Settled in phase 2: a kind-neutral `model_proposals` (geo only for now).
 4. ~~**The engineer's own proposals.**~~ Settled in phase 3: yes, previewed and accepted at once.

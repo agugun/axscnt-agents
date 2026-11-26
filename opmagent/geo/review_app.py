@@ -10,7 +10,12 @@ The app is the engineer's, never an agent's:
 - every write needs the token made at start, which is printed in the engineer's terminal and passed in the URL
   fragment (never sent in a URL query, written to disk or stored in the database);
 - `opmagent setup` puts `opmagent geo review` under "ask" for the agents.
-Approve and reject stay in `opmagent review` (the app shows the command).
+Approve and reject (design decision 1): in the app too, with three safeguards on top of the token:
+- only a workbench started from a terminal (stdin a tty) can decide: one an agent started (no terminal) shows the
+  `opmagent review` commands instead;
+- the engineer types the model name and version to confirm, as `opmagent review approve` asks for "approve";
+- approve is refused while a "change" comment on that version is open (questions and notes only warn).
+The decision goes through the reviewer profile's approve / reject (audited), against the QC report the app serves.
 
 Phase 2: threads (the engineer's replies; writing in an answered one reopens it), proposal accept / reject (the
 reviewer profile's decide_geo_proposal, audited), the version diff, and the live session state (the geo agent
@@ -40,7 +45,7 @@ MAX_BODY = 1 << 20
 class ReviewApp:
     """The workbench's requests, without the socket (so tests call handle() directly)."""
 
-    def __init__(self, cfg, version_id: int, token: str | None = None, kind: str = "geo"):
+    def __init__(self, cfg, version_id: int, token: str | None = None, kind: str = "geo", can_decide: bool = False):
         from ..reviews import check_kind
         from ..reviews import views as views_for
         self.kind = check_kind(kind)
@@ -50,6 +55,7 @@ class ReviewApp:
         self.reviewer = DataService("reviewer", cfg)
         self.token = token or secrets.token_urlsafe(24)
         self.version_id = int(version_id)
+        self.can_decide = bool(can_decide)
         self.allowed_hosts: set[str] = set()
         self._cache: dict[int, dict] = {}
         models.header(self.con, self.kind, self.version_id)        # NOT_FOUND early
@@ -79,10 +85,45 @@ class ReviewApp:
                "can_preview": changeable and bool(props.base_spec(self.con, self.kind, vid)) and not d.get("db_only"),
                "versions": sorted(versions, key=lambda v: v["version"]),
                "qc_report": rep.get("path")}
+        out["decision"] = self.decision_state(vid)
         if h["status"] == "qc_ready":
             out["review_commands"] = [f"opmagent review approve {self.kind} {vid}",
                                       f"opmagent review reject {self.kind} {vid} --comment \"...\""]
         return out
+
+    # ------------------------------------------------------------ approve / reject (design decision 1)
+    def decision_state(self, vid: int) -> dict:
+        h = models.header(self.con, self.kind, vid)
+        open_ = rv.list_feedback(self.con, kind=self.kind, version_id=vid, status="open")
+        return {"can_decide": self.can_decide, "status": h["status"], "confirm_text": f"{h['model_name']} v{h['version']}",
+                "blockers": [f["id"] for f in open_ if f["severity"] == "change"],
+                "open_other": [f["id"] for f in open_ if f["severity"] != "change"]}
+
+    def decide_version(self, body: dict) -> dict:
+        vid = int(body.get("version_id") or self.version_id)
+        st = self.decision_state(vid)
+        action = body.get("action")
+        if action not in ("approve", "reject"):
+            raise ToolError(INVALID_INPUT, "action must be approve or reject")
+        if not self.can_decide:
+            raise ToolError(FORBIDDEN, "this workbench was started without a terminal (by an agent?): approve or reject "
+                                       f"in your terminal, `opmagent review {action} {self.kind} {vid}`")
+        if st["status"] != "qc_ready":
+            raise ToolError(INVALID_INPUT, f"v{models.header(self.con, self.kind, vid)['version']} is {st['status']}, "
+                                           "not waiting for review")
+        if (body.get("confirm") or "").strip() != st["confirm_text"]:
+            raise ToolError(INVALID_INPUT, f"type {st['confirm_text']!r} to confirm")
+        if action == "approve" and st["blockers"]:
+            raise ToolError(INVALID_INPUT, "open change comment(s) on this version: "
+                                           + ", ".join(f"#{i}" for i in st["blockers"])
+                            + "; they are answered first (or reject the version)")
+        qc = self._write("get_qc_report", kind=self.kind, version_id=vid)
+        rid = (qc.get("qc_report") or {}).get("id")
+        if not rid:
+            raise ToolError(NOT_FOUND, "this version has no QC report to decide on")
+        r = self._write(action, kind=self.kind, version_id=vid, qc_report_file_id=rid,
+                        comment=(body.get("comment") or "").strip() or None)
+        return {"header": {k: r["header"][k] for k in ("status", "version")}, "spoken_summary": r["spoken_summary"]}
 
     def preview_data(self, pid: int) -> dict:
         key = ("preview", pid)
@@ -120,7 +161,7 @@ class ReviewApp:
         for c in cs:
             c["messages"] = rv.messages(self.con, c["id"])
         ps = {p["id"]: p for p in props.list_proposals(self.con, self.kind, name)} if self.kind in props.KINDS else {}
-        return {"comments": cs, "proposals": ps, "session": self.session(vid)}
+        return {"comments": cs, "proposals": ps, "session": self.session(vid), "decision": self.decision_state(vid)}
 
     def session(self, vid: int) -> dict:
         name = models.header(self.con, self.kind, vid)["model_name"]
@@ -235,6 +276,7 @@ class ReviewApp:
                     return _json(200, {"ok": True, **self.locate(data)})
                 writes = {"/api/comments": self.add_comment, "/api/messages": self.message,
                           "/api/previews": self.make_preview, "/api/requests": self.request_change,
+                          "/api/decide": self.decide_version,
                           "/api/proposals/decide": self.decide, "/api/session/end": self.end_session}
                 if u.path in writes:
                     tok = headers.get("x-review-token") or headers.get("X-Review-Token") or ""
