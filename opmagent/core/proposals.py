@@ -8,7 +8,8 @@
   mark_built  the build from an accepted proposal (`--from-proposal`) records its version and posts it in the threads.
               The modeler then answers each thread with that version.
 
-Kind-neutral table (model_proposals); geo only for now (res and well join in phase 4).
+Kind-neutral table (model_proposals): geo and res. A well model's changes are data edits (the data manager's), so
+well has no proposals.
 """
 from __future__ import annotations
 
@@ -18,8 +19,10 @@ import json
 from . import models, review
 from .errors import FORBIDDEN, INVALID_INPUT, NOT_FOUND, ToolError
 
-KINDS = ("geo",)
-PATCHABLE = {"geo": ("layers", "areal", "petro", "curves", "contacts", "min_thickness")}
+KINDS = ("geo", "res")
+PATCHABLE = {"geo": ("layers", "areal", "petro", "curves", "contacts", "min_thickness"),
+             "res": ("scal", "rock", "contacts", "regions", "aquifers")}
+SPEC_KEY = {"geo": "geo_spec", "res": "res_spec"}
 OPEN = ("proposed", "accepted")
 
 
@@ -36,11 +39,21 @@ def merge_patch(base, patch):
     return out
 
 
+ID_KEYS = ("satnum", "eqlnum", "region", "id")
+
+
 def flatten(d, prefix="") -> dict:
+    """Dotted keys to leaf values. A list of objects (SCAL rock types, contacts per EQLNUM, rock per region) is keyed
+    by its satnum / eqlnum / region / id, else its place (1-based), so a change reads as "scal.2.nw 3 -> 2.5"."""
     out = {}
     if isinstance(d, dict) and d:
         for k, v in d.items():
             out.update(flatten(v, f"{prefix}.{k}" if prefix else str(k)))
+    elif isinstance(d, list) and d and all(isinstance(x, dict) for x in d):
+        for n, x in enumerate(d, start=1):
+            key = next((x[k] for k in ID_KEYS if k in x), n)
+            out.update(flatten({kk: vv for kk, vv in x.items() if kk not in ID_KEYS[:3]} or {"": None},
+                               f"{prefix}.{key}"))
     else:
         out[prefix] = d
     return out
@@ -56,7 +69,17 @@ def base_spec(con, kind: str, version_id: int) -> dict:
     h = models.header(con, kind, version_id)
     sj = h.get("spec_json")
     sj = json.loads(sj) if isinstance(sj, str) else (sj or {})
-    return sj.get("geo_spec") or {}
+    return sj.get(SPEC_KEY[kind]) or {}
+
+
+def check_spec(con, kind: str, base_version_id: int, spec: dict):
+    """The merged spec must be one the build accepts."""
+    if kind == "geo":
+        _check_geo_spec(spec)
+    else:
+        from ..res.pipeline import resolve_spec
+        h = models.header(con, "res", base_version_id)
+        resolve_spec(spec, models.header(con, "geo", h["geo_version_id"]))
 
 
 def _check_geo_spec(spec: dict):
@@ -111,8 +134,8 @@ def propose(con, kind: str, base_version_id: int, feedback_ids: list[int], spec_
         raise ToolError(INVALID_INPUT, "spec_patch must be a non-empty JSON object (a merge patch on the spec)")
     bad = set(spec_patch) - set(PATCHABLE[kind])
     if bad:
-        raise ToolError(INVALID_INPUT, f"spec_patch can change {PATCHABLE[kind]}, not {sorted(bad)} (other surfaces "
-                                       "need other tops: a data request)")
+        raise ToolError(INVALID_INPUT, f"spec_patch can change {PATCHABLE[kind]}, not {sorted(bad)}"
+                                       + (" (other surfaces need other tops: a data request)" if kind == "geo" else ""))
     if not (rationale or "").strip():
         raise ToolError(INVALID_INPUT, "say why (rationale)")
     ids = sorted({int(i) for i in (feedback_ids or [])})
@@ -128,7 +151,7 @@ def propose(con, kind: str, base_version_id: int, feedback_ids: list[int], spec_
     if not base:
         raise ToolError(INVALID_INPUT, f"{kind} version {base_version_id} has no spec to patch (a version from a deck)")
     spec = merge_patch(base, spec_patch)
-    _check_geo_spec(spec)
+    check_spec(con, kind, base_version_id, spec)
     changes = spec_diff(base, spec)
     if not changes:
         raise ToolError(INVALID_INPUT, "the patch changes nothing in the base spec")
@@ -198,7 +221,7 @@ def request(con, kind: str, base_version_id: int, feedback_ids: list[int], spec_
     return decide(con, p["id"], "accept", reviewer)
 
 
-def accepted_for_build(con, proposal_id: int, kind: str = "geo") -> dict:
+def accepted_for_build(con, proposal_id: int, kind: str = "geo") -> dict:  # noqa: D401
     """The proposal a build is about to apply: it must be accepted and of this kind."""
     p = get(con, proposal_id)
     if p["model_kind"] != kind:

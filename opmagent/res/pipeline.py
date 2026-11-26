@@ -254,21 +254,15 @@ def _report(path, name, version, geo, swof, sgof, rock, contacts, regions, assum
     return Path(path)
 
 
-def build_res_model(cfg, *, spec: dict, name: str, geo_version_id: int, description: str | None = None,
-                    origin: str = "built", source_file_ids: list[int] | None = None,
-                    data_source: dict | None = None) -> dict:
-    """Build a res version on geo_version_id from the spec (see the module docstring) and submit it."""
+def resolve_spec(spec: dict, geo_header: dict) -> dict:
+    """The res spec as the build applies it on a geo version: SWOF / SGOF rows, contacts per EQLNUM, rock per
+    region, aquifer rows, one region number per layer per keyword, and the assumptions. Raises on anything the build
+    would refuse. Shared by the build, review proposals and what-if previews."""
     if not spec.get("contacts"):
         raise ToolError(INVALID_INPUT, "the res spec needs contacts (datum_depth, datum_pressure, owc_depth, goc_depth)")
-    svc = DataService("res", cfg)
-    D = lambda n, **k: _ok(dwrap(svc, n)(**k))  # noqa: E731
-    geo = svc.get_model(kind="geo", version_id=geo_version_id)
-    if not geo.get("ok", True) or "header" not in geo:
-        raise ToolError(INVALID_INPUT, f"geo version {geo_version_id} not found")
-    gh = geo["header"]
+    gh = geo_header
     nx, ny, nz = gh["nx"], gh["ny"], gh["nz"]
     geo_spec = (gh.get("spec_json") or {}).get("geo_spec") if isinstance(gh.get("spec_json"), dict) else None
-
     swof, sgof, notes = scal_tables(spec.get("scal"))
     contacts = spec["contacts"] if isinstance(spec["contacts"], list) else [dict(spec["contacts"], eqlnum=1)]
     contacts = [dict(c, eqlnum=int(c.get("eqlnum", n))) for n, c in enumerate(contacts, start=1)]
@@ -284,16 +278,42 @@ def build_res_model(cfg, *, spec: dict, name: str, geo_version_id: int, descript
         "contacts: " + "; ".join(f"EQLNUM {c['eqlnum']} datum {c['datum_depth']:g} m at {c['datum_pressure']:g} bar, "
                                   f"OWC {c.get('owc_depth')}, GOC {c.get('goc_depth')}" for c in contacts),
     ]
+    layers = {}
+    for kw, rule in (spec.get("regions") or {}).items():
+        kw = kw.upper()
+        if kw not in REGION_KWS:
+            raise ToolError(INVALID_INPUT, f"regions: {kw} is not one of {REGION_KWS}")
+        layers[kw] = (rule, _layer_values(rule, nz, geo_spec, kw))
+        assumptions.append(f"{kw}: {json.dumps(rule)}")
+    return {"swof": swof, "sgof": sgof, "contacts": contacts, "rock": rock, "aquifers": aqs, "aquifer_connections": aq_conns,
+            "layers": layers, "assumptions": assumptions, "dims": (nx, ny, nz)}
+
+
+def build_res_model(cfg, *, spec: dict, name: str, geo_version_id: int, description: str | None = None,
+                    origin: str = "built", source_file_ids: list[int] | None = None,
+                    data_source: dict | None = None, extra_assumptions: list[str] | None = None,
+                    proposal_id: int | None = None) -> dict:
+    """Build a res version on geo_version_id from the spec (see the module docstring) and submit it.
+    proposal_id: the accepted review proposal this build applies (res/proposal_build.py), recorded in the spec."""
+    if not spec.get("contacts"):
+        raise ToolError(INVALID_INPUT, "the res spec needs contacts (datum_depth, datum_pressure, owc_depth, goc_depth)")
+    svc = DataService("res", cfg)
+    D = lambda n, **k: _ok(dwrap(svc, n)(**k))  # noqa: E731
+    geo = svc.get_model(kind="geo", version_id=geo_version_id)
+    if not geo.get("ok", True) or "header" not in geo:
+        raise ToolError(INVALID_INPUT, f"geo version {geo_version_id} not found")
+    gh = geo["header"]
+    nx, ny, nz = gh["nx"], gh["ny"], gh["nz"]
+    r = resolve_spec(spec, gh)
+    swof, sgof, contacts, rock = r["swof"], r["sgof"], r["contacts"], r["rock"]
+    aqs, aq_conns = r["aquifers"], r["aquifer_connections"]
+    assumptions = r["assumptions"] + list(extra_assumptions or [])
     slug = re.sub(r"[^A-Za-z0-9_-]+", "_", name)
     existing = [m["version"] for m in svc.list_models(kind="res")["models"] if m["model_name"] == name]
     out = cfg.file_store / "models" / "res" / f"{slug}_v{(max(existing) if existing else 0) + 1}"
     out.mkdir(parents=True, exist_ok=True)
     regions, props = {}, []
-    for kw, rule in (spec.get("regions") or {}).items():
-        kw = kw.upper()
-        if kw not in REGION_KWS:
-            raise ToolError(INVALID_INPUT, f"regions: {kw} is not one of {REGION_KWS}")
-        per_layer = _layer_values(rule, nz, geo_spec, kw)
+    for kw, (rule, per_layer) in r["layers"].items():
         if len(set(per_layer)) == 1:
             props.append({"keyword": kw, "const_value": float(per_layer[0])})
         else:
@@ -301,13 +321,13 @@ def build_res_model(cfg, *, spec: dict, name: str, geo_version_id: int, descript
             p = _write_array(out / f"{kw}.INC", kw, arr)
             props.append({"keyword": kw, "path": str(p)})
         regions[kw] = {"rule": rule, "n": int(per_layer.max())}
-        assumptions.append(f"{kw}: {json.dumps(rule)}")
 
     src = list(source_file_ids or [])
     v = D("create_version", kind="res", model_name=name, origin=origin, source_file_ids=src, header={
         "unit_system": gh["unit_system"], "geo_version_id": geo_version_id, "user_description": description,
         "assumptions_json": assumptions,
-        "spec_json": {"res_spec": spec, **({"data_source": data_source} if data_source else {})}})
+        "spec_json": {"res_spec": spec, **({"data_source": data_source} if data_source else {}),
+                      **({"proposal_id": proposal_id} if proposal_id else {})}})
     vid = v["version_id"]
     rows = []
     for p in props:

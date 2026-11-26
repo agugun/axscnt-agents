@@ -1,6 +1,6 @@
 # Geo review workbench
 
-Status: phases 1 to 3 built (see **Phase 1 / 2 / 3 as built** under Plan); phase 4 proposed. Branch: `feat/geo-review-phase3`.
+Status: phases 1 to 4 built (see **Phase 1 / 2 / 3 / 4 as built** under Plan). Branch: `feat/geo-review-phase4`.
 
 ## Summary
 
@@ -386,6 +386,64 @@ model read without logs or a QC payload), moved here from phase 2.
 
 **Phase 4: res and well.** The same workbench with their figure registries (SCAL curves, contacts on sections,
 well trajectories and perforations against layers).
+
+**Phase 4 as built** (`opmagent/reviews.py`, `res/review_views.py`, `res/preview.py`, `res/proposal_build.py`,
+`well/review_views.py`):
+
+- **Scope (decided with the engineer):** res gets everything geo has; well is reviewed only. A well model is built
+  from data (wells, surveys, perforations, history, controls). A change to it is a data edit, the data manager's
+  (a study request), so well has no proposals or previews.
+- **One command per modeler:** `opmagent geo review`, `opmagent res review`, `opmagent well review`. The same app
+  and page serve all three, by kind. `opmagent setup` asks before an agent starts any of them.
+- **Kinds:** `opmagent/reviews.py` picks a kind's views module, which has one interface: load, views, view
+  arguments, spec checks, figures with `meta.role` on each trace, click to anchor, describe, summarize, and the
+  diff's metrics. Geo's controls stay the page's own. Res and well get generic controls from each view's arguments.
+- **Res views:**
+  - `kr` and `pc` per SATNUM, with `base_version_id` drawing the base's curves dotted;
+  - `regions` (any region or grid keyword, by layer);
+  - `contacts` per EQLNUM, with the base's where they differ;
+  - `contact_section`: one row or column of cells at their depths, coloured by a keyword, with the OWC and GOC lines;
+  - `aquifers`.
+
+  Anchors: SATNUM curve and saturation, EQLNUM contact, cell, aquifer. `review_context` gives the end points, the
+  pore volume in the gas cap, oil column and water per EQLNUM, or the cell's values and which interval it is in.
+- **Res grid:** the static view's INIT when the version has one, else made from the geo version (cell-centre depths,
+  PORV = bulk × PORO × NTG) with the version's region arrays. A res version without a QC payload (from a deck)
+  reads its tables from the database.
+- **Res proposals and previews:** `res.pipeline.resolve_spec` now holds what the build applies to a spec (SCAL
+  tables, contacts, rock, aquifers, one region number per layer), shared by the build, the proposal check and the
+  preview.
+  - `preview_res_change` resolves the patched spec on the base's own grid, with no Flow run, in under a second. It
+    compares pore volume per contact interval, contacts, end points per SATNUM, rock, region counts, and QC findings.
+  - `propose_res_change`; `opmagent res build --from-proposal` and `opmagent study build res --from-proposal`.
+  - The What-if knobs: datum pressure, OWC and GOC per EQLNUM; Swc, Sorw, nw, now and krw max per Corey SATNUM
+    (measured tables have none); rock cr.
+- **Well views:** `plan`, `well_section`, `perforated_cells`, `history`, `cumulative` and `schedule`. Paths need
+  surveys, so a deck's cell completions show the schedule and history only. Anchors: well, MD, perforation (with
+  its cells), cell, date and quantity. Diff numbers: wells, perforations, events, cumulative volumes, perforated
+  length.
+- **Tools:**
+  - The kind-neutral ones (`review_context`, `render_review_view`, `get_review_thread`, `reply_review`,
+    `review_diff`, `await_review_activity`) work for geo, res and well, by the modeler's profile.
+  - Res gets `preview_res_change` and `propose_res_change`.
+  - Generic `get_proposal`, `list_proposals`, `decide_proposal`, `request_change` and `preview_change` serve any
+    kind; the geo-named tools stay.
+- **Database:** `model_proposals` and `review_previews` are rebuilt in place with `model_kind IN ('geo','res')`
+  (migration `model_proposals_res`, rows kept).
+- **Spec diffs** key a list of objects by its satnum, eqlnum or region: `scal.2.nw 3 -> 2.5`, not the whole list.
+- **Gate:** `tests/test_review_res_well.py`:
+  - res: views, refusals, clicks on a curve, a region cell and a section cell; a comment pinned on EQLNUM 1's OWC;
+    the res agent hears it and sees the pore volumes, previews OWC 2100 → 2060 (oil PV moves to water), replies with
+    the preview's contacts view, and proposes; refusals; built only after accept; the diff; then the engineer's own
+    SCAL change (`scal.2.nw`), previewed with the base curves dotted, requested and built;
+  - well: views, clicks on a perforation and a history month, comment, the well agent's session, review_context,
+    reply; no proposals or previews; the diff between two versions;
+  - hello's res and well models in the workbench;
+  - the proposal kinds and per-item spec diffs.
+
+  Browser check in the Claude desktop pane: the res tabs, the thread with the engineer's proposal card, the What-if
+  knobs (SATNUM 2 nw 3 → 2.5), the preview over the dotted base curves; the well tabs (no What-if) and a click on a
+  perforation.
 
 ## Decisions (open, for review)
 

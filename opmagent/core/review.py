@@ -209,6 +209,22 @@ def label(anchor: dict | None) -> str:
         bits.append(f"zone {a['zone']}")
     if "kw" in a:
         bits.append(a["kw"])
+    # res: SATNUM curves, EQLNUM contacts, aquifers; well: perforations, dates, quantities
+    if "satnum" in a:
+        bits.append(f"SATNUM {a['satnum']}" + (f" {a['curve']}" if "curve" in a else "")
+                    + (f" at {a['s']:g}" if isinstance(a.get("s"), (int, float)) else ""))
+    if "eqlnum" in a:
+        bits.append(f"EQLNUM {a['eqlnum']}" + (f" {a['contact']}" if "contact" in a else ""))
+    if "aquifer" in a:
+        bits.append(f"aquifer {a['aquifer']}")
+    if "perforation" in a:
+        bits.append(f"perforation {a['perforation']}")
+    if "md" in a:
+        bits.append(f"MD {a['md']:g}" if isinstance(a["md"], (int, float)) else f"MD {a['md']}")
+    if "date" in a:
+        bits.append(str(a["date"]))
+    if "quantity" in a:
+        bits.append(str(a["quantity"]))
     return " ".join(bits)
 
 

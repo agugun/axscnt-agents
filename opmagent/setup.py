@@ -46,7 +46,7 @@ session, the `study` skill coordinates: it hands each agent its ready task. Outs
 In a study the database holds everything:
 - **Raw data.** The data manager converts tabular data into the study data tables. It files the rest as it came (LAS, SEG-Y, surfaces, documents) in `<study>/data/` and catalogs those files in the database.
 - **Models.** The modelers read both through the data tools (`study_data`, `study_data_rows`, `log_stats`, `log_samples`, `fluid_sample`, `study_files`, `check_study_data`), interpret the data, and build from it. Never open or edit files in a study's `data/` folder yourself.
-- **Review feedback.** The reviewer's comments are in `review_feedback`. A modeler answers them (`get_review_feedback`, `answer_review_feedback`) with the version that addresses them. Geo comments from the review workbench have threads (`get_review_thread`, `reply_review`) and proposals the engineer accepts before a build (`preview_geo_change` to see what a change does, `propose_geo_change`, then `--from-proposal`); a review session is `await_review_activity` in a loop.
+- **Review feedback.** The reviewer's comments are in `review_feedback`. A modeler answers them (`get_review_feedback`, `answer_review_feedback`) with the version that addresses them. Geo, res and well comments from the review workbench (`opmagent geo|res|well review`) have threads (`get_review_thread`, `reply_review`) and geo and res have proposals the engineer accepts before a build (`preview_geo_change` / `preview_res_change` to see what a change does, `propose_geo_change` / `propose_res_change`, then `--from-proposal`; well changes are data requests); a review session is `await_review_activity` in a loop.
 
 ## Rules for every agent
 - Numbers come from the opmagent tools, never from you. Never invent data; ask for what's missing.
@@ -86,7 +86,8 @@ def _permissions(ws: Path, servers: dict) -> Path:
     perms["allow"] = list(dict.fromkeys(list(perms.get("allow", [])) + want))
     # removing files asks you first, even though opmagent is allowed (in Claude Code, ask wins over allow); so does the
     # geo review workbench, which writes comments as the reviewer
-    perms["ask"] = list(dict.fromkeys(list(perms.get("ask", [])) + ["Bash(opmagent clean:*)", "Bash(opmagent geo review:*)"]))
+    perms["ask"] = list(dict.fromkeys(list(perms.get("ask", [])) + ["Bash(opmagent clean:*)", "Bash(opmagent geo review:*)", "Bash(opmagent res review:*)",
+                                                         "Bash(opmagent well review:*)"]))
     p.write_text(json.dumps(s, indent=2) + "\n")
     return p
 

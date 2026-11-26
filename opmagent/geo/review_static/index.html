@@ -102,7 +102,7 @@ code { background: var(--chip); padding: 1px 4px; border-radius: 4px; font-size:
     <div id="plot"></div>
     <ul id="findings"></ul>
     <div id="diffinfo"></div>
-    <div class="msg" id="hint">Click a well, a cell, a surface or a QC finding to pin a comment on it.</div>
+    <div class="msg" id="hint">Click on a picture (a well, a cell, a curve, a contact) or a QC finding to pin a comment on it.</div>
   </section>
   <section class="panel">
     <h2>Comment</h2>
@@ -128,7 +128,14 @@ code { background: var(--chip); padding: 1px 4px; border-radius: 4px; font-size:
 <script>
 "use strict";
 const TABS = [["surfaces", "Surfaces"], ["layer_map", "Layer map"], ["section", "Section"], ["well", "Well"],
-              ["at_wells", "At wells"], ["distributions", "Distributions"], ["poroperm", "Poro-perm"], ["findings", "QC findings"], ["diff_map", "Diff"], ["whatif", "What-if"]];
+              ["at_wells", "At wells"], ["distributions", "Distributions"], ["poroperm", "Poro-perm"],
+              ["kr", "Rel perm"], ["pc", "Cap pressure"], ["regions", "Regions"], ["contacts", "Contacts"],
+              ["contact_section", "Contact section"], ["aquifers", "Aquifers"],
+              ["plan", "Plan"], ["well_section", "Well path"], ["perforated_cells", "Perforated cells"], ["history", "History"],
+              ["cumulative", "Cumulative"], ["schedule", "Schedule"],
+              ["findings", "QC findings"], ["diff_map", "Diff"], ["diff", "Diff"], ["whatif", "What-if"]];
+const GEO = () => S.meta.kind === "geo";
+const AGENT = () => `${S.meta.kind} agent`;
 let token = "";
 try { token = new URLSearchParams(location.hash.slice(1)).get("token") || sessionStorage.getItem("geoReviewToken") || ""; } catch (e) {}
 try { if (token) sessionStorage.setItem("geoReviewToken", token); } catch (e) {}
@@ -157,7 +164,7 @@ function dark() { return matchMedia("(prefers-color-scheme: dark)").matches; }
 async function loadMeta() {
   const m = await api(`/api/meta?version_id=${S.vid}`);
   S.meta = m;
-  document.title = `Geo review: ${m.model_name} v${m.version}`;
+  document.title = `${m.kind[0].toUpperCase() + m.kind.slice(1)} review: ${m.model_name} v${m.version}`;
   $("title").textContent = `${m.model_name} v${m.version}`;
   $("status").textContent = m.status;
   const c = { pass: 0, warn: 0, fail: 0 };
@@ -168,17 +175,53 @@ async function loadMeta() {
   $("version").innerHTML = m.versions.map(v => `<option value="${v.version_id}" ${v.version_id === S.vid ? "selected" : ""}>v${v.version} (${esc(v.status)})</option>`).join("");
   $("qcreport").href = `/qc?version_id=${S.vid}`;
   $("cmds").innerHTML = m.review_commands ? "Approve or reject in your terminal: " + m.review_commands.map(c => `<code>${esc(c)}</code>`).join(" ") : "";
-  if (!S.spec.fig) S.spec = { fig: "layer_map", kw: m.keywords.includes("PORO") ? "PORO" : m.keywords[0], layer: 1 };
+  if (!S.spec.fig) S.spec = m.kind === "geo" ? { fig: "layer_map", kw: m.keywords.includes("PORO") ? "PORO" : m.keywords[0], layer: 1 }
+                                              : defaultSpec(m.views[0]);
 }
 
 function tabs() {
-  const ok = new Set([...(S.meta.views || []), "findings", ...(S.meta.can_preview ? ["whatif"] : [])]);
+  const ok = new Set([...(S.meta.views || []), "findings", ...(GEO() ? [] : ["diff"]), ...(S.meta.can_preview ? ["whatif"] : [])]);
   $("tabs").innerHTML = TABS.filter(([k]) => ok.has(k)).map(([k, n]) => `<button data-t="${k}" class="${k === S.tab ? "on" : ""}">${n}</button>`).join("");
   $("tabs").querySelectorAll("button").forEach(b => b.onclick = () => openTab(b.dataset.t));
 }
 
+function defaultSpec(fig) {
+  const s = { fig };
+  ((S.meta.view_args || {})[fig] || []).forEach(a => {
+    if (a.choices && a.choices.length) s[a.name] = a.choices[0];
+    else if (a.name === "layer") s.layer = 1;
+  });
+  return s;
+}
+
+function genericControls() {
+  const s = S.spec, el = $("controls");
+  let h = "";
+  if (S.tab === "diff") {
+    const others = S.meta.versions.filter(v => v.version_id !== S.vid);
+    if (S.diff && S.diff.base_version_id) {
+      h += `<label>Against <select id="base">${others.map(v => `<option value="${v.version_id}" ${v.version_id === S.diff.base_version_id ? "selected" : ""}>v${v.version}</option>`).join("")}</select></label>`;
+      if (S.meta.kind === "res") h += `<label>Show <select id="dfig">${["kr", "pc", "contacts"].filter(f => S.meta.views.includes(f)).map(f => `<option ${f === s.fig ? "selected" : ""}>${f}</option>`).join("")}</select></label>`;
+    }
+  } else {
+    ((S.meta.view_args || {})[s.fig] || []).forEach(a => {
+      if (a.choices) h += `<label>${esc(a.name)} <select data-arg="${esc(a.name)}">${a.choices.map(c => `<option ${String(c) === String(s[a.name]) ? "selected" : ""}>${esc(c)}</option>`).join("")}</select></label>`;
+      else h += `<label>${esc(a.name)} <input type="number" data-arg="${esc(a.name)}" min="${a.min}" max="${a.max}" value="${s[a.name] ?? ""}" placeholder="${a.min}-${a.max}"></label>`;
+    });
+  }
+  el.innerHTML = h;
+  el.querySelectorAll("[data-arg]").forEach(x => x.onchange = () => {
+    const v = x.value;
+    s[x.dataset.arg] = x.tagName === "INPUT" ? +v : (isNaN(+v) || v === "" ? v : +v);
+    draw();
+  });
+  const b = $("base"); if (b) b.onchange = e => loadDiff(+e.target.value);
+  const f = $("dfig"); if (f) f.onchange = e => { S.spec = { fig: e.target.value, base_version_id: S.diff.base_version_id }; draw(); };
+}
+
 function controls() {
   if (S.tab === "whatif") return whatifControls();
+  if (!GEO()) return genericControls();
   const m = S.meta, s = S.spec, el = $("controls");
   const opt = (arr, v) => arr.map(a => `<option ${String(a) === String(v) ? "selected" : ""}>${esc(a)}</option>`).join("");
   let h = "";
@@ -222,6 +265,7 @@ function openTab(t, spec) {
   $("diffinfo").style.display = t === "diff_map" ? "block" : "none";
   if (isF) { $("controls").innerHTML = ""; findings(); return; }
   if (t === "diff_map" && !spec) { loadDiff(S.spec.fig === "diff_map" && !S.spec.preview_id ? S.spec.base_version_id : null); return; }
+  if (t === "diff") { $("diffinfo").style.display = "block"; loadDiff(S.diff ? S.diff.base_version_id : null); return; }
   $("diffinfo").style.display = (t === "diff_map" || t === "whatif") ? "block" : "none";
   if (t === "whatif") {
     if (spec) S.spec = { ...spec };
@@ -231,6 +275,7 @@ function openTab(t, spec) {
     return;
   }
   if (spec) S.spec = { ...spec };
+  else if (!GEO()) { if (S.spec.fig !== t || S.spec.preview_id || S.spec.base_version_id) S.spec = defaultSpec(t); }
   else if (S.spec.fig !== t) {
     const kw = S.spec.kw || (S.meta.keywords.includes("PORO") ? "PORO" : S.meta.keywords[0]);
     S.spec = { fig: t };
@@ -244,6 +289,11 @@ function openTab(t, spec) {
 async function draw() {
   controls();
   if (S.tab === "whatif" && !S.spec.preview_id) return;
+  if (S.tab === "diff" && (!S.spec.fig || !S.diff || !S.diff.base_version_id)) {
+    Plotly.purge("plot");
+    $("plot").innerHTML = `<p class="msg">${!S.diff || !S.diff.base_version_id ? "No earlier version to compare with." : "The numbers below are the comparison."}</p>`;
+    return;
+  }
   if (S.spec.fig === "diff_map" && !S.spec.preview_id && (!S.diff || !S.diff.base_version_id || !S.diff.maps)) {
     Plotly.purge("plot");
     $("plot").innerHTML = `<p class="msg">${!S.diff || !S.diff.base_version_id ? "No earlier version to compare with." : "The versions have different areal grids: compare their maps side by side."}</p>`;
@@ -273,7 +323,8 @@ async function onClick(ev) {
   if (!p) return;
   const meta = p.data.meta || {};
   if (meta.role === "skip") return;
-  const point = { x: p.x, y: p.y, text: Array.isArray(p.data.text) ? p.data.text[p.pointIndex] : p.text, ...meta };
+  const point = { x: p.x, y: p.y, text: Array.isArray(p.data.text) ? p.data.text[p.pointIndex] : p.text,
+                  customdata: p.customdata, ...meta };
   try {
     const r = await api("/api/locate", { spec: { ...S.spec, version_id: S.vid }, role: meta.role, point });
     if (r.comment) { highlight(r.comment); return; }
@@ -281,7 +332,23 @@ async function onClick(ev) {
   } catch (e) { $("hint").textContent = e.message; $("hint").className = "msg err"; }
 }
 
+function flatRows(d) {
+  const rows = [];
+  const fmt = v => v === null || v === undefined ? "–" : typeof v === "object" ? JSON.stringify(v).slice(0, 80) : v;
+  const empty = v => v === null || v === undefined || v === "" || (Array.isArray(v) && !v.length)
+                     || (typeof v === "object" && !Array.isArray(v) && !Object.keys(v).length);
+  Object.entries(d || {}).forEach(([k, v]) => {
+    if (k === "label" || empty(v)) return;
+    if (v && typeof v === "object" && !Array.isArray(v)) v = Object.fromEntries(Object.entries(v).filter(([, x]) => !empty(x)));
+    if (Array.isArray(v)) { v.slice(0, 4).forEach((x, n) => rows.push([`${k} ${n + 1}`, fmt(x)])); if (v.length > 4) rows.push([k, `${v.length} in all`]); }
+    else if (v && typeof v === "object") Object.entries(v).forEach(([kk, vv]) => rows.push([`${k} ${kk}`, fmt(vv)]));
+    else rows.push([k, fmt(v)]);
+  });
+  return rows;
+}
+
 function select(anchor, label, describe, view) {
+  if (S.meta && !GEO()) return selectGeneric(anchor, label, describe, view);
   S.anchor = anchor || {};
   S.viewForComment = view;
   const rows = [];
@@ -318,6 +385,30 @@ function select(anchor, label, describe, view) {
   });
 }
 
+function selectGeneric(anchor, label, describe, view) {
+  S.anchor = anchor || {};
+  S.viewForComment = view;
+  const a = S.anchor, acts = [];
+  if (S.meta.kind === "res") {
+    if (a.cell) acts.push(`<button class="link" data-g='${JSON.stringify({ fig: "contact_section", kw: a.kw || "SATNUM", along: "x", index: a.cell[1] })}'>Contact section through row ${a.cell[1]}</button>`,
+                         `<button class="link" data-g='${JSON.stringify({ fig: "regions", kw: a.kw || "SATNUM", layer: a.cell[2] })}'>Layer ${a.cell[2]} map</button>`);
+    if (a.satnum && S.spec.fig !== "kr") acts.push(`<button class="link" data-g='${JSON.stringify({ fig: "kr", satnum: a.satnum })}'>SATNUM ${a.satnum} curves</button>`);
+    if (a.eqlnum && S.spec.fig !== "contacts") acts.push(`<button class="link" data-g='${JSON.stringify({ fig: "contacts" })}'>Contacts</button>`);
+  }
+  if (S.meta.kind === "well" && a.well) {
+    if (S.spec.fig !== "well_section") acts.push(`<button class="link" data-g='${JSON.stringify({ fig: "well_section", well: a.well })}'>${esc(a.well)} path</button>`);
+    if (S.spec.fig !== "history" && S.meta.views.includes("history")) acts.push(`<button class="link" data-g='${JSON.stringify({ fig: "history", well: a.well })}'>${esc(a.well)} history</button>`);
+  }
+  if (Object.keys(a).length) acts.push(`<button class="link" data-a="clear">Clear (general comment)</button>`);
+  const rows = flatRows(describe);
+  $("sel").innerHTML = `<div class="lbl">On: ${esc(label || "general")}</div>` +
+    (rows.length ? `<table>${rows.slice(0, 16).map(r => `<tr><td>${esc(r[0])}</td><td>${esc(r[1])}</td></tr>`).join("")}</table>` : "") +
+    (view && view.fig ? `<div class="msg">View: ${esc(view.fig)}${view.well ? " " + esc(view.well) : ""}${view.kw ? " " + esc(view.kw) : ""}${view.layer ? " layer " + view.layer : ""}</div>` : "") +
+    (acts.length ? `<div class="acts">${acts.join("")}</div>` : "");
+  $("sel").querySelectorAll("button[data-g]").forEach(b => b.onclick = () => { const v = JSON.parse(b.dataset.g); openTab(v.fig, v); });
+  $("sel").querySelectorAll("button[data-a=clear]").forEach(b => b.onclick = () => select({}, "general", null, null));
+}
+
 function findings() {
   const fs = S.meta.findings;
   $("findings").innerHTML = fs.length ? fs.map((f, n) => `<li data-n="${n}"><span class="badge ${esc(f.status)}">${esc(f.status)}</span>
@@ -329,13 +420,72 @@ function findings() {
 }
 
 // ---------------------------------------------------------------- what-if (previews and the engineer's own changes)
+// res knobs: contacts per EQLNUM, Corey parameters per SATNUM (measured tables have none), rock compressibility
+const COREY = { swc: 0.2, sorw: 0.2, nw: 2, now: 2, krw_max: 0.4 };
+const asList = v => v === undefined || v === null ? [] : Array.isArray(v) ? v : [v];
+function resKnobDefaults() {
+  const sp = S.meta.spec || {};
+  const contacts = asList(sp.contacts).map((c, n) => ({ eqlnum: c.eqlnum ?? n + 1, datum_pressure: c.datum_pressure,
+                                                        owc_depth: c.owc_depth ?? null, goc_depth: c.goc_depth ?? null }));
+  const scal = asList(sp.scal).map((t, n) => ({ satnum: t.satnum ?? n + 1, measured: !!(t.swof || t.sgof),
+    ...Object.fromEntries(Object.keys(COREY).map(k => [k, t[k] ?? COREY[k]])) }));
+  const rock = asList(sp.rock);
+  return { contacts, scal, cr: rock.length ? rock[0].cr : 4.5e-5 };
+}
+function resKnobPatch(k) {
+  const d = resKnobDefaults(), sp = S.meta.spec || {}, patch = {};
+  const changedC = k.contacts.some((c, i) => ["datum_pressure", "owc_depth", "goc_depth"].some(f => c[f] !== d.contacts[i][f]));
+  if (changedC) {
+    if (Array.isArray(sp.contacts)) patch.contacts = sp.contacts.map((c, i) => ({ ...c, ...Object.fromEntries(
+      ["datum_pressure", "owc_depth", "goc_depth"].filter(f => k.contacts[i][f] !== d.contacts[i][f]).map(f => [f, k.contacts[i][f]])) }));
+    else { patch.contacts = {}; ["datum_pressure", "owc_depth", "goc_depth"].forEach(f => { if (k.contacts[0][f] !== d.contacts[0][f]) patch.contacts[f] = k.contacts[0][f]; }); }
+  }
+  const changedS = k.scal.some((t, i) => !t.measured && Object.keys(COREY).some(f => t[f] !== d.scal[i][f]));
+  if (changedS) {
+    if (Array.isArray(sp.scal)) patch.scal = sp.scal.map((t, i) => k.scal[i].measured ? t :
+      { ...t, ...Object.fromEntries(Object.keys(COREY).filter(f => k.scal[i][f] !== d.scal[i][f]).map(f => [f, k.scal[i][f]])) });
+    else { patch.scal = {}; Object.keys(COREY).forEach(f => { if (k.scal[0][f] !== d.scal[0][f]) patch.scal[f] = k.scal[0][f]; }); }
+  }
+  if (k.cr !== d.cr) patch.rock = Array.isArray(sp.rock) ? sp.rock.map(r => ({ ...r, cr: k.cr })) : { cr: k.cr };
+  return patch;
+}
+function resWhatifControls() {
+  const el = $("controls"), d = resKnobDefaults();
+  S.knobs = S.knobs || resKnobDefaults();
+  const k = S.knobs;
+  const num = (id, v, step, ref) => `<input type="number" id="${id}" step="${step}" value="${v ?? ""}" placeholder="none" class="${v !== ref ? "changed" : ""}">`;
+  let h = `<div class="knobs">${k.contacts.map((c, i) => `<span><b>EQLNUM ${c.eqlnum}</b>
+      <label>datum p ${num(`kc_${i}_datum_pressure`, c.datum_pressure, 1, d.contacts[i].datum_pressure)}</label>
+      <label>OWC ${num(`kc_${i}_owc_depth`, c.owc_depth, 1, d.contacts[i].owc_depth)}</label>
+      <label>GOC ${num(`kc_${i}_goc_depth`, c.goc_depth, 1, d.contacts[i].goc_depth)}</label></span>`).join("")}</div>
+    <div class="knobs" style="margin-top:6px">${k.scal.map((t, i) => t.measured ? `<span class="msg">SATNUM ${t.satnum}: measured tables</span>` :
+      `<span><b>SATNUM ${t.satnum}</b>${Object.keys(COREY).map(f => `<label>${f} ${num(`ks_${i}_${f}`, t[f], f.startsWith("n") ? 0.1 : 0.01, d.scal[i][f])}</label>`).join("")}</span>`).join("")}</div>
+    <div class="knobs" style="margin-top:6px"><label>rock cr ${num("kr_cr", k.cr, 1e-6, d.cr)}</label>
+      <button class="primary" id="runpreview">Preview</button> <button class="link" id="resetknobs">reset</button>
+      <span class="msg" id="pmsg"></span></div>`;
+  const p = S.preview;
+  if (p) h += `<div class="knobs" style="margin-top:6px"><label>Show <select id="pshow">${[["kr", "rel perm vs v" + p.base_version], ["contacts", "contacts vs v" + p.base_version], ["contact_section", "contact section"]].filter(([f]) => S.meta.views.includes(f)).map(([f, n]) => `<option value="${f}" ${S.spec.fig === f ? "selected" : ""}>${n}</option>`).join("")}</select></label></div>`;
+  el.innerHTML = h;
+  el.querySelectorAll("input[id^=kc_], input[id^=ks_], #kr_cr").forEach(inp => inp.onchange = () => {
+    const v = inp.value === "" ? null : +inp.value;
+    if (inp.id === "kr_cr") k.cr = v;
+    else { const [g, i, ...f] = inp.id.split("_"); (g === "kc" ? k.contacts : k.scal)[+i][f.join("_")] = v; }
+    resWhatifControls();
+  });
+  $("runpreview").onclick = runPreview;
+  $("resetknobs").onclick = () => { S.knobs = resKnobDefaults(); resWhatifControls(); };
+  const ps = $("pshow"); if (ps) ps.onchange = e => { previewSpec(e.target.value); draw(); };
+}
+
 function knobDefaults() {
+  if (!GEO()) return resKnobDefaults();
   const sp = S.meta.spec || {}, pp = sp.petro || {};
   return { vsh_cutoff: pp.vsh_cutoff ?? 0.5, kv_kh: pp.kv_kh ?? 0.1, pp_a: (pp.poro_perm || [0.01, 30])[0],
            pp_b: (pp.poro_perm || [0.01, 30])[1], min_thickness: sp.min_thickness ?? 0.5, layers: [...(sp.layers || [])] };
 }
 
 function knobPatch(k) {
+  if (!GEO()) return resKnobPatch(k);
   const d = knobDefaults(), petro = {}, patch = {};
   if (+k.vsh_cutoff !== d.vsh_cutoff) petro.vsh_cutoff = +k.vsh_cutoff;
   if (+k.kv_kh !== d.kv_kh) petro.kv_kh = +k.kv_kh;
@@ -347,6 +497,7 @@ function knobPatch(k) {
 }
 
 function whatifControls() {
+  if (!GEO()) return resWhatifControls();
   const el = $("controls"), d = knobDefaults();
   S.knobs = S.knobs || knobDefaults();
   const k = S.knobs, zones = S.meta.zones || [];
@@ -387,6 +538,13 @@ function whatifControls() {
 
 function previewSpec(show) {
   const p = S.preview, kw = S.spec.kw || "PORO";
+  if (!GEO()) {
+    const f = ["kr", "contacts", "contact_section"].includes(show) ? show
+      : (p.changes || []).some(c => c.key.startsWith("contacts")) && S.meta.views.includes("contacts") ? "contacts" : "kr";
+    S.spec = f === "contact_section" ? { fig: f, preview_id: p.preview_id, kw: S.meta.keywords.includes("EQLNUM") ? "EQLNUM" : S.meta.keywords[0] }
+                                     : { fig: f, preview_id: p.preview_id, base_version_id: p.base_version_id };
+    return;
+  }
   if (show === "map") S.spec = { fig: "layer_map", preview_id: p.preview_id, kw, layer: S.spec.layer || 1 };
   else if (p.maps) {
     S.spec = { fig: "diff_map", preview_id: p.preview_id, base_version_id: p.base_version_id, kw };
@@ -430,7 +588,7 @@ function renderPreviewInfo() {
     <h3>What changes (${moved.length} of ${p.numbers.length} numbers)</h3>
     <table><tr><th></th><th>v${p.base_version}</th><th>preview</th><th>change</th></tr>
     ${(moved.length ? moved : p.numbers).map(n => `<tr><td>${esc(n.key)}</td><td class="num">${fmt(n.old)}</td><td class="num">${fmt(n.new)}</td><td class="num">${ch(n.change)}</td></tr>`).join("")}</table>
-    <h3>Ask the geo agent to build this</h3>
+    <h3>Ask the ${AGENT()} to build this</h3>
     <div class="msg">It becomes your proposal, accepted at once; the agent builds the new version from it and answers the comments.</div>
     ${open.length ? `<div>${open.map(c => `<label class="msg" style="display:block"><input type="checkbox" data-fb="${c.id}"> #${c.id} [${esc(c.label)}] ${esc(c.comment.slice(0, 80))}</label>`).join("")}</div>` : ""}
     <textarea id="prationale" placeholder="Why (with no comment ticked, this becomes a new comment)"></textarea>
@@ -439,7 +597,7 @@ function renderPreviewInfo() {
     const ids = [...el.querySelectorAll("input[data-fb]:checked")].map(x => +x.dataset.fb);
     try {
       const r = await api("/api/requests", { preview_id: p.preview_id, feedback_ids: ids, rationale: $("prationale").value });
-      $("preqmsg").textContent = `Proposal #${r.proposal.id} accepted: the geo agent builds it next.`;
+      $("preqmsg").textContent = `Proposal #${r.proposal.id} accepted: the ${AGENT()} builds it next.`;
       await loadComments(true);
     } catch (e) { $("preqmsg").className = "msg err"; $("preqmsg").textContent = e.message; }
   };
@@ -465,7 +623,7 @@ function renderSession() {
   if (sig === S.sessionSig) return;        // unchanged: keep the button under the pointer
   S.sessionSig = sig;
   $("session").innerHTML = `<span class="dot ${s.listening ? "on" : ""}"></span>
-    <span>${s.listening ? "geo agent listening" : "geo agent not listening"}</span>
+    <span>${s.listening ? AGENT() + " listening" : AGENT() + " not listening"}</span>
     ${s.waiting_on_you ? `<span class="wait you">${s.waiting_on_you} waiting on you</span>` : ""}
     ${s.waiting_on_agent ? `<span class="wait agent">${s.waiting_on_agent} waiting on agent</span>` : ""}
     ${s.open ? `<button class="link" id="endsession">End session</button>` : ""}`;
@@ -491,7 +649,7 @@ function proposalCard(p) {
   const pv = p.preview;
   const pvh = pv ? `<div class="msg">Previewed (#${pv.preview_id}, ${esc(pv.grid)}): findings fixed ${pv.findings.fixed.length}, new ${pv.findings.new.length}
     · <button class="link" data-pv="${p.id}">show the preview</button></div>` : "";
-  return `<div class="prop"><b>Proposal #${p.id}</b> by ${p.author_role === "reviewer" ? "you" : "the geo agent"} on v${p.base_version}<table>${rows}</table>${pvh}
+  return `<div class="prop"><b>Proposal #${p.id}</b> by ${p.author_role === "reviewer" ? "you" : "the " + AGENT()} on v${p.base_version}<table>${rows}</table>${pvh}
     ${p.expected ? `<div class="msg">Expected: ${esc(typeof p.expected === "string" ? p.expected : JSON.stringify(p.expected))}</div>` : ""}
     ${p.built_version_id ? `<button class="link" data-diff="${p.built_version_id}" data-base="${p.base_version_id}">diff v${p.built_version} vs v${p.base_version}</button>` : ""}${acts}</div>`;
 }
@@ -565,7 +723,7 @@ async function sendReply(id) {
 }
 
 async function decide(pid, action, comment) {
-  if (action === "accept" && !confirm(`Accept proposal #${pid}? The geo agent will build a new version from it.`)) return;
+  if (action === "accept" && !confirm(`Accept proposal #${pid}? The ${AGENT()} will build a new version from it.`)) return;
   try { await api("/api/proposals/decide", { proposal_id: pid, action, comment: comment || null }); await loadComments(true); }
   catch (e) { alert(e.message); }
 }
@@ -611,6 +769,14 @@ async function loadDiff(base, spec) {
   } catch (e) { $("hint").textContent = e.message; $("hint").className = "msg err"; return; }
   const d = S.diff;
   renderDiffInfo();
+  if (!GEO()) {                 // res and well: the numbers; res also its curves or contacts over the base's
+    S.tab = "diff"; tabs();
+    $("findings").style.display = "none"; $("plot").style.display = "block"; $("diffinfo").style.display = "block";
+    const contacts = (d.spec || []).some(c => c.key.startsWith("contacts")) && S.meta.views.includes("contacts");
+    S.spec = S.meta.kind === "res" && d.base_version_id ? (spec || { fig: contacts ? "contacts" : "kr", base_version_id: d.base_version_id }) : {};
+    draw();
+    return;
+  }
   const kw = (spec && spec.kw) || ((d.keywords || []).includes("PORO") ? "PORO" : (d.keywords || [])[0]);
   const s = spec ? { ...spec } : { fig: "diff_map", kw, base_version_id: d.base_version_id };
   s.base_version_id = d.base_version_id;
@@ -672,7 +838,7 @@ $("version").onchange = e => { location.search = `?version_id=${e.target.value}`
     try { v = qs.get("view") ? JSON.parse(qs.get("view")) : null; } catch (e) {}
     if (qs.get("diff")) loadDiff(+qs.get("diff"));
     else if (v) openViewSpec({ ...v, version_id: S.vid });
-    else openTab("layer_map");
+    else openTab(GEO() ? "layer_map" : S.meta.views[0]);
     await loadComments(true);
     setInterval(() => loadComments().catch(() => {}), 4000);
   } catch (e) { $("hint").textContent = e.message; $("hint").className = "msg err"; }

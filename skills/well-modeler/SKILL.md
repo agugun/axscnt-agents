@@ -89,3 +89,20 @@ before you build and whenever the coordinator says there is feedback. For each c
    or with `"wontfix"` and why, if the data doesn't support the change.
 
 A rejected version's comment arrives the same way (item `rejected`). You can't change or delete a comment.
+
+### Review session (the engineer in the workbench)
+The engineer reviews a well version in `opmagent well review <id>`: the plan, each well's path with its
+perforations and the geo zones, the perforated cells, the history against the measured, cumulative volumes and the
+schedule. Comments are anchored: `{"well": "P1"}`, `{"well": "P1", "md": 2310.5}`, `{"well": "P1", "perforation":
+12}`, `{"well": "P1", "cell": [i, j, k]}`, `{"well": "P1", "date": "2019-04-01", "quantity": "oil_rate"}`, or a QC
+finding.
+
+When the engineer says "review session on <model or version>": `await_review_activity(model_name=...)`, then for
+each thread `get_review_thread(id)` and `review_context(id)` (the well, the perforation and its cells, the event and
+the measured month at the anchor), and answer with `reply_review(id, body, views=[...])` (figs `plan`,
+`well_section`, `perforated_cells`, `history`, `cumulative`, `schedule`). Call `await_review_activity` again until
+`session_ended`.
+
+A well model has **no proposals or previews**: a change is a data edit (a perforation, a rate, a survey), which is
+the data manager's. In a study, `raise_request(name, "data", "improve_data", "<what and why>")` and say so in the
+thread; then build the new version from the corrected data and answer the thread with it.

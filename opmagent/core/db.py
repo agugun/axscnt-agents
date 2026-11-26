@@ -355,6 +355,44 @@ MIGRATIONS = [
         author_role TEXT NOT NULL CHECK (author_role IN ('reviewer','modeler')), author TEXT NOT NULL,
         folder TEXT NOT NULL, summary_json TEXT, elapsed_s REAL, removed_at TEXT,
         created_at TEXT NOT NULL DEFAULT (datetime('now')));"""),
+    # Review workbench, phase 4: res proposals and previews. SQLite can't change a CHECK in place, so both tables are
+    # rebuilt with model_kind IN ('geo','res'), keeping their rows; the triggers and indexes are made again.
+    ("model_proposals_res", """CREATE TABLE model_proposals_v2 (
+        id INTEGER PRIMARY KEY, model_kind TEXT NOT NULL CHECK (model_kind IN ('geo','res')),
+        model_name TEXT NOT NULL, base_version_id INTEGER NOT NULL, feedback_ids_json TEXT NOT NULL,
+        spec_patch_json TEXT NOT NULL, rationale TEXT NOT NULL CHECK (length(trim(rationale)) > 0),
+        expected_json TEXT, preview_json TEXT,
+        author_role TEXT NOT NULL DEFAULT 'modeler' CHECK (author_role IN ('modeler','reviewer')),
+        author TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'proposed' CHECK (status IN ('proposed','accepted','rejected','superseded','built')),
+        reviewer TEXT, comment TEXT, decided_at TEXT, built_version_id INTEGER,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        CHECK (status <> 'rejected' OR (comment IS NOT NULL AND length(trim(comment)) > 0)),
+        CHECK (status NOT IN ('accepted','rejected','built') OR reviewer IS NOT NULL),
+        CHECK (status <> 'built' OR built_version_id IS NOT NULL));
+        INSERT INTO model_proposals_v2 SELECT * FROM model_proposals;
+        DROP TABLE model_proposals;
+        ALTER TABLE model_proposals_v2 RENAME TO model_proposals;
+        CREATE UNIQUE INDEX model_proposals_one_open ON model_proposals(model_kind, base_version_id)
+          WHERE status IN ('proposed','accepted');
+        CREATE TRIGGER model_proposals_fixed BEFORE UPDATE OF model_kind, model_name, base_version_id,
+          feedback_ids_json, spec_patch_json, rationale, expected_json, author_role, author, created_at ON model_proposals
+        BEGIN SELECT RAISE(ABORT, 'a proposal cannot be changed; propose again'); END;
+        CREATE TRIGGER model_proposals_status BEFORE UPDATE OF status ON model_proposals
+        WHEN OLD.status <> NEW.status AND NOT (
+          (OLD.status = 'proposed' AND NEW.status IN ('accepted','rejected','superseded'))
+          OR (OLD.status = 'accepted' AND NEW.status = 'built'))
+        BEGIN SELECT RAISE(ABORT, 'proposal status: proposed -> accepted | rejected | superseded, accepted -> built'); END;
+        CREATE TABLE review_previews_v2 (
+        id INTEGER PRIMARY KEY, model_kind TEXT NOT NULL CHECK (model_kind IN ('geo','res')), model_name TEXT NOT NULL,
+        base_version_id INTEGER NOT NULL, spec_patch_json TEXT NOT NULL,
+        author_role TEXT NOT NULL CHECK (author_role IN ('reviewer','modeler')), author TEXT NOT NULL,
+        folder TEXT NOT NULL, summary_json TEXT, elapsed_s REAL, removed_at TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')));
+        INSERT INTO review_previews_v2 SELECT * FROM review_previews;
+        DROP TABLE review_previews;
+        ALTER TABLE review_previews_v2 RENAME TO review_previews;
+        CREATE INDEX model_proposals_res ON model_proposals(model_kind, model_name);"""),
 ]
 
 

@@ -567,3 +567,27 @@ def summarize(spec: dict, data: dict, base: dict | None = None) -> dict:
     else:
         out["shows"] = "porosity against permeability: model cells, log samples and upscaled values"
     return out
+
+
+# ---------------------------------------------------------------- the version diff (opmagent/reviews.py interface)
+ANCHOR_KEYS_DOC = ANCHOR_KEYS
+
+
+def metrics(data: dict) -> dict:
+    from .review_diff import metrics as m
+    return m(data)
+
+
+def comparable(new: dict, old: dict):
+    from .review_diff import comparable as c
+    return c(new, old)
+
+
+def diff_extra(new: dict, old: dict) -> dict:
+    return {"keywords": sorted(set(new["keywords"]) & set(old["keywords"])), "zones": [z["zone"] for z in zones(new)],
+            "nz": new["nz"]}
+
+
+def view_args(data: dict) -> dict:
+    """Geo's controls are the page's own (geo was first); the generic controls are for res and well."""
+    return {}

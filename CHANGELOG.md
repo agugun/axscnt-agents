@@ -9,7 +9,19 @@ to the res model, and SQLite can't change the existing tables in place. `opmagen
 so; move it aside and run `opmagent init-db` (or `opmagent setup <workspace>`), then rebuild the studies.
 No approvals are carried over. Design: [docs/design/res-model.md](docs/design/res-model.md).
 
-- **Geo review workbench, phase 3** ([docs/design/geo-review.md](docs/design/geo-review.md)):
+- **Review workbench, phase 4: res and well**
+  ([docs/design/geo-review.md](docs/design/geo-review.md)):
+  - **Commands:** `opmagent res review` and `opmagent well review` open the same workbench as geo.
+  - **Res:** gets everything geo has. Views: kr and pc curves, region maps, contacts, a contact section, aquifers.
+    Anchors: SATNUM curves, EQLNUM contacts, cells, aquifers. Threads, `preview_res_change` (no Flow run) and
+    `propose_res_change`; `res build --from-proposal` and `study build res --from-proposal`; What-if knobs for the
+    contacts, Corey SCAL and rock compressibility.
+  - **Well:** reviewed only. Plan, well paths, perforated cells, history, cumulative and schedule, with anchored
+    comments, threads and the live session. Its changes are data edits, so no proposals.
+  - **Tools:** kind-neutral `get_proposal`, `decide_proposal`, `request_change` and `preview_change`.
+  - **Database:** proposals and previews tables rebuilt in place for res.
+  - **Spec diffs:** read per item (`scal.2.nw`).
+ ([docs/design/geo-review.md](docs/design/geo-review.md)):
   - **What-if previews:** `preview_geo_change` and the What-if tab run a scratch build of a spec change on the
     version's own data, compared with it (numbers, QC findings, difference maps). The build takes seconds, and no
     version is made. Grids are kept `[geo_review] preview_keep_days`.

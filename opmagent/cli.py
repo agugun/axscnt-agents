@@ -225,7 +225,7 @@ def _review_proposal(rv, args):
     from .core.errors import ToolError
     from .core.proposals import describe_changes
     try:
-        p = rv.get_geo_proposal(proposal_id=args.proposal_id)["proposal"]
+        p = rv.get_proposal(proposal_id=args.proposal_id)["proposal"]
         if args.action == "show":
             print(f"Proposal {p['id']} on {p['model_kind']} {p['model_name']} v{p['base_version']}: {p['status']}"
                   + (f" (built v{p['built_version']})" if p.get("built_version") else ""))
@@ -248,10 +248,10 @@ def _review_proposal(rv, args):
                 ok = False
             if not ok:
                 raise SystemExit("Not accepted.")
-        r = rv.decide_geo_proposal(proposal_id=args.proposal_id, action=args.action, comment=args.comment)
+        r = rv.decide_proposal(proposal_id=args.proposal_id, action=args.action, comment=args.comment)
     except ToolError as e:
         raise SystemExit(f"{e.code}: {e.message}") from None
-    print(r["spoken_summary"] + (" The geo modeler builds it next." if args.action == "accept" else
+    print(r["spoken_summary"] + (f" The {p['model_kind']} modeler builds it next." if args.action == "accept" else
                                  " The comment is in its threads."))
 
 
@@ -661,18 +661,20 @@ def cmd_geo_view(args):
 
 
 def cmd_geo_review(args):
-    """The geo review workbench: a local web app for the engineer (model panel, anchored comments)."""
+    """The review workbench (geo, res or well): a local web app for the engineer (views, anchored comments, threads,
+    proposals and what-if previews for geo and res)."""
     import webbrowser
     from .core.errors import ToolError
     from .geo.review_app import ReviewApp, make_server, url
     cfg = cfgmod.load(args.config)
     try:
-        app = ReviewApp(cfg, args.version_id)
+        app = ReviewApp(cfg, args.version_id, kind=getattr(args, "review_kind", "geo"))
     except ToolError as e:
         raise SystemExit(e.message) from None
     srv = make_server(app, args.port)
     link = url(srv, app)
-    print(f"Geo review workbench for geo version {args.version_id}:\n  {link}\n"
+    k = app.kind
+    print(f"{k.capitalize()} review workbench for {k} version {args.version_id}:\n  {link}\n"
           "The link holds this session's review token: comments are written as you "
           f"({app.reviewer._reviewer()}). Keep it to yourself. Ctrl-C stops it.", flush=True)
     if not args.no_open:
@@ -690,6 +692,18 @@ def cmd_res_build(args):
     from .core.errors import ToolError
     from .res.pipeline import build_res_model
     cfg = cfgmod.load(args.config)
+    if getattr(args, "from_proposal", None) is not None:
+        if args.spec or args.name or args.geo_version or args.scal:
+            raise SystemExit("--from-proposal takes the base version's spec and geo version: no --spec/--name/--geo-version/--scal")
+        from .res.proposal_build import build_from_proposal
+        try:
+            r = build_from_proposal(cfg, args.from_proposal)
+        except ToolError as e:
+            r = e.to_dict()
+        print(json.dumps(r, indent=2, default=str)[:6000])
+        raise SystemExit(0 if r.get("ok") else 2)
+    if not (args.spec and args.name and args.geo_version):
+        raise SystemExit("res build needs --spec, --name and --geo-version (or --from-proposal)")
     spec = json.loads(open(args.spec).read())
     if args.scal:
         from .res.scal_excel import read_scal
@@ -879,13 +893,16 @@ def _study_build(cfg, con, what, name, from_proposal=None):
         from .core import models as mdl
         from .core import proposals as props
         from .geo.proposal_build import build_from_proposal
-        if what != "geo":
-            raise ToolError(INVALID_INPUT, "--from-proposal builds a geo model")
+        from .reviews import build_from_proposal as build_kind
+        if what not in props.KINDS:
+            raise ToolError(INVALID_INPUT, f"--from-proposal builds a {' or '.join(props.KINDS)} model")
         p = props.get(con, from_proposal)
-        src = (mdl.header(con, "geo", p["base_version_id"]).get("spec_json") or {}).get("data_source") or {}
+        if p["model_kind"] != what:
+            raise ToolError(INVALID_INPUT, f"proposal {from_proposal} is for a {p['model_kind']} model, not {what}")
+        src = (mdl.header(con, what, p["base_version_id"]).get("spec_json") or {}).get("data_source") or {}
         if src.get("study") != name:
-            raise ToolError(INVALID_INPUT, f"proposal {from_proposal} is on a geo version that isn't from study {name}")
-        return build_from_proposal(cfg, from_proposal)
+            raise ToolError(INVALID_INPUT, f"proposal {from_proposal} is on a {what} version that isn't from study {name}")
+        return build_kind(cfg, what, from_proposal)
     st = studies.status(con, name)
     spec, folder = st["study"]["spec"], Path(st["study"]["folder"])
     if what != "deck" and not store.ready(con, name, what):
@@ -1343,7 +1360,7 @@ def main(argv=None):
     x.add_argument("feedback_id", type=int)
     x.add_argument("--reply", help="your message (reopens an answered comment)")
     x.set_defaults(fn=cmd_review)
-    x = rv.add_parser("proposal", help="a geo review proposal: show it, accept it (the modeler builds it) or reject it")
+    x = rv.add_parser("proposal", help="a review proposal (geo or res): show it, accept it (the modeler builds it) or reject it")
     x.add_argument("action", choices=["show", "accept", "reject"])
     x.add_argument("proposal_id", type=int)
     x.add_argument("--comment", help="why (required to reject)")
@@ -1388,6 +1405,11 @@ def main(argv=None):
     x.add_argument("--once", action="store_true", help="print the current progress once and exit")
     x.set_defaults(fn=cmd_runs)
     wl = sub.add_parser("well", help="well modeler").add_subparsers(dest="wcmd", required=True)
+    x = wl.add_parser("review", help="review workbench: a local web app to look at a well version and pin comments")
+    x.add_argument("version_id", type=int)
+    x.add_argument("--port", type=int, default=0, help="port on 127.0.0.1 (default: any free one)")
+    x.add_argument("--no-open", action="store_true", help="print the link only (e.g. for the Claude desktop browser pane)")
+    x.set_defaults(fn=cmd_geo_review, review_kind="well")
     x = wl.add_parser("build", help="build a well model from CSV/Excel inputs and submit it for review")
     for a_ in ("wells", "surveys", "perforations", "history", "controls", "groups"):
         x.add_argument(f"--{a_}")
@@ -1457,7 +1479,7 @@ def main(argv=None):
     x.add_argument("--complete", action="store_true",
                    help="start the task first and complete it with the result (a model only once it is approved)")
     x.add_argument("--from-proposal", dest="from_proposal", type=int,
-                   help="geo: build from an accepted review proposal (the base version's spec with its patch)")
+                   help="geo or res: build from an accepted review proposal (the base version's spec with its patch)")
     x.set_defaults(fn=cmd_study)
     da = sub.add_parser("data", help="data manager: load a study's raw data into the database").add_subparsers(
         dest="dcmd", required=True)
@@ -1514,7 +1536,7 @@ def main(argv=None):
     x.add_argument("version_id", type=int)
     x.add_argument("--port", type=int, default=0, help="port on 127.0.0.1 (default: any free one)")
     x.add_argument("--no-open", action="store_true", help="print the link only (e.g. for the Claude desktop browser pane)")
-    x.set_defaults(fn=cmd_geo_review)
+    x.set_defaults(fn=cmd_geo_review, review_kind="geo")
     x = gm.add_parser("qc", help="re-run the standard QC notebook for a draft version (prints the new report's file id)")
     x.add_argument("version_id", type=int)
     x.set_defaults(fn=cmd_model_notebook, nb_kind="geo")
@@ -1528,9 +1550,17 @@ def main(argv=None):
     x.set_defaults(fn=cmd_model_notebook, nb_kind="geo")
     rs = sub.add_parser("res", help="res modeler (SCAL, rock, contacts, regions on a geo grid)").add_subparsers(
         dest="rscmd", required=True)
+    x = rs.add_parser("review", help="review workbench: a local web app to look at a res version, pin comments, "
+                                     "preview and propose changes")
+    x.add_argument("version_id", type=int)
+    x.add_argument("--port", type=int, default=0, help="port on 127.0.0.1 (default: any free one)")
+    x.add_argument("--no-open", action="store_true", help="print the link only (e.g. for the Claude desktop browser pane)")
+    x.set_defaults(fn=cmd_geo_review, review_kind="res")
     x = rs.add_parser("build", help="build a res model on a geo version from a spec and submit it for review")
-    x.add_argument("--spec", required=True, help="res spec JSON (scal, rock, contacts, regions)")
-    x.add_argument("--geo-version", dest="geo_version", type=int, required=True, help="the geo version id it is defined on")
+    x.add_argument("--spec", help="res spec JSON (scal, rock, contacts, regions)")
+    x.add_argument("--geo-version", dest="geo_version", type=int, help="the geo version id it is defined on")
+    x.add_argument("--from-proposal", dest="from_proposal", type=int,
+                   help="build from an accepted review proposal: the base version's spec with its patch")
     x.add_argument("--name", required=True)
     x.add_argument("--description")
     x.add_argument("--scal", help="a SCAL workbook (opmagent res template): its rock types replace the spec's scal")
