@@ -91,6 +91,7 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev,geo,opm]"     # opm + opm-simulators wheels: parser and simulator bindings
 tools/fetch_open_data.sh            # SPE1, SPE9, Norne into ~/.local/share/opmagent/open-data
 pytest -q                           # scratch databases; nothing to configure
+pytest -q -m e2e                    # a whole study, every decision yours, history match and forecast (~1 min, Flow)
 OPM_TESTS_DIR=~/.local/share/opmagent/open-data/opm-tests pytest -q             # also the SPE1/SPE9 round trips
 OPMAGENT_SLOW=1 OPM_TESTS_DIR=~/.local/share/opmagent/open-data/opm-tests pytest -q -k norne   # Norne (~20 min)
 

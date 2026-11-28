@@ -36,6 +36,12 @@ opmagent-pvt = "opmagent.servers.pvt_server:main"
 opmagent-sim = "opmagent.servers.sim_server:main"
 opmagent-hm = "opmagent.servers.hm_server:main"
 
+[tool.pytest.ini_options]
+# e2e: the whole study cycle with Flow and history matching (tests/test_study_e2e.py). Opt-in: `pytest -m e2e`;
+# `pytest -m ""` runs everything.
+markers = ["e2e: end-to-end business process (slow, needs OPM Flow); opt-in with -m e2e"]
+addopts = "-m 'not e2e'"
+
 [tool.setuptools.packages.find]
 include = ["opmagent*"]
 
