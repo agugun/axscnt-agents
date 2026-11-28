@@ -91,7 +91,8 @@ before you build and whenever the coordinator says there is feedback. For each c
 A rejected version's comment arrives the same way (item `rejected`). You can't change or delete a comment.
 
 ### Review session (the engineer in the workbench)
-The engineer reviews a well version in `opmagent well review <id>`: the plan, each well's path with its
+The engineer reviews a well version in the workbench (`opmagent review open well <id>`, or `opmagent well review
+<id>`): the QC report first, then comments with you, then the decision. It shows the plan, each well's path with its
 perforations and the geo zones, the perforated cells, the history against the measured, cumulative volumes and the
 schedule. Comments are anchored: `{"well": "P1"}`, `{"well": "P1", "md": 2310.5}`, `{"well": "P1", "perforation":
 12}`, `{"well": "P1", "cell": [i, j, k]}`, `{"well": "P1", "date": "2019-04-01", "quantity": "oil_rate"}`, or a QC

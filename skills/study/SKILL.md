@@ -64,8 +64,10 @@ A's input (`load_study_input`)". The rest is as above. This is scenario 2 of `te
    new run equals its proposal (`hm_confirm`) and completes the task. A study with no production history: the
    matcher completes `match` as skipped.
 6. **Approval.** If an agent reports its model is waiting for review, approval is on
-   (`[study] auto_approve = false`): tell the engineer to approve it (`opmagent review list`, then
-   `opmagent review approve <kind> <id>`), and hand the task back afterwards so the agent can complete it.
+   (`[study] auto_approve = false`): tell the engineer to review it in the workbench, from a terminal
+   (`opmagent review list`, then `opmagent review open <kind> <id>`: its QC report, comments with the modeler, and
+   approve or reject), or to approve it directly (`opmagent review approve <kind> <id>`). Hand the task back
+   afterwards so the agent can complete it. Never start the workbench yourself: it writes as the reviewer.
 6. **Review feedback.** The engineer can comment on any model version (`opmagent review comment <kind> <id>
    "<text>"`), and a rejection is a comment too. `study status` shows open comments (`open_feedback`). Hand
    them to the owning modeler ("there is review feedback on your model; follow your skill"). It builds a new

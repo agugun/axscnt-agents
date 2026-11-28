@@ -53,6 +53,13 @@ def test_views_and_clicks(cfg, geo):
     assert st == 200 and m["wells"] == ["A", "B", "C", "D"] and m["grid"] == [10, 10, 5]
     assert m["zones"] == [{"zone": "TopRes", "first": 1, "last": 3}, {"zone": "MidRes", "first": 4, "last": 5}]
     assert m["findings"] and m["review_commands"][0] == f"opmagent review approve geo {geo}"
+    # the review runs in steps (1 QC report, 2 discuss, 3 decide); the report is the first tab, inside the page
+    assert m["qc_report"]
+    st, ctype, page = app.handle("GET", "/", {"host": ""})
+    assert st == 200 and b'id="steps"' in page and b'id="qcframe"' in page
+    assert b'const TABS = [["findings", "QC report"]' in page and b'openTab("findings")' in page
+    st, ctype, rep = app.handle("GET", f"/qc?version_id={geo}", {"host": ""})
+    assert st == 200 and ctype.startswith("text/html") and rep
     for spec in ({"fig": "surfaces"}, {"fig": "layer_map", "kw": "PERMX", "layer": 4},
                  {"fig": "section", "kw": "PORO", "along": "y", "cell": [3, 4]}, {"fig": "well", "well": "B"},
                  {"fig": "at_wells"}, {"fig": "distributions"}, {"fig": "poroperm"}):

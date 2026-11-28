@@ -117,6 +117,12 @@ def test_engineer_previews_and_requests(cfg, v1):
     assert w["event"] == "waiting_on_you" and w["threads"][0]["last"]["kind"] == "accepted"
     b = build_from_proposal(cfg, p["id"])
     assert b["ok"] and any("by the engineer" in a for a in b["assumptions"]), b
+    # the version chain: the open page sees the new version on its next poll, and where each version came from
+    st, c = get(app, f"/api/comments?version_id={v1}")
+    chain = {v["version"]: v for v in c["versions"]}
+    assert chain[1]["from_proposal"] is None and chain[2]["from_proposal"] == p["id"] and chain[2]["base_version"] == 1
+    st, m2 = get(app, f"/api/meta?version_id={b['version_id']}")
+    assert m2["versions"] == c["versions"]
     # without a thread: the rationale becomes a general comment first
     pid2 = post(app, "/api/previews", {"base_version_id": b["version_id"], "spec_patch": {"layers": [3, 3]}})[1]["preview"]["preview_id"]
     st, r = post(app, "/api/requests", {"preview_id": pid2, "rationale": "MidRes needs a third layer"})

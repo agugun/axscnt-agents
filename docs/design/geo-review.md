@@ -1,6 +1,7 @@
 # Geo review workbench
 
-Status: phases 1 to 4 built (see **Phase 1 / 2 / 3 / 4 as built** under Plan). Branch: `feat/geo-review-phase4`.
+Status: phases 1 to 4 built, then approval in the workbench and the review flow for all four kinds (see **Phase 1 / 2 /
+3 / 4 as built**, **Approval in the workbench** and **The review flow** under Plan). Branch: `feat/review-steps`.
 
 ## Summary
 
@@ -393,8 +394,8 @@ well trajectories and perforations against layers).
 - **Scope (decided with the engineer):** res gets everything geo has; well is reviewed only. A well model is built
   from data (wells, surveys, perforations, history, controls). A change to it is a data edit, the data manager's
   (a study request), so well has no proposals or previews.
-- **One command per modeler:** `opmagent geo review`, `opmagent res review`, `opmagent well review`. The same app
-  and page serve all three, by kind. `opmagent setup` asks before an agent starts any of them.
+- **One command per modeler:** `opmagent geo review`, `opmagent res review`, `opmagent well review` (since the
+  review flow, also `opmagent review open <kind>`). The same app and page serve all three, by kind. `opmagent setup` asks before an agent starts any of them.
 - **Kinds:** `opmagent/reviews.py` picks a kind's views module, which has one interface: load, views, view
   arguments, spec checks, figures with `meta.role` on each trace, click to anchor, describe, summarize, and the
   diff's metrics. Geo's controls stay the page's own. Res and well get generic controls from each view's arguments.
@@ -468,6 +469,72 @@ session token.
 
   Browser check: the box with the blocker, Approve disabled, Reject enabled by the confirmation and a reason, and
   the version rejected with its reason in the threads.
+
+**The review flow: steps, version chain, fluid** (after decision 1; `review_static/index.html`, `review_app.versions`,
+`fluid/review_views.py`, `reviews.WORKBENCH`, `opmagent review open`). The engineer found the review hard to follow:
+the QC report, the QC findings tab, the terminal commands and the review session all said parts of the same thing,
+and fluid was reviewed another way. Review is now one loop in one place, the same for every kind:
+
+```
+ 1 QC report ──► 2 Discuss ──► 3 Decide            (the step strip at the top of the workbench)
+      ▲              │
+      └── vN+1 ◄─────┘  accepted proposal or answered comments: the new version opens on its QC report,
+                        with what changed on top
+```
+
+- **Step strip:** 1 QC report · 2 Discuss · 3 Decide, worked out in the page from what it already has:
+  - QC report: fail / warn / pass counts;
+  - Discuss: comments waiting on you, on the agent, or open on this version (the session counts and the decision's
+    blockers);
+  - Decide: ready, blocked by N change comments, not submitted, or the decision made; "in your terminal" when the
+    workbench can't decide.
+
+  The step to be on is marked: the report until its tab has been opened, then Discuss while anything is open or
+  the version isn't waiting for review, then Decide. A click goes to the step: the report tab, the comment box,
+  the Decision box (or the terminal commands).
+- **QC report tab:** the first tab, where the workbench opens (a deep link to a view or a diff still opens there).
+  It holds the findings (a click pins a comment, as before) and the report itself in an iframe from `/qc`, with a
+  link to open it in its own tab. It replaces the QC findings tab, the header's QC report link and the QC badge:
+  the report is shown in one place. The Decision box's link opens the tab.
+- **Version chain:** `ReviewApp.versions(name)` gives each version with its status, the proposal it was built from
+  (and on which version) and the comments it answered. It rides `/api/meta` and the 4-second `/api/comments` poll,
+  so an open page sees a new version without a reload.
+  - The version picker says where each version came from: "v2 · from proposal #1 on v1", "answers #3", "first
+    build".
+  - A version that appears while the page is open is offered in a bar under the steps: Open (lands on its QC
+    report tab) or Later.
+  - A later version's QC report tab starts with **what changed** from its base (`review_diff`'s default base):
+    the proposal's rationale, the spec changes, QC findings fixed / still there / new, and the comments it answers,
+    with a link to the Diff tab.
+- **One command:** `opmagent review open <fluid|geo|res|well> <version> [--port] [--no-open]`. `opmagent
+  <kind> review` stays as the same thing per model, and `opmagent fluid review` is new. `opmagent setup` puts
+  `review open` and `fluid review` under "ask" with the others.
+- **Fluid in the workbench, light:** `reviews.WORKBENCH` (fluid, geo, res, well) is what the workbench opens;
+  `reviews.KINDS` (geo, res, well) stays the kinds with threads and live sessions, so the agents' thread tools
+  still refuse fluid. `fluid/review_views.py` has the views interface with no figures:
+  - the QC report tab (its plots are the report's), findings, comments, the step strip, the chain and the Decision
+    box (same safeguards);
+  - anchors: a QC finding, `text`, or general;
+  - diff numbers from the build's `qc_json` metrics (Psat lab and model and its error, Rs and Bo at Pb, GOR, API);
+  - no views, proposals, previews or threads. `/api/meta` says `threads: false`, and the page drops Reply and the
+    listening indicator: the fluid modeler answers comments in its next version, as before.
+- **Skills and docs:** the modeler skills and the workspace `CLAUDE.md` name `review open` and the three steps; the
+  fluid skill reads finding anchors; the study coordinator points the engineer to `review open` at approval time.
+  The user guide's review parts follow the same steps (QC report, then discuss and decide) for all four models.
+- **Gate:**
+  - `tests/test_geo_review.py`: the page has the strip, the QC report tab first and the iframe; `/qc` serves the
+    report;
+  - `tests/test_geo_review_preview.py`: after a build from the engineer's proposal, the next poll's chain has v2
+    from that proposal on v1, and `/api/meta` agrees;
+  - `tests/test_review_fluid.py`: fluid in the workbench (meta without views or threads, the report, a comment on
+    the model, a finding-only anchor check, a thread reply refused, approval blocked by the change comment, then
+    approved once it is answered); `review open` for each kind and the per-model forms.
+
+  Browser check in the Claude desktop pane: geo v3 opens on its report with the strip (0 fail, no open comments,
+  ready), a change comment turns it to "waiting on the geo agent" and "blocked by 1 change comment"; the picker's
+  chain, the new-version bar (Open, Later), what changed from v2 and its Diff link; a demo fluid version through
+  `opmagent review open fluid 1` with its findings, the report, a question pinned on the Psat finding, and no Reply.
+  The QC report itself loads MathJax 2 and 3 several times and logs errors from that, inside the iframe or not.
 
 ## Decisions
 
