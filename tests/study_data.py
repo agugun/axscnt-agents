@@ -8,7 +8,10 @@ from opmagent.fluid.excel import write_template
 from tests.test_geo_modeler import SPEC, write_inputs
 
 
-def write_raw(inbox: Path, *, with_logs: bool = True, with_spec: bool = True) -> None:
+def write_raw(inbox: Path, *, with_logs: bool = True, with_spec: bool = True, controls_date: str = "2026-01-01",
+              rates: tuple[float, float] = (300, 350)) -> None:
+    """controls_date: when the wells' (prediction) controls start; later than the start when history comes first.
+    rates: the producer's oil rate and the injector's water rate under those controls."""
     inbox.mkdir(parents=True, exist_ok=True)
     write_template(inbox / "PVT lab report WELL-A.xlsx", example=True)
     tops, logs = write_inputs(inbox)
@@ -29,8 +32,8 @@ def write_raw(inbox: Path, *, with_logs: bool = True, with_spec: bool = True) ->
                             for w, x, y in (("P1", 1700, 1700), ("I1", 300, 300)) for md in (0.0, 2200.0)])
     perfs = pd.DataFrame([{"Well": "P1", "Date": "2026-01-01", "MD_TOP": 2018, "MD_BOTTOM": 2066},
                           {"Well": "I1", "Date": "2026-01-01", "MD_TOP": 2004, "MD_BOTTOM": 2052}])
-    ctl = pd.DataFrame([{"Well": "P1", "Date": "2026-01-01", "Control": "ORAT", "Rate": 300, "BHP": 100},
-                        {"Well": "I1", "Date": "2026-01-01", "Control": "RATE", "Rate": 350, "BHP": 350}])
+    ctl = pd.DataFrame([{"Well": "P1", "Date": controls_date, "Control": "ORAT", "Rate": rates[0], "BHP": 100},
+                        {"Well": "I1", "Date": controls_date, "Control": "RATE", "Rate": rates[1], "BHP": 350}])
     with pd.ExcelWriter(inbox / "well data.xlsx") as x:
         wells.to_excel(x, sheet_name="Wells", index=False)
         surveys.to_excel(x, sheet_name="Deviation", index=False)
