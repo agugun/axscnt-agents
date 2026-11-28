@@ -106,3 +106,9 @@ before you build and whenever the coordinator says there is feedback. For each c
    or with `"wontfix"` and why, if the data doesn't support the change.
 
 A rejected version's comment arrives the same way (item `rejected`). You can't change or delete a comment.
+
+The engineer may review in the **review workbench** (`opmagent review open fluid <id>`, or `opmagent fluid review
+<id>`): the QC report first, then comments, then the decision. When they ask how to review, give them that command.
+A comment made there sits on a QC finding (`anchor: {"finding": "<area>: <check>"}`, e.g. "lab vs model: Saturation
+pressure within tolerance") or on the model as a whole; answer it as above, with the next version. A fluid model has
+no review threads, proposals or previews. Never start the workbench yourself: it writes as the reviewer.

@@ -71,7 +71,8 @@ with `answer_review_feedback(id, "<what changed>", "addressed", addressed_in_ver
 and why.
 
 ### Review session (the engineer in the workbench)
-The engineer reviews a res version in `opmagent res review <id>`: relative permeability and capillary pressure per
+The engineer reviews a res version in the workbench (`opmagent review open res <id>`, or `opmagent res review <id>`):
+the QC report first, then comments with you, then the decision. It shows relative permeability and capillary pressure per
 SATNUM, region maps, contacts per EQLNUM, a section of cells at their depths with the contacts, aquifers. Their
 comments are anchored: `{"satnum": 2, "curve": "krw", "s": 0.45}`, `{"eqlnum": 1, "contact": "OWC"}`,
 `{"cell": [i, j, k], "kw": "SATNUM"}` (1-based), `{"aquifer": 1}`, or a QC finding.

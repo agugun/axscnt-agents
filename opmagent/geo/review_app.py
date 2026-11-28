@@ -46,9 +46,9 @@ class ReviewApp:
     """The workbench's requests, without the socket (so tests call handle() directly)."""
 
     def __init__(self, cfg, version_id: int, token: str | None = None, kind: str = "geo", can_decide: bool = False):
-        from ..reviews import check_kind
+        from ..reviews import check_workbench_kind
         from ..reviews import views as views_for
-        self.kind = check_kind(kind)
+        self.kind = check_workbench_kind(kind)
         self.V = views_for(self.kind)
         self.cfg = cfg
         self.con = db.connect(cfg.database)
@@ -76,14 +76,15 @@ class ReviewApp:
     def meta(self, vid: int) -> dict:
         d = self.data(vid)
         h = models.header(self.con, self.kind, vid)
-        versions = [{"version_id": m["version_id"], "version": m["version"], "status": m["status"]}
-                    for m in models.list_models(self.con, self.kind) if m["model_name"] == h["model_name"]]
+        versions = self.versions(h["model_name"])
         qc = self.reviewer.get_qc_report(kind=self.kind, version_id=vid)
         rep = (qc.get("qc_report") or {}) if qc.get("ok") else {}
         changeable = self.kind in props.KINDS
+        from ..reviews import KINDS as THREADS
         out = {**self.V.meta(d), "kind": self.kind, "spec": d.get("spec") or {}, "can_propose": changeable,
+               "threads": self.kind in THREADS,
                "can_preview": changeable and bool(props.base_spec(self.con, self.kind, vid)) and not d.get("db_only"),
-               "versions": sorted(versions, key=lambda v: v["version"]),
+               "versions": versions,
                "qc_report": rep.get("path")}
         out["decision"] = self.decision_state(vid)
         if h["status"] == "qc_ready":
@@ -161,7 +162,29 @@ class ReviewApp:
         for c in cs:
             c["messages"] = rv.messages(self.con, c["id"])
         ps = {p["id"]: p for p in props.list_proposals(self.con, self.kind, name)} if self.kind in props.KINDS else {}
-        return {"comments": cs, "proposals": ps, "session": self.session(vid), "decision": self.decision_state(vid)}
+        return {"comments": cs, "proposals": ps, "session": self.session(vid), "decision": self.decision_state(vid),
+                "versions": self.versions(name, list(ps.values()), cs)}
+
+    def versions(self, name: str, proposals: list[dict] | None = None, comments: list[dict] | None = None) -> list[dict]:
+        """The model's version chain, oldest first: each version, its status and where it came from (the proposal it
+        was built from, on which version; the comments it answered)."""
+        if proposals is None:
+            proposals = props.list_proposals(self.con, self.kind, name) if self.kind in props.KINDS else []
+        if comments is None:
+            comments = rv.list_feedback(self.con, kind=self.kind, model_name=name, status=None)
+        built = {p["built_version_id"]: p for p in proposals if p.get("built_version_id")}
+        addressed: dict[int, list[int]] = {}
+        for c in comments:
+            if c.get("addressed_in_version_id"):
+                addressed.setdefault(c["addressed_in_version_id"], []).append(c["id"])
+        out = []
+        for m in sorted((m for m in models.list_models(self.con, self.kind) if m["model_name"] == name),
+                        key=lambda m: m["version"]):
+            p = built.get(m["version_id"])
+            out.append({"version_id": m["version_id"], "version": m["version"], "status": m["status"],
+                        "from_proposal": p["id"] if p else None, "base_version": p["base_version"] if p else None,
+                        "addresses": sorted(addressed.get(m["version_id"], []))})
+        return out
 
     def session(self, vid: int) -> dict:
         name = models.header(self.con, self.kind, vid)["model_name"]
@@ -249,7 +272,7 @@ class ReviewApp:
                 qc = self.reviewer.get_qc_report(kind=self.kind, version_id=vid)
                 p = Path(((qc.get("qc_report") or {}) if qc.get("ok") else {}).get("path") or "")
                 if not p.is_file():
-                    raise ToolError(NOT_FOUND, f"geo version {vid} has no QC report file")
+                    raise ToolError(NOT_FOUND, f"{self.kind} version {vid} has no QC report file")
                 return 200, "text/html; charset=utf-8", p.read_bytes()
             if method == "GET" and u.path == "/api/meta":
                 return _json(200, {"ok": True, **self.meta(int(q.get("version_id", self.version_id)))})

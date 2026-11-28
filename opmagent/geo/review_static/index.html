@@ -36,7 +36,30 @@ select, input, textarea, button { font: inherit; color: var(--ink); background: 
 button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); cursor: pointer; }
 button.link { border: none; background: none; color: var(--accent); padding: 0; cursor: pointer; }
 #plot { width: 100%; min-height: 460px; }
-#findings { display: none; }
+#qcpane { display: none; }
+#newver { display: none; margin: 8px 16px 0; padding: 8px 12px; border: 1px solid var(--accent); border-radius: 8px;
+          background: var(--panel); }
+#qcchange { margin-bottom: 10px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--chip);
+            font-size: 13px; }
+#qcchange:empty { display: none; }
+#qcchange table { border-collapse: collapse; font-size: 12px; margin: 4px 0; }
+#qcchange td { padding: 1px 10px 1px 0; }
+#qcchange .acts { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 4px; }
+#qcframe { width: 100%; height: 75vh; border: 1px solid var(--line); border-radius: 6px; background: #fff; margin-top: 8px; }
+#findings { margin: 0; padding: 0; }
+#qcnote { margin-top: 6px; }
+#qcnote a, #decide a { color: var(--accent); }
+.steps { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 16px 0; }
+.steps button { display: flex; gap: 8px; align-items: center; border: 1px solid var(--line); background: var(--panel);
+                border-radius: 8px; padding: 6px 12px; cursor: pointer; text-align: left; }
+.steps .n { width: 20px; height: 20px; border-radius: 50%; background: var(--chip); display: inline-flex;
+            align-items: center; justify-content: center; font-size: 12px; font-weight: 700; flex: none; }
+.steps .t { font-weight: 600; }
+.steps .s { font-size: 12px; color: var(--muted); }
+.steps .s.you { color: var(--warn); } .steps .s.block { color: var(--fail); }
+.steps button.now { border-color: var(--accent); }
+.steps button.now .n { background: var(--accent); color: var(--accent-ink); }
+.steps button.done .n { background: var(--pass); color: #fff; }
 #findings li { cursor: pointer; padding: 4px 0; border-bottom: 1px solid var(--line); list-style: none; }
 #findings li:hover { color: var(--accent); }
 h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 4px 0 8px; }
@@ -96,17 +119,17 @@ button:disabled { opacity: .5; cursor: default; }
   <h1 id="title">Geo review</h1>
   <select id="version" aria-label="Version"></select>
   <span id="status" class="badge"></span>
-  <span id="qc" class="badge"></span>
   <span class="spacer"></span>
   <span id="session"></span>
-  <a id="qcreport" href="#" target="_blank" rel="noopener">QC report</a>
 </header>
+<nav class="steps" id="steps" aria-label="Review steps"></nav>
+<div id="newver" role="status"></div>
 <main>
   <section class="panel">
     <div class="tabs" id="tabs"></div>
     <div class="controls" id="controls"></div>
     <div id="plot"></div>
-    <ul id="findings"></ul>
+    <div id="qcpane"><div id="qcchange"></div><ul id="findings"></ul><div class="msg" id="qcnote"></div><iframe id="qcframe" title="QC report"></iframe></div>
     <div id="diffinfo"></div>
     <div class="msg" id="hint">Click on a picture (a well, a cell, a curve, a contact) or a QC finding to pin a comment on it.</div>
   </section>
@@ -134,13 +157,13 @@ button:disabled { opacity: .5; cursor: default; }
 </main>
 <script>
 "use strict";
-const TABS = [["surfaces", "Surfaces"], ["layer_map", "Layer map"], ["section", "Section"], ["well", "Well"],
+const TABS = [["findings", "QC report"], ["surfaces", "Surfaces"], ["layer_map", "Layer map"], ["section", "Section"], ["well", "Well"],
               ["at_wells", "At wells"], ["distributions", "Distributions"], ["poroperm", "Poro-perm"],
               ["kr", "Rel perm"], ["pc", "Cap pressure"], ["regions", "Regions"], ["contacts", "Contacts"],
               ["contact_section", "Contact section"], ["aquifers", "Aquifers"],
               ["plan", "Plan"], ["well_section", "Well path"], ["perforated_cells", "Perforated cells"], ["history", "History"],
               ["cumulative", "Cumulative"], ["schedule", "Schedule"],
-              ["findings", "QC findings"], ["diff_map", "Diff"], ["diff", "Diff"], ["whatif", "What-if"]];
+              ["diff_map", "Diff"], ["diff", "Diff"], ["whatif", "What-if"]];
 const GEO = () => S.meta.kind === "geo";
 const AGENT = () => `${S.meta.kind} agent`;
 let token = "";
@@ -153,7 +176,7 @@ addEventListener("hashchange", () => {
 });
 const qs = new URLSearchParams(location.search);
 const S = { vid: +qs.get("version_id"), meta: null, tab: "layer_map", spec: {}, anchor: {}, viewForComment: null, comments: [],
-            proposals: {}, session: {}, replyOpen: new Set(), drafts: {}, lastSig: "", diff: null, preview: null, knobs: null };
+            proposals: {}, session: {}, qcSeen: new Set(), replyOpen: new Set(), drafts: {}, lastSig: "", diff: null, preview: null, knobs: null };
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
 
@@ -174,17 +197,13 @@ async function loadMeta() {
   document.title = `${m.kind[0].toUpperCase() + m.kind.slice(1)} review: ${m.model_name} v${m.version}`;
   $("title").textContent = `${m.model_name} v${m.version}`;
   $("status").textContent = m.status;
-  const c = { pass: 0, warn: 0, fail: 0 };
-  m.findings.forEach(f => { if (f.status in c) c[f.status]++; });
-  const ov = c.fail ? "fail" : c.warn ? "warn" : "pass";
-  $("qc").className = m.findings.length ? `badge ${ov}` : "badge";
-  $("qc").textContent = m.findings.length ? `QC ${ov}: ${c.fail} fail, ${c.warn} warn` : "no QC findings (model view)";
-  $("version").innerHTML = m.versions.map(v => `<option value="${v.version_id}" ${v.version_id === S.vid ? "selected" : ""}>v${v.version} (${esc(v.status)})</option>`).join("");
-  $("qcreport").href = `/qc?version_id=${S.vid}`;
+  renderVersions(m.versions);
+  if (!m.views.length) $("hint").textContent = "Click a QC finding to pin a comment on it; the plots are in the QC report.";
   $("cmds").innerHTML = m.review_commands && !(m.decision || {}).can_decide
     ? "Approve or reject in your terminal" + ((m.decision || {}).can_decide === false ? " (this workbench was started without one)" : "")
       + ": " + m.review_commands.map(c => `<code>${esc(c)}</code>`).join(" ") : "";
   renderDecision(m.decision);
+  renderSteps();
   if (!S.spec.fig) S.spec = m.kind === "geo" ? { fig: "layer_map", kw: m.keywords.includes("PORO") ? "PORO" : m.keywords[0], layer: 1 }
                                               : defaultSpec(m.views[0]);
 }
@@ -270,7 +289,7 @@ function openTab(t, spec) {
   S.tab = t;
   tabs();
   const isF = t === "findings";
-  $("findings").style.display = isF ? "block" : "none";
+  $("qcpane").style.display = isF ? "block" : "none";
   $("plot").style.display = isF ? "none" : "block";
   $("diffinfo").style.display = t === "diff_map" ? "block" : "none";
   if (isF) { $("controls").innerHTML = ""; findings(); return; }
@@ -419,13 +438,107 @@ function selectGeneric(anchor, label, describe, view) {
   $("sel").querySelectorAll("button[data-a=clear]").forEach(b => b.onclick = () => select({}, "general", null, null));
 }
 
+// ---------------------------------------------------------------- the QC report tab and the review steps
 function findings() {
-  const fs = S.meta.findings;
+  const fs = S.meta.findings, src = `/qc?version_id=${S.vid}`;
+  S.qcSeen.add(S.vid);
   $("findings").innerHTML = fs.length ? fs.map((f, n) => `<li data-n="${n}"><span class="badge ${esc(f.status)}">${esc(f.status)}</span>
     <b>${esc(f.area)}</b>: ${esc(f.check)} <span class="msg">${esc(f.detail)}</span></li>`).join("") : "<li>No QC findings recorded.</li>";
+  const fr = $("qcframe");
+  if (S.meta.qc_report) {
+    $("qcnote").innerHTML = `Click a finding to pin a comment on it. The full report is below
+      (<a href="${src}" target="_blank" rel="noopener">open it in its own tab</a>).`;
+    fr.style.display = "block";
+    if (fr.getAttribute("src") !== src) fr.setAttribute("src", src);
+  } else {
+    $("qcnote").textContent = "This version has no QC report file.";
+    fr.style.display = "none";
+  }
+  renderSteps();
+  whatChanged();
   $("findings").querySelectorAll("li[data-n]").forEach(li => li.onclick = () => {
     const f = fs[+li.dataset.n];
     select({ finding: `${f.area}: ${f.check}` }, `finding ${f.area}: ${f.check}`, { finding: f }, null);
+  });
+}
+
+// the version chain: each version says where it came from; a version built while the page is open is offered
+const vOrigin = v => v.from_proposal ? `from proposal #${v.from_proposal} on v${v.base_version}`
+                   : v.addresses.length ? `answers #${v.addresses.join(", #")}` : v.version === 1 ? "first build" : "rebuilt";
+function renderVersions(vs) {
+  S.meta.versions = vs;
+  const sel = $("version");
+  const html = vs.map(v => `<option value="${v.version_id}" ${v.version_id === S.vid ? "selected" : ""}>v${v.version} · ${esc(vOrigin(v))} (${esc(v.status)})</option>`).join("");
+  if (sel.dataset.sig !== html) { sel.innerHTML = html; sel.dataset.sig = html; }
+  if (!S.knownV) { S.knownV = new Set(vs.map(v => v.version_id)); S.dismissedV = new Set(); }
+  const fresh = vs.filter(v => !S.knownV.has(v.version_id) && !S.dismissedV.has(v.version_id));
+  const el = $("newver");
+  if (!fresh.length) { el.style.display = "none"; el.innerHTML = ""; return; }
+  const v = fresh[fresh.length - 1];
+  const sig = `${v.version_id}:${v.status}`;
+  if (el.dataset.sig === sig && el.style.display === "block") return;
+  el.dataset.sig = sig;
+  el.style.display = "block";
+  el.innerHTML = `<b>v${v.version} is here</b> (${esc(vOrigin(v))}, ${esc(v.status)}).
+    <button class="primary" id="nvopen">Open v${v.version}</button> <button class="link" id="nvlater">Later</button>
+    <span class="msg">It opens on its QC report, with what changed on top.</span>`;
+  $("nvopen").onclick = () => { location.search = `?version_id=${v.version_id}`; };
+  $("nvlater").onclick = () => { fresh.forEach(x => S.dismissedV.add(x.version_id)); renderVersions(S.meta.versions); };
+}
+
+// on the QC report tab of a later version: what changed from the version it was built on
+async function whatChanged() {
+  const el = $("qcchange"), me = (S.meta.versions || []).find(v => v.version_id === S.vid);
+  if (!me || (me.version === 1 && !me.from_proposal)) { el.innerHTML = ""; return; }
+  if (!S.change || S.change.version_id !== S.vid) {
+    try { S.change = (await api(`/api/diff?version_id=${S.vid}`)).diff; }
+    catch (e) { el.innerHTML = `<span class="msg err">${esc(e.message)}</span>`; return; }
+  }
+  const d = S.change;
+  if (!d.base_version_id) { el.innerHTML = ""; return; }
+  const f = d.findings, js = v => esc(JSON.stringify(v));
+  const spec = d.spec.slice(0, 8).map(c => `<tr><td>${esc(c.key)}</td><td>${js(c.old)} &rarr; <b>${js(c.new)}</b></td></tr>`).join("");
+  el.innerHTML = `<b>What changed from v${d.base_version}</b>
+    ${d.proposals.map(p => `<div class="msg">Built from proposal #${p.id}: ${esc(p.rationale)}</div>`).join("")}
+    ${d.spec.length ? `<table>${spec}</table>${d.spec.length > 8 ? `<div class="msg">and ${d.spec.length - 8} more</div>` : ""}` : `<div class="msg">Same spec.</div>`}
+    <div>QC findings: ${f.fixed.length} fixed · ${f.still.length} still there · ${f.new.length} new</div>
+    ${d.threads.length ? `<div class="msg">Answers ${d.threads.map(t => `<button class="link" data-c="${t.id}">#${t.id}</button>`).join(" ")}</div>` : ""}
+    <div class="acts"><button class="link" id="qcdiff">See the diff</button></div>`;
+  $("qcdiff").onclick = () => loadDiff(d.base_version_id);
+  el.querySelectorAll("button[data-c]").forEach(b => b.onclick = () => highlight(+b.dataset.c));
+}
+
+// 1 QC report · 2 Discuss · 3 Decide: where this version stands, and the step to go to next
+function renderSteps() {
+  const m = S.meta;
+  if (!m) return;
+  const dec = m.decision || {}, ses = S.session || {}, st = m.status;
+  const c = { pass: 0, warn: 0, fail: 0 };
+  m.findings.forEach(f => { if (f.status in c) c[f.status]++; });
+  const qc = !m.qc_report ? ["no report for this version", ""]
+           : m.findings.length ? [`${c.fail} fail, ${c.warn} warn, ${c.pass} pass`, c.fail ? "block" : c.warn ? "you" : ""]
+           : ["read it first", ""];
+  const blockers = (dec.blockers || []).length, open = blockers + (dec.open_other || []).length;
+  const you = ses.waiting_on_you || 0, agent = ses.waiting_on_agent || 0;
+  const talk = you ? [`${you} waiting on you`, "you"] : agent ? [`${agent} waiting on the ${m.kind} agent`, ""]
+             : open ? [`${open} open on this version`, ""] : ["no open comments", ""];
+  const decided = st === "approved" || st === "rejected";
+  const decide = decided ? [st, ""] : st !== "qc_ready" ? [`${st}: not submitted for review`, ""]
+               : blockers ? [`blocked by ${blockers} change comment${blockers > 1 ? "s" : ""}`, "block"]
+               : [dec.can_decide ? "ready: approve or reject" : "ready: decide in your terminal", ""];
+  // the step to be on: the report first, then the conversation while anything is open, then the decision
+  const now = decided ? 4 : !S.qcSeen.has(S.vid) ? 1 : (st !== "qc_ready" || blockers || you || agent) ? 2 : 3;
+  const steps = [["QC report", qc], ["Discuss", talk], ["Decide", decide]];
+  $("steps").innerHTML = steps.map(([t, [s, cls]], i) => {
+    const n = i + 1, state = n < now ? "done" : n === now ? "now" : "";
+    return `<button data-step="${n}" class="${state}"><span class="n">${n < now ? "&#10003;" : n}</span>
+      <span><span class="t">${t}</span><br><span class="s ${cls}">${esc(s)}</span></span></button>`;
+  }).join("");
+  $("steps").querySelectorAll("button").forEach(b => b.onclick = () => {
+    const n = +b.dataset.step;
+    if (n === 1) return openTab("findings");
+    if (n === 2) { $("comments").scrollIntoView({ behavior: "smooth", block: "start" }); $("text").focus({ preventScroll: true }); return; }
+    ($("decide").style.display === "block" ? $("decide") : $("cmds")).scrollIntoView({ behavior: "smooth", block: "center" });
   });
 }
 
@@ -578,7 +691,7 @@ function showPreview(p) {
   previewSpec("diff");
   S.tab = "whatif";
   tabs();
-  $("findings").style.display = "none"; $("plot").style.display = "block"; $("diffinfo").style.display = "block";
+  $("qcpane").style.display = "none"; $("plot").style.display = "block"; $("diffinfo").style.display = "block";
   renderPreviewInfo();
   draw();
 }
@@ -625,7 +738,7 @@ function renderDecision(dec) {
   el.innerHTML = `<h2 style="margin-top:0">Decision on ${esc(dec.confirm_text)}</h2>
     ${dec.blockers.length ? `<div class="block">Open change comment(s) ${dec.blockers.map(i => `<button class="link" data-c="${i}">#${i}</button>`).join(" ")}: answered first, or reject.</div>` : ""}
     ${dec.open_other.length ? `<div class="warnq">Still open (questions or notes): ${dec.open_other.map(i => `<button class="link" data-c="${i}">#${i}</button>`).join(" ")}</div>` : ""}
-    <div class="msg">The QC report it is decided on: <a href="/qc?version_id=${S.vid}" target="_blank" rel="noopener">QC report</a></div>
+    <div class="msg">Decided on this version's <button class="link" id="dqc">QC report</button>.</div>
     <input id="dconfirm" placeholder="Type ${esc(dec.confirm_text)} to confirm" autocomplete="off" value="${esc(typed)}">
     <input id="dwhy" placeholder="Comment (needed to reject)" value="${esc(why)}">
     <div class="row"><button class="primary" id="dapprove">Approve</button><button class="danger" id="dreject">Reject</button>
@@ -636,6 +749,7 @@ function renderDecision(dec) {
     $("dreject").disabled = !ok || !$("dwhy").value.trim();
   };
   $("dconfirm").oninput = sync; $("dwhy").oninput = sync; sync();
+  $("dqc").onclick = () => openTab("findings");
   el.querySelectorAll("button[data-c]").forEach(b => b.onclick = () => highlight(+b.dataset.c));
   const go = async action => {
     try {
@@ -653,8 +767,10 @@ async function loadComments(force) {
   const r = await api(`/api/comments?version_id=${S.vid}`);
   const sig = JSON.stringify([r.comments, r.proposals]);
   S.session = r.session;
+  if (r.versions && S.meta) renderVersions(r.versions);
   renderSession();
   if (r.decision && S.meta) { S.meta.decision = r.decision; renderDecision(r.decision); }
+  renderSteps();
   if (!force && sig === S.lastSig) return;
   const firstLoad = !S.lastSig;
   S.lastSig = sig;
@@ -669,6 +785,10 @@ function renderSession() {
   const sig = JSON.stringify(s);
   if (sig === S.sessionSig) return;        // unchanged: keep the button under the pointer
   S.sessionSig = sig;
+  if (S.meta && !S.meta.threads) {         // fluid: no live session; the modeler answers in its next version
+    $("session").innerHTML = `<span class="msg">The ${esc(S.meta.kind)} modeler answers comments in its next version</span>`;
+    return;
+  }
   $("session").innerHTML = `<span class="dot ${s.listening ? "on" : ""}"></span>
     <span>${s.listening ? AGENT() + " listening" : AGENT() + " not listening"}</span>
     ${s.waiting_on_you ? `<span class="wait you">${s.waiting_on_you} waiting on you</span>` : ""}
@@ -733,7 +853,7 @@ function renderComments() {
     ${open ? `<div class="reply"><textarea data-draft="${c.id}" placeholder="${c.status === "open" ? "Reply" : "Writing here reopens it"}">${esc(S.drafts[c.id] || "")}</textarea>
       <div class="row"><button class="primary" data-send="${c.id}">Send</button><button data-cancel="${c.id}">Cancel</button>
       ${S.viewForComment ? `<label class="msg"><input type="checkbox" data-withview="${c.id}"> with current view</label>` : ""}</div></div>`
-           : `<button class="link" data-open="${c.id}">${c.status === "open" ? "Reply" : "Reopen"}</button>`}
+           : S.meta.threads ? `<button class="link" data-open="${c.id}">${c.status === "open" ? "Reply" : "Reopen"}</button>` : ""}
   </div>`;
   }).join("") : `<div class="msg">No comments yet.</div>`;
   const q = sel => $("comments").querySelectorAll(sel);
@@ -818,7 +938,7 @@ async function loadDiff(base, spec) {
   renderDiffInfo();
   if (!GEO()) {                 // res and well: the numbers; res also its curves or contacts over the base's
     S.tab = "diff"; tabs();
-    $("findings").style.display = "none"; $("plot").style.display = "block"; $("diffinfo").style.display = "block";
+    $("qcpane").style.display = "none"; $("plot").style.display = "block"; $("diffinfo").style.display = "block";
     const contacts = (d.spec || []).some(c => c.key.startsWith("contacts")) && S.meta.views.includes("contacts");
     S.spec = S.meta.kind === "res" && d.base_version_id ? (spec || { fig: contacts ? "contacts" : "kr", base_version_id: d.base_version_id }) : {};
     draw();
@@ -885,7 +1005,7 @@ $("version").onchange = e => { location.search = `?version_id=${e.target.value}`
     try { v = qs.get("view") ? JSON.parse(qs.get("view")) : null; } catch (e) {}
     if (qs.get("diff")) loadDiff(+qs.get("diff"));
     else if (v) openViewSpec({ ...v, version_id: S.vid });
-    else openTab(GEO() ? "layer_map" : S.meta.views[0]);
+    else openTab("findings");
     await loadComments(true);
     setInterval(() => loadComments().catch(() => {}), 4000);
   } catch (e) { $("hint").textContent = e.message; $("hint").className = "msg err"; }

@@ -95,7 +95,9 @@ before you build and whenever the coordinator says there is feedback. For each c
 2. Answer it with `answer_review_feedback(id, "<what you changed>", "addressed", addressed_in_version_id=<new id>)`,
    or with `"wontfix"` and why, if the data doesn't support the change.
 
-Comments made in the **geo review workbench** (`opmagent geo review <id>`, the engineer's web app) are anchored:
+The engineer reviews a version in the **review workbench** (`opmagent review open geo <id>`, or `opmagent geo review
+<id>`; the engineer's web app) in three steps: the QC report first, then comments with you, then the decision. When
+they ask how to review, give them that command. Comments made there are anchored:
 `anchor` says what the comment is about (`{"well": "B"}`, `{"cell": [i, j, k], "kw": "PORO"}` 1-based as in the deck,
 `{"layer": 5}`, `{"zone": ...}`, `{"surface": "TopRes", "well": "C"}`, `{"finding": "<area>: <check>"}`), and `view` is
 the picture they were looking at. A version without tops or logs (from a deck) is shown on cell indices, and its

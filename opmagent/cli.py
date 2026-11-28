@@ -662,15 +662,17 @@ def cmd_geo_view(args):
 
 
 def cmd_geo_review(args):
-    """The review workbench (geo, res or well): a local web app for the engineer (views, anchored comments, threads,
-    proposals and what-if previews for geo and res)."""
+    """The review workbench (`review open <kind>`, or `geo|res|well|fluid review`): a local web app for the engineer
+    (the QC report, anchored comments, threads, proposals and what-if previews for geo and res; fluid: the QC report,
+    comments and the decision)."""
     import webbrowser
     from .core.errors import ToolError
     from .geo.review_app import ReviewApp, make_server, url
     cfg = cfgmod.load(args.config)
     try:
         # only an engineer at a terminal can approve or reject in the app; one an agent starts (no tty) can't
-        app = ReviewApp(cfg, args.version_id, kind=getattr(args, "review_kind", "geo"), can_decide=sys.stdin.isatty())
+        kind = getattr(args, "review_kind", None) or getattr(args, "kind", None) or "geo"
+        app = ReviewApp(cfg, args.version_id, kind=kind, can_decide=sys.stdin.isatty())
     except ToolError as e:
         raise SystemExit(e.message) from None
     srv = make_server(app, args.port)
@@ -1326,6 +1328,11 @@ def main(argv=None):
     b.add_argument("--accept-tolerance-miss", action="store_true")
     b.add_argument("--check", action="store_true", help="only read the workbook and list gaps")
     b.set_defaults(fn=cmd_fluid_build)
+    x = fl.add_parser("review", help="review workbench for a fluid version (same as: opmagent review open fluid)")
+    x.add_argument("version_id", type=int)
+    x.add_argument("--port", type=int, default=0, help="port on 127.0.0.1 (default: any free one)")
+    x.add_argument("--no-open", action="store_true", help="print the link only (e.g. for the Claude desktop browser pane)")
+    x.set_defaults(fn=cmd_geo_review, review_kind="fluid")
     x = fl.add_parser("qc", help="re-run the standard QC notebook for a draft version (prints the new report's file id)")
     x.add_argument("version_id", type=int)
     x.set_defaults(fn=cmd_model_notebook)
@@ -1345,6 +1352,13 @@ def main(argv=None):
         x.add_argument("version_id", type=int)
         x.add_argument("--comment", required=name == "reject")
         x.set_defaults(fn=cmd_review)
+    x = rv.add_parser("open", help="open a model version in the review workbench: its QC report, comments with the "
+                                   "modeler, and (from a terminal) approve or reject")
+    x.add_argument("kind", choices=list(MODEL_KINDS))
+    x.add_argument("version_id", type=int)
+    x.add_argument("--port", type=int, default=0, help="port on 127.0.0.1 (default: any free one)")
+    x.add_argument("--no-open", action="store_true", help="print the link only (e.g. for the Claude desktop browser pane)")
+    x.set_defaults(fn=cmd_geo_review)
     x = rv.add_parser("comment", help="comment on a model version; the modeler answers it in its next version")
     x.add_argument("kind", choices=list(MODEL_KINDS))
     x.add_argument("version_id", type=int)

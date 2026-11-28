@@ -32,5 +32,6 @@ def test_setup_allows_opmagent_and_the_workspace_servers_never_the_reviewer(tmp_
     assert len(allow) == len(set(allow))
     assert not any("reviewer" in a for a in allow)
     # removing files asks first; so does the geo review workbench (it writes comments as the reviewer)
-    assert s["permissions"]["ask"] == ["Bash(opmagent clean:*)", "Bash(opmagent geo review:*)",
+    assert s["permissions"]["ask"] == ["Bash(opmagent clean:*)", "Bash(opmagent review open:*)",
+                                       "Bash(opmagent fluid review:*)", "Bash(opmagent geo review:*)",
                                        "Bash(opmagent res review:*)", "Bash(opmagent well review:*)"]

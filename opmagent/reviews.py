@@ -14,7 +14,8 @@ Each reviewable kind has a views module with the same interface:
   metrics(data), comparable(new, old), diff_extra(new, old)   the version diff
 
 geo and res also have proposals and what-if previews; well is reviewed only (its changes are data edits, which go
-to the data manager as requests).
+to the data manager as requests). fluid has no views: the workbench shows its QC report, comments and the decision,
+and the fluid modeler answers comments in its next version (no threads).
 """
 from __future__ import annotations
 
@@ -22,18 +23,25 @@ from importlib import import_module
 
 from .core.errors import INVALID_INPUT, ToolError
 
-KINDS = ("geo", "res", "well")
+KINDS = ("geo", "res", "well")      # review threads with the modeler (replies, live sessions)
 CHANGEABLE = ("geo", "res")          # proposals and previews
+WORKBENCH = ("fluid",) + KINDS       # the review workbench (fluid: its QC report, comments and the decision only)
 
 
 def check_kind(kind: str) -> str:
     if kind not in KINDS:
-        raise ToolError(INVALID_INPUT, f"the review workbench is for {KINDS} models, not {kind!r}")
+        raise ToolError(INVALID_INPUT, f"review threads are for {KINDS} models, not {kind!r}")
+    return kind
+
+
+def check_workbench_kind(kind: str) -> str:
+    if kind not in WORKBENCH:
+        raise ToolError(INVALID_INPUT, f"the review workbench is for {WORKBENCH} models, not {kind!r}")
     return kind
 
 
 def views(kind: str):
-    return import_module(f".{check_kind(kind)}.review_views", __package__)
+    return import_module(f".{check_workbench_kind(kind)}.review_views", __package__)
 
 
 def previews(kind: str):
